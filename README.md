@@ -62,6 +62,13 @@ WSL 참고: node는 nvm으로 설치됨 — `export PATH="$HOME/.nvm/versions/no
 로컬에서 실서버 흐름을 시험하려면 `.dev.vars`에 실제 `DATABASE_URL`을 넣고
 `npm run build && npm run dev:worker` 후 localhost:8787 접속.
 
+## CI 자동 배포
+
+`main`에 push하면 [GitHub Actions](.github/workflows/deploy.yml)가 테스트(PGlite) → 타입체크 → 빌드 →
+`wrangler deploy`를 실행한다. 필요한 저장소 시크릿은 `CLOUDFLARE_API_TOKEN` 하나
+(Cloudflare 대시보드 → My Profile → API Tokens → "Edit Cloudflare Workers" 템플릿으로 생성).
+수동 실행은 Actions 탭의 workflow_dispatch.
+
 ## 설정
 
 | 방법 | 설명 |
