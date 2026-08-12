@@ -1,10 +1,12 @@
-import { useCallback, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 import type { Entry } from '../shared/types';
 import { BY_ID, COPY, MEMBERS, W, dayKey, pad2, shiftKey } from './lib/constants';
 import type { AppConfig } from './lib/config';
 import type { CrewStore } from './local/store';
 import { Avatar, Icon, PLUS_D } from './components/icons';
 import { Board } from './components/Board';
+import { StatusBar } from './components/StatusBar';
+import { NotifyToggle } from './components/NotifyToggle';
 import { Feed } from './components/Feed';
 import { CalendarView } from './components/CalendarView';
 import { EMPTY_MODAL, EntryModal, type ModalState } from './components/EntryModal';
@@ -16,6 +18,13 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
   const [selDay, setSelDay] = useState<string | null>(null);
   const [modal, setModal] = useState<ModalState>(EMPTY_MODAL);
   const patch = useCallback((p: Partial<ModalState>) => setModal((m) => ({ ...m, ...p })), []);
+
+  // "n분째" 경과 표시를 위한 분 단위 재렌더
+  const [nowTick, setNowTick] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNowTick(Date.now()), 60_000);
+    return () => clearInterval(t);
+  }, []);
 
   const wit = COPY[cfg.wit];
   const me = BY_ID[cfg.memberId] ?? MEMBERS[0]!;
@@ -99,6 +108,12 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
             <span>{wit.cta}</span>
           </button>
           <div className="cta-cap">{myToday > 0 ? wit.ctaSome(myToday) : wit.ctaNone}</div>
+          <StatusBar status={snap.statuses[me.id]} wit={wit} now={nowTick}
+            onSet={(on, place) => {
+              store.setMyStatus(on, place);
+              setNowTick(Date.now());
+            }} />
+          {cfg.token && <NotifyToggle token={cfg.token} />}
           <div className="board-head">
             <div className="board-title">오늘의 크루</div>
             <div className="board-meta">
@@ -111,7 +126,7 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
               <span className="board-count">{wit.count(doneSet.size)}</span>
             </div>
           </div>
-          <Board todays={todays} meId={me.id} wit={wit} />
+          <Board todays={todays} statuses={snap.statuses} now={nowTick} meId={me.id} wit={wit} />
         </div>
         <div className="feed-col">
           <div className="tabs">

@@ -8,6 +8,20 @@
       "when": 1786505971132,
       "tag": "0000_large_maelstrom",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1786540159018,
+      "tag": "0001_modern_the_watchers",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1786540979927,
+      "tag": "0002_volatile_network",
+      "breakpoints": true
     }
   ]
 }

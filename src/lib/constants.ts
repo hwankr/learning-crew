@@ -1,4 +1,5 @@
-import type { Entry, MemberId, Tag } from '../../shared/types';
+import { MEMBER_NAMES } from '../../shared/types';
+import type { Entry, MemberId, MemberStatus, Place, Tag } from '../../shared/types';
 
 export interface Member {
   id: MemberId;
@@ -10,13 +11,13 @@ export interface Member {
 }
 
 export const MEMBERS: Member[] = [
-  { id: 'sh', name: '승환', color: '#FFB800', soft: '#FFF0BF', hairC: '#23262E',
+  { id: 'sh', name: MEMBER_NAMES.sh, color: '#FFB800', soft: '#FFF0BF', hairC: '#23262E',
     hair: 'M11.5 27a12.5 12.5 0 0 1 25 0c-3.5-6-7-8.5-12.5-8.5s-9 2.5-12.5 8.5z' },
-  { id: 'wg', name: '웅', color: '#12B76A', soft: '#C9F2DE', hairC: '#16181D',
+  { id: 'wg', name: MEMBER_NAMES.wg, color: '#12B76A', soft: '#C9F2DE', hairC: '#16181D',
     hair: 'M11.5 27a12.5 12.5 0 0 1 25 0l-2.6-3.8-2.7 2.3-2.2-3.8-2.8 2.8-2.7-4.2-2.3 3.9-2.8-2.3-2 3.3z' },
-  { id: 'th', name: '태현', color: '#2E90FA', soft: '#CFE5FE', hairC: '#4E555F',
+  { id: 'th', name: MEMBER_NAMES.th, color: '#2E90FA', soft: '#CFE5FE', hairC: '#4E555F',
     hair: 'M11.5 27a12.5 12.5 0 0 1 25 0c-1.3-4.2-3-6.8-5.7-7.9-3.8 2.2-9.2 2.1-12.6-.2-3.4 1.6-5.5 4.3-6.7 8.1z' },
-  { id: 'jj', name: '진주', color: '#F79009', soft: '#FCE1BD', hairC: '#363B45',
+  { id: 'jj', name: MEMBER_NAMES.jj, color: '#F79009', soft: '#FCE1BD', hairC: '#363B45',
     hair: 'M11.5 27a12.5 12.5 0 0 1 25 0c-3.5-6-7-8.5-12.5-8.5s-9 2.5-12.5 8.5zM7.5 18a3.2 3.2 0 1 0 6.4 0 3.2 3.2 0 1 0-6.4 0zM34.1 18a3.2 3.2 0 1 0 6.4 0 3.2 3.2 0 1 0-6.4 0z' },
 ];
 
@@ -32,6 +33,23 @@ export const TAGMETA: Record<Tag, { icon: string; bg: string; fg: string }> = {
   '기타': { icon: 'M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z', bg: '#F1F3F6', fg: '#4E555F' },
   'OFF': { icon: 'M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9z', bg: '#F1F3F6', fg: '#6B7280' },
 };
+
+export const PLACE_ICON: Record<Place, string> = {
+  '도서관': '📚',
+  '집': '🏠',
+  '카페': '☕',
+  '기타': '📍',
+};
+
+/** "n분째 / n시간째" — 지금 상태의 경과 시간 표시. */
+export function fmtElapsed(sinceISO: string, now: number): string {
+  const min = Math.floor((now - Date.parse(sinceISO)) / 60_000);
+  if (!Number.isFinite(min) || min < 1) return '방금 시작';
+  if (min < 60) return `${min}분째`;
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  return m === 0 ? `${h}시간째` : `${h}시간 ${m}분째`;
+}
 
 export interface CopySet {
   greeting: string;
@@ -49,6 +67,10 @@ export interface CopySet {
   caps: string[];
   count: (n: number) => string;
   calEmpty: string;
+  statusAsk: string; // 상태 off일 때 안내
+  statusLive: (place: string) => string; // 내 상태 on 문구
+  statusEnd: string; // 끄기 버튼
+  statusPeer: (place: string) => string; // 보드에서 남의 상태 한 줄
 }
 
 export const COPY: Record<'subtle' | 'drip', CopySet> = {
@@ -63,6 +85,10 @@ export const COPY: Record<'subtle' | 'drip', CopySet> = {
     caps: ['별점을 골라주세요', '…내일이 있으니까요', '시동은 걸었어요', '무난하게 순항 중', '오늘 좀 했는데요?', '이 구역의 공부왕'],
     count: (n) => `4명 중 ${n}명 도장 찍음`,
     calEmpty: '이 날은 다들 조용했네요.',
+    statusAsk: '공부 시작하면 켜주세요 — 어디서 하나요?',
+    statusLive: (p) => `${p}에서 공부 중`,
+    statusEnd: '마침',
+    statusPeer: (p) => `지금 ${p}에서 공부 중`,
   },
   drip: {
     greeting: '뇌 용량 증설 공사 중',
@@ -75,6 +101,10 @@ export const COPY: Record<'subtle' | 'drip', CopySet> = {
     caps: ['별점을 골라주세요', '별점이 아깝다는 건 아니고', '한 듯 안 한 듯', '평타는 쳤다', '꽤 진지했잖아요?', '수석 각'],
     count: (n) => `4명 중 ${n}명 생존 신고`,
     calEmpty: '전원 잠수한 날이네요.',
+    statusAsk: '어디서 하는지 자수하세요',
+    statusLive: (p) => `${p} 감금 중`,
+    statusEnd: '탈출',
+    statusPeer: (p) => `지금 ${p} 감금 중`,
   },
 };
 
@@ -108,5 +138,15 @@ export function seedEntries(): Entry[] {
     { ...base, id: 's8', m: 'th', day: b, time: '19:02', tag: '영어', stars: 4, memo: '자막 없이 미드 완주',
       body: '한 편을 자막 없이 봤다. 절반은 뉘앙스로 때려 맞혔지만, 그것도 실력이라고 우기기로 함.' },
     { ...base, id: 's9', m: 'jj', day: b, time: '15:20', tag: '자격증', stars: 3, memo: '요약노트 정리. 손목이 아파요' },
+  ];
+}
+
+/** 데모 모드 상태 시드 — 메모리에만 살고 지속·동기화되지 않는다. */
+export function seedStatuses(): MemberStatus[] {
+  const now = Date.now();
+  const ago = (min: number) => new Date(now - min * 60_000).toISOString();
+  return [
+    { m: 'wg', on: true, place: '도서관', since: ago(95), updatedAt: ago(95) },
+    { m: 'jj', on: true, place: '카페', since: ago(20), updatedAt: ago(20) },
   ];
 }

@@ -1,11 +1,25 @@
-import { Hono } from 'hono';
+import { Hono, type MiddlewareHandler } from 'hono';
 import { neon } from '@neondatabase/serverless';
 import { drizzle } from 'drizzle-orm/neon-http';
 import { makeToken, verifyToken } from './auth';
-import { pushEntries, pullSince } from './queries';
+import {
+  pushEntries,
+  pullSince,
+  setStatus,
+  allStatuses,
+  getStatusRow,
+  stampNotified,
+  upsertPushSub,
+  deletePushSub,
+  deleteGonePushSub,
+  pushSubsExcept,
+} from './queries';
+import { sendPushToAll, shouldNotify } from './push';
 import {
   MEMBER_IDS,
+  MEMBER_NAMES,
   TAGS,
+  PLACES,
   PUSH_LIMITS,
   type Entry,
   type MemberId,
@@ -13,12 +27,20 @@ import {
   type PullResponse,
   type PushRequest,
   type PushResponse,
+  type PushSubscribeRequest,
+  type PushUnsubscribeRequest,
+  type StatusSetRequest,
+  type StatusSetResponse,
+  type VapidKeyResponse,
 } from '../shared/types';
 
 type Env = {
   Bindings: {
     DATABASE_URL: string;
     AUTH_SECRET: string;
+    VAPID_PUBLIC_KEY: string;
+    VAPID_PRIVATE_KEY: string;
+    VAPID_SUBJECT?: string;
     ASSETS: Fetcher;
   };
   Variables: {
@@ -46,7 +68,7 @@ app.post('/api/auth/claim', async (c) => {
   return c.json({ token: await makeToken(body.m, c.env.AUTH_SECRET) });
 });
 
-app.use('/api/sync/*', async (c, next) => {
+const requireMember: MiddlewareHandler<Env> = async (c, next) => {
   const token = (c.req.header('authorization') ?? '').replace(/^Bearer\s+/i, '');
   const memberId = token && c.env.AUTH_SECRET ? await verifyToken(token, c.env.AUTH_SECRET) : null;
   if (!memberId || !(MEMBER_IDS as readonly string[]).includes(memberId)) {
@@ -54,7 +76,9 @@ app.use('/api/sync/*', async (c, next) => {
   }
   c.set('memberId', memberId as MemberId);
   await next();
-});
+};
+app.use('/api/sync/*', requireMember);
+app.use('/api/push/*', requireMember);
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const TIME_RE = /^\d{2}:\d{2}$/;
@@ -105,8 +129,114 @@ app.get('/api/sync/pull', async (c) => {
   const since = c.req.query('since');
   const sinceId = c.req.query('sinceId');
   const cursor: PullCursor | null = since && sinceId ? { ts: since, id: sinceId } : null;
-  const result = await pullSince(drizzle(neon(c.env.DATABASE_URL)), cursor);
-  return c.json(result satisfies PullResponse);
+  const db = drizzle(neon(c.env.DATABASE_URL));
+  const [result, statuses] = await Promise.all([pullSince(db, cursor), allStatuses(db)]);
+  return c.json({ ...result, statuses } satisfies PullResponse);
+});
+
+/** 오프라인에서 켠 상태가 뒤늦게 도착해도 쓸 수 있게 클라이언트 since를 받되, 범위 밖이면 지금으로. */
+function normalizeSince(raw: unknown, now: number): string {
+  if (typeof raw === 'string') {
+    const t = Date.parse(raw);
+    if (Number.isFinite(t) && t <= now + 5 * 60_000 && t >= now - 24 * 3_600_000) {
+      return new Date(t).toISOString();
+    }
+  }
+  return new Date(now).toISOString();
+}
+
+app.post('/api/sync/status', async (c) => {
+  const me = c.get('memberId');
+  let body: StatusSetRequest;
+  try {
+    body = await c.req.json<StatusSetRequest>();
+  } catch {
+    return c.json({ error: 'invalid json' }, 400);
+  }
+  if (typeof body.on !== 'boolean') return c.json({ error: 'bad on' }, 400);
+  if (body.on && !(PLACES as readonly string[]).includes(body.place ?? '')) {
+    return c.json({ error: 'bad place' }, 400);
+  }
+  const s = body.on
+    ? { on: true, place: body.place!, since: normalizeSince(body.since, Date.now()) }
+    : { on: false, place: null, since: null };
+  const db = drizzle(neon(c.env.DATABASE_URL));
+  const prev = await getStatusRow(db, me);
+  const saved = await setStatus(db, me, s);
+
+  // off→on 전환이면 크루에게 푸시 — 응답을 막지 않게 백그라운드로
+  if (shouldNotify(prev, s.on, Date.now())) {
+    c.executionCtx.waitUntil(
+      (async () => {
+        const targets = await pushSubsExcept(db, me);
+        if (targets.length === 0) return;
+        await stampNotified(db, me);
+        await sendPushToAll(
+          c.env,
+          targets,
+          {
+            title: `🟢 ${MEMBER_NAMES[me]} — ${s.place}에서 공부 시작!`,
+            body: '오늘도 같이 달려요 👟',
+            url: '/',
+          },
+          (endpoint) => deleteGonePushSub(db, endpoint),
+        );
+      })(),
+    );
+  }
+  return c.json({ ok: true, status: saved } satisfies StatusSetResponse);
+});
+
+/* ---------- 웹 푸시 구독 관리 ---------- */
+
+app.get('/api/push/vapid', (c) => {
+  return c.json({ key: c.env.VAPID_PUBLIC_KEY ?? '' } satisfies VapidKeyResponse);
+});
+
+const B64URL_RE = /^[A-Za-z0-9_-]+$/;
+
+app.post('/api/push/subscribe', async (c) => {
+  const me = c.get('memberId');
+  let body: PushSubscribeRequest;
+  try {
+    body = await c.req.json<PushSubscribeRequest>();
+  } catch {
+    return c.json({ error: 'invalid json' }, 400);
+  }
+  if (
+    typeof body.endpoint !== 'string' ||
+    !body.endpoint.startsWith('https://') ||
+    body.endpoint.length > 1024
+  ) {
+    return c.json({ error: 'bad endpoint' }, 400);
+  }
+  const k = body.keys;
+  if (
+    !k ||
+    typeof k.p256dh !== 'string' || !B64URL_RE.test(k.p256dh) || k.p256dh.length > 256 ||
+    typeof k.auth !== 'string' || !B64URL_RE.test(k.auth) || k.auth.length > 64
+  ) {
+    return c.json({ error: 'bad keys' }, 400);
+  }
+  await upsertPushSub(drizzle(neon(c.env.DATABASE_URL)), me, {
+    endpoint: body.endpoint,
+    p256dh: k.p256dh,
+    auth: k.auth,
+  });
+  return c.json({ ok: true });
+});
+
+app.post('/api/push/unsubscribe', async (c) => {
+  const me = c.get('memberId');
+  let body: PushUnsubscribeRequest;
+  try {
+    body = await c.req.json<PushUnsubscribeRequest>();
+  } catch {
+    return c.json({ error: 'invalid json' }, 400);
+  }
+  if (typeof body.endpoint !== 'string') return c.json({ error: 'bad endpoint' }, 400);
+  await deletePushSub(drizzle(neon(c.env.DATABASE_URL)), me, body.endpoint);
+  return c.json({ ok: true });
 });
 
 // run_worker_first가 /api/*만 Worker로 보내므로 그 외는 정적 자산이 처리하지만,

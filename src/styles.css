@@ -55,6 +55,60 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 .cta:active { transform: scale(0.98); }
 .cta-cap { font-size: 12.5px; color: #9AA1AD; margin-top: 10px; text-align: center; }
 
+/* ---------- 지금 상태 (라이브 체크인) ---------- */
+.status-bar { margin-top: 16px; padding: 12px 14px 13px; border-radius: 14px; background: #F6F7F9; transition: background 200ms; }
+.status-bar.on { background: #E6F9F0; }
+.status-line { display: flex; align-items: center; gap: 7px; min-height: 24px; }
+.status-ask { font-size: 12.5px; color: #6B7280; }
+.status-live { font-size: 13.5px; font-weight: 700; color: #0A6E42; }
+.status-elapsed { font-size: 12px; font-weight: 600; color: #12B76A; flex: 1; }
+.status-end {
+  flex: none; border: none; border-radius: 999px; padding: 5px 12px;
+  background: #FFFFFF; color: #0A6E42; font-size: 12px; font-weight: 700; cursor: pointer;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+.status-end:active { transform: scale(0.96); }
+.status-places { display: flex; gap: 6px; margin-top: 10px; }
+.status-chip {
+  display: flex; align-items: center; justify-content: center; gap: 4px;
+  flex: 1; height: 34px; padding: 0 6px; white-space: nowrap;
+  border: 1.5px solid #E4E7EC; border-radius: 999px; background: #FFFFFF;
+  color: #4E555F; font-size: 12.5px; font-weight: 600; cursor: pointer;
+  transition: border-color 150ms, background 150ms, color 150ms;
+}
+.status-chip:active { transform: scale(0.97); }
+.status-chip.sel { border-color: #12B76A; background: #12B76A; color: #FFFFFF; }
+.status-chip-ico { font-size: 13px; }
+
+@keyframes live-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(18, 183, 106, 0.45); }
+  70% { box-shadow: 0 0 0 6px rgba(18, 183, 106, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(18, 183, 106, 0); }
+}
+.live-dot {
+  display: inline-block; flex: none; width: 9px; height: 9px; border-radius: 50%;
+  background: #12B76A; animation: live-pulse 2s infinite;
+}
+.av-wrap { position: relative; display: inline-flex; flex: none; }
+.live-dot.av { position: absolute; right: 0; bottom: 1px; width: 11px; height: 11px; border: 2px solid #FFFFFF; }
+
+/* ---------- 공부 시작 알림 토글 ---------- */
+.notify-row {
+  display: flex; align-items: center; gap: 7px;
+  margin-top: 9px; padding: 0 4px;
+  font-size: 12px; color: #6B7280;
+}
+.notify-row.hint { color: #9AA1AD; line-height: 1.4; }
+.notify-label { flex: 1; }
+.notify-btn {
+  flex: none; border: 1.5px solid #E4E7EC; border-radius: 999px; padding: 4px 12px;
+  background: #FFFFFF; color: #4E555F; font-size: 12px; font-weight: 700; cursor: pointer;
+  transition: border-color 150ms, background 150ms, color 150ms;
+}
+.notify-btn:disabled { opacity: 0.5; cursor: default; }
+.notify-btn.on { border-color: #12B76A; color: #0A6E42; background: #E6F9F0; }
+.notify-btn:active { transform: scale(0.96); }
+
 /* ---------- 오늘의 크루 보드 ---------- */
 .board-head { display: flex; align-items: center; justify-content: space-between; margin: 30px 0 4px; }
 .board-title { font-size: 16px; font-weight: 800; letter-spacing: -0.01em; color: #16181D; }
@@ -73,6 +127,7 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 .board-strip-entry { display: flex; flex-direction: column; align-items: center; gap: 4px; max-width: 100%; }
 .board-strip-off { font-size: 10.5px; color: #9AA1AD; }
 .board-strip-empty { font-size: 10.5px; color: #9AA1AD; line-height: 1.4; }
+.board-strip-live { font-size: 10.5px; font-weight: 700; color: #0A6E42; }
 .board-row { display: none; align-items: center; gap: 12px; padding: 13px 0; border-top: 1px solid transparent; }
 .board-cell + .board-cell .board-row { border-top-color: #F1F3F6; }
 .board-row-main { flex: 1; min-width: 0; }
@@ -80,6 +135,7 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 .board-row-nm { font-size: 14px; font-weight: 700; color: #16181D; }
 .board-row-extra { font-size: 11px; color: #9AA1AD; }
 .board-row-sub { font-size: 12.5px; color: #9AA1AD; margin-top: 3px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.board-row-sub.live { color: #0A6E42; font-weight: 600; }
 .board-row-right { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; flex: none; }
 
 .me-badge { font-size: 9px; font-weight: 800; background: #16181D; color: #FFFFFF; border-radius: 999px; padding: 1.5px 5px; }

@@ -1,5 +1,5 @@
-import type { Entry, MemberId } from '../../shared/types';
-import { MEMBERS, type CopySet, type Member } from '../lib/constants';
+import { isStatusActive, type Entry, type MemberId, type MemberStatus } from '../../shared/types';
+import { MEMBERS, fmtElapsed, type CopySet, type Member } from '../lib/constants';
 import { Avatar, StarsRow } from './icons';
 import { Chip } from './Chip';
 
@@ -7,11 +7,23 @@ function MeBadge({ sm }: { sm?: boolean }) {
   return <span className={'me-badge' + (sm ? ' sm' : '')}>나</span>;
 }
 
+/** 아바타 + 우하단 라이브 점. */
+function LiveAvatar({ live, ...av }: { live: boolean } & Parameters<typeof Avatar>[0]) {
+  return (
+    <span className="av-wrap">
+      <Avatar {...av} />
+      {live && <span className="live-dot av" />}
+    </span>
+  );
+}
+
 function BoardCell({
-  m, todays, meId, wit,
+  m, todays, status, now, meId, wit,
 }: {
   m: Member;
   todays: Entry[];
+  status: MemberStatus | undefined;
+  now: number;
   meId: MemberId;
   wit: CopySet;
 }) {
@@ -23,6 +35,10 @@ function BoardCell({
   const opacity = latest ? undefined : 0.55;
   const hasStars = !!latest && latest.tag !== 'OFF' && (latest.stars ?? 0) > 0;
   const firstTodo = latest && latest.todos.length > 0 ? latest.todos[0]!.t : '';
+  const live = isStatusActive(status, now);
+  const liveLine = live
+    ? `${wit.statusPeer(status.place ?? '기타')}${status.since ? ` · ${fmtElapsed(status.since, now)}` : ''}`
+    : '';
   const subLine = latest
     ? latest.memo || firstTodo || (latest.body || '').split('\n')[0] || (latest.tag === 'OFF' ? '오늘은 휴식' : '')
     : isMe
@@ -33,11 +49,12 @@ function BoardCell({
   return (
     <div className="board-cell">
       <div className="board-strip">
-        <Avatar m={m} size={46} ring={ring} dash={dash} opacity={opacity} />
+        <LiveAvatar live={live} m={m} size={46} ring={ring} dash={dash} opacity={live ? undefined : opacity} />
         <div className="board-strip-name">
           <span>{m.name}</span>
           {isMe && <MeBadge />}
         </div>
+        {live && <span className="board-strip-live">{status.place ?? '기타'} 공부 중</span>}
         {latest ? (
           <div className="board-strip-entry">
             <Chip tag={latest.tag} variant="xs" />
@@ -45,18 +62,18 @@ function BoardCell({
             {latest.tag === 'OFF' && <span className="board-strip-off">오늘은 휴식</span>}
           </div>
         ) : (
-          <span className="board-strip-empty">{wit.empty}</span>
+          !live && <span className="board-strip-empty">{wit.empty}</span>
         )}
       </div>
       <div className="board-row">
-        <Avatar m={m} size={40} ring={ring} dash={dash} opacity={opacity} />
+        <LiveAvatar live={live} m={m} size={40} ring={ring} dash={dash} opacity={live ? undefined : opacity} />
         <div className="board-row-main">
           <div className="board-row-name">
             <span className="board-row-nm">{m.name}</span>
             {isMe && <MeBadge sm />}
             {extra && <span className="board-row-extra">{extra}</span>}
           </div>
-          <div className="board-row-sub">{subLine}</div>
+          <div className={'board-row-sub' + (live ? ' live' : '')}>{live ? liveLine : subLine}</div>
         </div>
         {latest && (
           <div className="board-row-right">
@@ -69,11 +86,19 @@ function BoardCell({
   );
 }
 
-export function Board({ todays, meId, wit }: { todays: Entry[]; meId: MemberId; wit: CopySet }) {
+export function Board({
+  todays, statuses, now, meId, wit,
+}: {
+  todays: Entry[];
+  statuses: Partial<Record<MemberId, MemberStatus>>;
+  now: number;
+  meId: MemberId;
+  wit: CopySet;
+}) {
   return (
     <div className="board">
       {MEMBERS.map((m) => (
-        <BoardCell key={m.id} m={m} todays={todays} meId={meId} wit={wit} />
+        <BoardCell key={m.id} m={m} todays={todays} status={statuses[m.id]} now={now} meId={meId} wit={wit} />
       ))}
     </div>
   );

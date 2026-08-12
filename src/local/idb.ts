@@ -1,10 +1,10 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
-import type { Entry, PullCursor } from '../../shared/types';
+import type { Entry, MemberStatus, PullCursor } from '../../shared/types';
 
 interface CrewDB extends DBSchema {
   entries: { key: string; value: Entry };
   queue: { key: string; value: true };
-  meta: { key: string; value: PullCursor | boolean };
+  meta: { key: string; value: PullCursor | boolean | MemberStatus };
 }
 
 export type CrewDatabase = IDBPDatabase<CrewDB>;

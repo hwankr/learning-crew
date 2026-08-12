@@ -2,9 +2,9 @@
    - UI는 이 스토어(메모리 Map)만 읽고 쓴다 — 상호작용은 네트워크를 기다리지 않는다.
    - 실제 쓰기는 IndexedDB에 지속 + 큐에 등록 → SyncClient가 백그라운드로 push.
    - id가 UUID가 아닌 행(데모 시드 s*)은 메모리 전용: 저장도 동기화도 하지 않는다. */
-import type { Entry, MemberId, PullCursor } from '../../shared/types';
+import type { Entry, MemberId, MemberStatus, Place, PullCursor } from '../../shared/types';
 import { openCrewDB, type CrewDatabase } from './idb';
-import { seedEntries } from '../lib/constants';
+import { seedEntries, seedStatuses } from '../lib/constants';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 // 구 프로토타입이 쓰던 localStorage 키 — 이관용이므로 이 이름 그대로 둬야 한다
@@ -14,19 +14,30 @@ const MIGRATED_FLAG = 'migrated-legacy-v2';
 export interface StoreSnapshot {
   rev: number;
   entries: Entry[]; // deletedAt이 없는 살아있는 행만
+  statuses: Partial<Record<MemberId, MemberStatus>>; // 멤버별 지금 상태
 }
+
+// meta 스토어의 지금 상태 저장 키
+const MY_STATUS_KEY = 'myStatus';
+const STATUS_DIRTY_KEY = 'statusDirty';
 
 export class CrewStore {
   private map = new Map<string, Entry>();
   private queue = new Set<string>();
+  private statuses = new Map<MemberId, MemberStatus>();
+  private statusDirty = false; // 내 상태가 아직 서버에 안 갔음
+  private me: MemberId = 'sh';
+  private demo = false;
   private listeners = new Set<() => void>();
-  private snapshot: StoreSnapshot = { rev: 0, entries: [] };
+  private snapshot: StoreSnapshot = { rev: 0, entries: [], statuses: {} };
   private db: CrewDatabase | null = null;
 
   /** SyncClient가 등록 — 로컬 쓰기 직후 push를 예약한다. */
   onLocalWrite: (() => void) | null = null;
 
   async init(opts: { demo: boolean; memberId: MemberId }): Promise<void> {
+    this.me = opts.memberId;
+    this.demo = opts.demo;
     // IndexedDB가 막힌 환경(사생활 모드, 손상된 프로필)에서도 첫 렌더는 무조건 되어야 한다.
     // 열기가 실패하거나 2초 안에 안 끝나면 메모리 전용으로 동작한다(this.db는 계속 null).
     try {
@@ -40,10 +51,17 @@ export class CrewStore {
     if (this.db) {
       for (const e of await this.db.getAll('entries')) this.map.set(e.id, e);
       for (const k of await this.db.getAllKeys('queue')) this.queue.add(String(k));
+      // 내 상태는 지속 — 다른 멤버 상태는 어차피 첫 pull에 실려 온다
+      const st = await this.db.get('meta', MY_STATUS_KEY);
+      if (!opts.demo && st && typeof st === 'object' && 'm' in st && st.m === opts.memberId) {
+        this.statuses.set(st.m, st);
+        this.statusDirty = !!(await this.db.get('meta', STATUS_DIRTY_KEY));
+      }
     }
     if (!opts.demo) await this.migrateLegacy(opts.memberId);
-    if (opts.demo && this.map.size === 0) {
-      for (const e of seedEntries()) this.map.set(e.id, e);
+    if (opts.demo) {
+      if (this.map.size === 0) for (const e of seedEntries()) this.map.set(e.id, e);
+      for (const s of seedStatuses()) if (s.m !== opts.memberId) this.statuses.set(s.m, s);
     }
     this.bump();
   }
@@ -69,6 +87,27 @@ export class CrewStore {
       void this.db?.put('entries', entry);
       this.queue.add(entry.id);
       void this.db?.put('queue', true, entry.id);
+      this.onLocalWrite?.();
+    }
+    this.bump();
+  }
+
+  /** 지금 상태 토글 — 켜면 since가 지금으로 시작한다(장소 변경도 새로 시작). */
+  setMyStatus(on: boolean, place: Place | null): void {
+    const nowIso = new Date().toISOString();
+    const st: MemberStatus = {
+      m: this.me,
+      on,
+      place: on ? place : null,
+      since: on ? nowIso : null,
+      updatedAt: nowIso, // 잠정치 — 서버 반영 시 서버 시계로 교체
+    };
+    this.statuses.set(this.me, st);
+    if (!this.demo) {
+      // 데모는 메모리 전용 — 지속하면 나중에 실계정 로그인에 새어 들어간다
+      this.statusDirty = true;
+      void this.db?.put('meta', st, MY_STATUS_KEY);
+      void this.db?.put('meta', true, STATUS_DIRTY_KEY);
       this.onLocalWrite?.();
     }
     this.bump();
@@ -124,9 +163,38 @@ export class CrewStore {
     void this.db?.delete('queue', id);
   }
 
+  /** 서버에 아직 안 보낸 내 상태. 없으면 null. */
+  myStatusPending(): MemberStatus | null {
+    return this.statusDirty ? (this.statuses.get(this.me) ?? null) : null;
+  }
+
+  /** 상태 push 성공 — 단, 전송 중에 또 토글했으면 dirty를 유지해 재전송되게 한다. */
+  ackStatus(sentUpdatedAt: string, server: MemberStatus): void {
+    if (this.statuses.get(this.me)?.updatedAt !== sentUpdatedAt) return;
+    this.statusDirty = false;
+    void this.db?.delete('meta', STATUS_DIRTY_KEY);
+    this.statuses.set(server.m, server);
+    void this.db?.put('meta', server, MY_STATUS_KEY);
+    this.bump();
+  }
+
+  /** pull에 실려 온 전 멤버 상태 병합. 아직 push 안 된 내 상태는 로컬이 이긴다. */
+  applyStatuses(rows: MemberStatus[]): void {
+    let changed = false;
+    for (const r of rows) {
+      if (r.m === this.me && this.statusDirty) continue;
+      const cur = this.statuses.get(r.m);
+      if (cur && cur.updatedAt === r.updatedAt) continue;
+      this.statuses.set(r.m, r);
+      if (r.m === this.me) void this.db?.put('meta', r, MY_STATUS_KEY);
+      changed = true;
+    }
+    if (changed) this.bump();
+  }
+
   async getCursor(): Promise<PullCursor | null> {
     const v = await this.db?.get('meta', 'cursor');
-    return v && typeof v === 'object' ? v : null;
+    return v && typeof v === 'object' && 'ts' in v ? v : null;
   }
   async setCursor(c: PullCursor): Promise<void> {
     await this.db?.put('meta', c, 'cursor');
@@ -176,6 +244,7 @@ export class CrewStore {
     this.snapshot = {
       rev: this.snapshot.rev + 1,
       entries: [...this.map.values()].filter((e) => !e.deletedAt),
+      statuses: Object.fromEntries(this.statuses) as Partial<Record<MemberId, MemberStatus>>,
     };
     for (const fn of this.listeners) fn();
   }

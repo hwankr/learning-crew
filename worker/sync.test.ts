@@ -4,8 +4,22 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import { PGlite } from '@electric-sql/pglite';
 import { drizzle } from 'drizzle-orm/pglite';
-import { pushEntries, pullSince, type Db } from './queries';
-import type { Entry, PullCursor } from '../shared/types';
+import {
+  pushEntries,
+  pullSince,
+  setStatus,
+  allStatuses,
+  getStatusRow,
+  stampNotified,
+  upsertPushSub,
+  deletePushSub,
+  deleteGonePushSub,
+  pushSubsExcept,
+  type Db,
+} from './queries';
+import { NOTIFY_COOLDOWN_MS, shouldNotify } from './push';
+import { STATUS_TTL_MS, isStatusActive } from '../shared/types';
+import type { Entry, MemberStatus, PullCursor } from '../shared/types';
 
 let db: Db;
 
@@ -29,9 +43,10 @@ const B = '22222222-2222-4222-8222-222222222222';
 
 beforeAll(async () => {
   const pg = new PGlite();
-  const migration = readdirSync('migrations').find((f) => f.endsWith('.sql'));
-  const ddl = readFileSync(`migrations/${migration}`, 'utf8');
-  for (const stmt of ddl.split('--> statement-breakpoint')) await pg.exec(stmt);
+  for (const migration of readdirSync('migrations').filter((f) => f.endsWith('.sql')).sort()) {
+    const ddl = readFileSync(`migrations/${migration}`, 'utf8');
+    for (const stmt of ddl.split('--> statement-breakpoint')) await pg.exec(stmt);
+  }
   db = drizzle(pg) as unknown as Db;
 });
 
@@ -79,5 +94,133 @@ describe('sync queries', () => {
     await pushEntries(db, [entry({ id: C, m: 'th', tag: 'OFF', stars: 4 })], 'th');
     const r = await pullSince(db, null);
     expect(r.rows.find((x) => x.id === C)!.stars).toBeNull();
+  });
+});
+
+describe('status queries', () => {
+  it('켜면 멤버당 1행이 저장되고 저장된 행을 돌려준다', async () => {
+    const since = new Date().toISOString();
+    const saved = await setStatus(db, 'sh', { on: true, place: '도서관', since });
+    expect(saved.m).toBe('sh');
+    expect(saved.on).toBe(true);
+    expect(saved.place).toBe('도서관');
+    const all = await allStatuses(db);
+    expect(all.filter((s) => s.m === 'sh')).toHaveLength(1);
+  });
+
+  it('재설정은 같은 행을 덮어쓴다 (끄면 place/since가 비워진다)', async () => {
+    await setStatus(db, 'sh', { on: false, place: null, since: null });
+    const all = await allStatuses(db);
+    const sh = all.find((s) => s.m === 'sh')!;
+    expect(sh.on).toBe(false);
+    expect(sh.place).toBeNull();
+    expect(sh.since).toBeNull();
+    expect(all.filter((s) => s.m === 'sh')).toHaveLength(1);
+  });
+
+  it('멤버별로 행이 따로 쌓인다', async () => {
+    await setStatus(db, 'wg', { on: true, place: '카페', since: new Date().toISOString() });
+    const all = await allStatuses(db);
+    expect(all).toHaveLength(2);
+    expect(all.find((s) => s.m === 'wg')!.on).toBe(true);
+  });
+});
+
+describe('isStatusActive (표시 규칙)', () => {
+  const now = Date.now();
+  const st = (over: Partial<MemberStatus>): MemberStatus => ({
+    m: 'sh', on: true, place: '도서관',
+    since: new Date(now - 60_000).toISOString(),
+    updatedAt: new Date(now).toISOString(),
+    ...over,
+  });
+
+  it('켜져 있고 TTL 이내면 활성', () => {
+    expect(isStatusActive(st({}), now)).toBe(true);
+  });
+  it('꺼져 있으면 비활성', () => {
+    expect(isStatusActive(st({ on: false, since: null }), now)).toBe(false);
+  });
+  it('끄는 걸 잊어 TTL을 넘기면 비활성으로 표시', () => {
+    expect(isStatusActive(st({ since: new Date(now - STATUS_TTL_MS - 1000).toISOString() }), now)).toBe(false);
+  });
+  it('상태가 아예 없으면 비활성', () => {
+    expect(isStatusActive(undefined, now)).toBe(false);
+  });
+});
+
+describe('shouldNotify (푸시 발송 규칙)', () => {
+  const now = Date.now();
+  const ago = (ms: number) => new Date(now - ms).toISOString();
+
+  it('첫 켜기(이전 상태 없음)는 알린다', () => {
+    expect(shouldNotify(null, true, now)).toBe(true);
+  });
+  it('off→on 전환은 알린다', () => {
+    expect(shouldNotify({ on: false, since: null, lastNotifiedAt: null }, true, now)).toBe(true);
+  });
+  it('켜진 채 장소만 바꾸면 알리지 않는다', () => {
+    expect(shouldNotify({ on: true, since: ago(60_000), lastNotifiedAt: null }, true, now)).toBe(false);
+  });
+  it('끌 때는 알리지 않는다', () => {
+    expect(shouldNotify({ on: false, since: null, lastNotifiedAt: null }, false, now)).toBe(false);
+  });
+  it('쿨다운 안의 재켜기는 조용히 넘어간다', () => {
+    const recent = ago(NOTIFY_COOLDOWN_MS - 60_000);
+    expect(shouldNotify({ on: false, since: null, lastNotifiedAt: recent }, true, now)).toBe(false);
+  });
+  it('쿨다운이 지나면 다시 알린다', () => {
+    const old = ago(NOTIFY_COOLDOWN_MS + 60_000);
+    expect(shouldNotify({ on: false, since: null, lastNotifiedAt: old }, true, now)).toBe(true);
+  });
+  it('끄는 걸 잊어 TTL이 지난 on 행은 꺼진 것으로 보고 다음 켜기에 알린다', () => {
+    // 어제 아침 켜고 안 끈 사람이 오늘 아침 다시 체크인하는 시나리오
+    const stale = ago(STATUS_TTL_MS + 60_000);
+    expect(shouldNotify({ on: true, since: stale, lastNotifiedAt: stale }, true, now)).toBe(true);
+  });
+  it('TTL 이내의 on 행은 여전히 조용하다 (스팸 방지)', () => {
+    const fresh = ago(STATUS_TTL_MS - 60_000);
+    expect(shouldNotify({ on: true, since: fresh, lastNotifiedAt: fresh }, true, now)).toBe(false);
+  });
+});
+
+describe('push subscription queries', () => {
+  const EP1 = 'https://push.example.com/sub/1';
+  const EP2 = 'https://push.example.com/sub/2';
+
+  it('구독 등록 후 본인 제외 목록에 나온다', async () => {
+    await upsertPushSub(db, 'sh', { endpoint: EP1, p256dh: 'pk1', auth: 'a1' });
+    await upsertPushSub(db, 'wg', { endpoint: EP2, p256dh: 'pk2', auth: 'a2' });
+    const forWg = await pushSubsExcept(db, 'wg');
+    expect(forWg.map((s) => s.endpoint)).toEqual([EP1]);
+  });
+
+  it('같은 endpoint 재등록은 멤버/키를 갱신한다 (기기 주인이 바뀌는 경우)', async () => {
+    await upsertPushSub(db, 'th', { endpoint: EP1, p256dh: 'pk1b', auth: 'a1b' });
+    const forSh = await pushSubsExcept(db, 'sh');
+    const row = forSh.find((s) => s.endpoint === EP1)!;
+    expect(row.p256dh).toBe('pk1b');
+    // sh 것이 아니게 됐으니 sh 제외 목록에 나타난다
+    expect(forSh).toHaveLength(2);
+  });
+
+  it('남의 구독은 지울 수 없고 본인 것만 지워진다', async () => {
+    await deletePushSub(db, 'sh', EP1); // EP1은 이제 th 소유 — 무시돼야 한다
+    expect((await pushSubsExcept(db, 'jj')).map((s) => s.endpoint).sort()).toEqual([EP1, EP2]);
+    await deletePushSub(db, 'th', EP1);
+    expect((await pushSubsExcept(db, 'jj')).map((s) => s.endpoint)).toEqual([EP2]);
+  });
+
+  it('만료 구독(404/410)은 소유와 무관하게 정리된다', async () => {
+    await deleteGonePushSub(db, EP2);
+    expect(await pushSubsExcept(db, 'jj')).toHaveLength(0);
+  });
+
+  it('stampNotified가 쿨다운 기준 시각을 남긴다', async () => {
+    await setStatus(db, 'jj', { on: true, place: '도서관', since: new Date().toISOString() });
+    expect((await getStatusRow(db, 'jj'))!.lastNotifiedAt).toBeNull();
+    await stampNotified(db, 'jj');
+    const row = await getStatusRow(db, 'jj');
+    expect(row!.lastNotifiedAt).not.toBeNull();
   });
 });

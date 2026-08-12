@@ -2,7 +2,14 @@
    - push: 큐에 쌓인 내 행들을 멱등 업서트로 전송 (실패하면 큐에 남아 재시도)
    - pull: (updated_at, id) 키셋 커서 이후 변경분만 수신
    - 탭이 보일 때만 폴링 — Neon 무료 컴퓨트를 아끼고, 안 보이는 탭은 조용히 둔다 */
-import type { Entry, MemberId, PullResponse, PushRequest } from '../../shared/types';
+import type {
+  Entry,
+  MemberId,
+  PullResponse,
+  PushRequest,
+  StatusSetRequest,
+  StatusSetResponse,
+} from '../../shared/types';
 import { PUSH_LIMITS } from '../../shared/types';
 import type { CrewStore } from './store';
 
@@ -49,6 +56,7 @@ export class SyncClient {
     this.busy = true;
     try {
       await this.push();
+      await this.pushStatus();
       await this.pull();
     } catch {
       // 오프라인/서버 오류 — 큐와 커서가 남아 있으니 다음 사이클에 재시도
@@ -87,6 +95,24 @@ export class SyncClient {
     }
   }
 
+  /** 아직 서버에 안 간 내 지금 상태를 전송. 실패하면 dirty로 남아 다음 사이클에 재시도. */
+  private async pushStatus(): Promise<void> {
+    const st = this.store.myStatusPending();
+    if (!st) return;
+    const res = await fetch('/api/sync/status', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${this.token}` },
+      body: JSON.stringify({
+        on: st.on,
+        place: st.place ?? undefined,
+        since: st.since ?? undefined,
+      } satisfies StatusSetRequest),
+    });
+    if (!res.ok) throw new Error(`status ${res.status}`);
+    const data = (await res.json()) as StatusSetResponse;
+    this.store.ackStatus(st.updatedAt, data.status);
+  }
+
   private async pull(): Promise<void> {
     let cursor = await this.store.getCursor();
     // 500행 한도에 걸렸을 수 있으니 다 받을 때까지 반복
@@ -98,6 +124,7 @@ export class SyncClient {
       if (!res.ok) throw new Error(`pull ${res.status}`);
       const data = (await res.json()) as PullResponse;
       if (data.rows.length > 0) this.store.applyServer(data.rows);
+      if (Array.isArray(data.statuses)) this.store.applyStatuses(data.statuses);
       if (data.cursor) {
         cursor = data.cursor;
         await this.store.setCursor(data.cursor);
