@@ -4,7 +4,7 @@
 "러닝"은 running이 아니라 **learning** — 공부 크루다. 한 줄 메모 + 일기/할 일 목록,
 태그(자격증/영어/코딩테스트/기타/OFF), 별점, 피드·캘린더.
 
-**운영 URL**: https://learning-crew.running-crew.workers.dev
+**운영 URL**: https://learning-crew.learning-crew.workers.dev
 **로그인**: 첫 방문에 이름(아바타)을 고르면 끝 — 서버가 해당 멤버의 서명 토큰을 발급해 기기에 저장한다.
 신원 검증은 없다(URL을 아는 사람 = 크루 전제). 링크가 새면 `AUTH_SECRET` 교체로 전원 로그아웃.
 
