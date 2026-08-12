@@ -5,6 +5,7 @@ export const STAR_D =
   'M12 2.6l2.9 5.9 6.5 1-4.7 4.6 1.1 6.5-5.8-3.1-5.8 3.1 1.1-6.5-4.7-4.6 6.5-1z';
 export const CHECK_D = 'M20 6 9 17l-5-5';
 export const PLUS_D = 'M12 5v14M5 12h14';
+export const PENCIL_D = 'M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z';
 export const X_D = 'M6 6l12 12M18 6L6 18';
 
 const block: CSSProperties = { display: 'block', flex: 'none' };

@@ -3,7 +3,7 @@ import type { Entry } from '../shared/types';
 import { BY_ID, COPY, MEMBERS, W, dayKey, pad2, shiftKey } from './lib/constants';
 import type { AppConfig } from './lib/config';
 import type { CrewStore } from './local/store';
-import { Avatar, Icon, PLUS_D } from './components/icons';
+import { Avatar, Icon, PENCIL_D } from './components/icons';
 import { Board } from './components/Board';
 import { StatusBar } from './components/StatusBar';
 import { NotifyToggle } from './components/NotifyToggle';
@@ -96,7 +96,7 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
             <div className="brand">러닝 크루 👟</div>
             <div className="stack">
               {MEMBERS.map((m) => (
-                <Avatar key={m.id} m={m} size={36} className="stack-av" bg={m.soft} />
+                <Avatar key={m.id} m={m} size={34} className="stack-av" bg={m.soft} />
               ))}
             </div>
           </div>
@@ -104,10 +104,15 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
             {now.getMonth() + 1}월 {now.getDate()}일 {W[now.getDay()]}요일 · {wit.greeting}
           </div>
           <button className="cta" onClick={openNew}>
-            <Icon d={PLUS_D} size={17} sw={2.6} />
+            <span className="cta-ico">
+              <Icon d={PENCIL_D} size={16} sw={2.2} />
+            </span>
             <span>{wit.cta}</span>
           </button>
-          <div className="cta-cap">{myToday > 0 ? wit.ctaSome(myToday) : wit.ctaNone}</div>
+          <div className="cta-cap">
+            <span className="cta-cap-dot" />
+            <span>{myToday > 0 ? wit.ctaSome(myToday) : wit.ctaNone}</span>
+          </div>
           <StatusBar status={snap.statuses[me.id]} wit={wit} now={nowTick}
             onSet={(on, place) => {
               store.setMyStatus(on, place);
@@ -130,8 +135,8 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
         </div>
         <div className="feed-col">
           <div className="tabs">
-            <button className={'tab' + (view === 'feed' ? ' on' : '')} onClick={() => setView('feed')}>피드</button>
             <button className={'tab' + (view === 'cal' ? ' on' : '')} onClick={() => setView('cal')}>캘린더</button>
+            <button className={'tab' + (view === 'feed' ? ' on' : '')} onClick={() => setView('feed')}>피드</button>
           </div>
           {view === 'feed' ? (
             <Feed entries={entries} todayKey={todayKey} yKey={yKey} meId={me.id}

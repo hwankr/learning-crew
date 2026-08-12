@@ -49,8 +49,9 @@ export function loadConfig(): AppConfig {
   else if (witParam === 'subtle' || witParam === '은은한 위트') localStorage.setItem(WIT_KEY, 'subtle');
   const wit = localStorage.getItem(WIT_KEY) === 'drip' ? 'drip' : 'subtle';
 
+  // 캘린더 중심 개편 — 기본 뷰가 캘린더다 (?view=feed로 피드 시작)
   const viewParam = params.get('view');
-  const initialView = viewParam === 'cal' || viewParam === '캘린더' ? 'cal' : 'feed';
+  const initialView = viewParam === 'feed' || viewParam === '피드' ? 'feed' : 'cal';
 
   if (tokenMember && token) {
     return { token, memberId: tokenMember, wit, initialView, demo: false, needsLogin: false };
