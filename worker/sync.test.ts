@@ -4,6 +4,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import { PGlite } from '@electric-sql/pglite';
 import { drizzle } from 'drizzle-orm/pglite';
+import { sql } from 'drizzle-orm';
 import {
   pushEntries,
   pullSince,
@@ -42,6 +43,11 @@ function entry(partial: Partial<Entry> & Pick<Entry, 'id' | 'm'>): Entry {
 const A = '11111111-1111-4111-8111-111111111111';
 const B = '22222222-2222-4222-8222-222222222222';
 
+/** 모든 행을 10분 과거로 — 커서가 안전 지평선(지금-60초)에 안 걸리고 키셋으로 전진하게 한다. */
+async function ageAll(): Promise<void> {
+  await db.execute(sql`update entries set updated_at = updated_at - interval '10 minutes'`);
+}
+
 beforeAll(async () => {
   const pg = new PGlite();
   for (const migration of readdirSync('migrations').filter((f) => f.endsWith('.sql')).sort()) {
@@ -63,6 +69,7 @@ describe('sync queries', () => {
     expect(out.applied.map((e) => e.id).sort()).toEqual([A, B].sort());
     expect(out.conflicts).toHaveLength(0);
     expect(out.applied.find((e) => e.id === A)!.v).toBe(1);
+    await ageAll();
     const r = await pullSince(db, null);
     expect(r.rows).toHaveLength(2);
     expect(r.rows.every((x) => x.v === 1)).toBe(true);
@@ -74,6 +81,7 @@ describe('sync queries', () => {
     const out = await pushEntries(db, [entry({ id: A, m: 'sh', memo: '수정된 기록', stars: 5, v: 1 })], 'sh');
     expect(out.applied).toHaveLength(1);
     expect(out.applied[0]!.v).toBe(2);
+    await ageAll();
     const r = await pullSince(db, cursor);
     expect(r.rows).toHaveLength(1);
     expect(r.rows[0]!.id).toBe(A);
@@ -136,6 +144,43 @@ describe('sync queries', () => {
     await pushEntries(db, [entry({ id: C, m: 'th', tag: 'OFF', stars: 4 })], 'th');
     const r = await pullSince(db, null);
     expect(r.rows.find((x) => x.id === C)!.stars).toBeNull();
+  });
+});
+
+describe('pull 커서 안전 지평선', () => {
+  const NIL = '00000000-0000-0000-0000-000000000000';
+  const D = '44444444-4444-4444-8444-444444444444';
+  const E = '55555555-5555-4555-8555-555555555555';
+  let held: PullCursor | null = null;
+
+  it('최근(60초 이내) 행이 있으면 커서가 지평선에서 멈춘다', async () => {
+    await pushEntries(db, [entry({ id: D, m: 'sh', memo: '지평선 테스트' })], 'sh');
+    const r = await pullSince(db, null);
+    expect(r.rows.find((x) => x.id === D)).toBeTruthy();
+    expect(r.cursor!.id).toBe(NIL);
+    held = r.cursor;
+  });
+
+  it('지평선 커서 재-pull은 최근 행을 다시 싣는다 (중복은 클라이언트가 v 비교로 무시)', async () => {
+    const r = await pullSince(db, held);
+    expect(r.rows.some((x) => x.id === D)).toBe(true);
+  });
+
+  it('커서 확보 후 과거 시각으로 커밋된 행(느린 트랜잭션)도 다음 pull에 잡힌다', async () => {
+    // updated_at의 now()는 트랜잭션 시작 시각 — 먼저 시작해 늦게 커밋되면
+    // 이미 확보된 커서보다 과거 시각으로 나타난다. 그 상황의 시뮬레이션:
+    await pushEntries(db, [entry({ id: E, m: 'sh', memo: '늦게 커밋' })], 'sh');
+    await db.execute(sql`update entries set updated_at = now() - interval '30 seconds' where id = ${E}`);
+    const r = await pullSince(db, held);
+    expect(r.rows.some((x) => x.id === E)).toBe(true);
+  });
+
+  it('오래된 행만 있으면 키셋 커서로 전진하고 재-pull은 비어 있다', async () => {
+    await ageAll();
+    const r = await pullSince(db, null);
+    expect(r.cursor!.id).not.toBe(NIL);
+    const r2 = await pullSince(db, r.cursor);
+    expect(r2.rows).toHaveLength(0);
   });
 });
 

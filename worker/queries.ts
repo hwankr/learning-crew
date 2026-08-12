@@ -86,7 +86,15 @@ export interface PullResult {
   cursor: PullCursor | null;
 }
 
-/** (updated_at, id) 키셋 커서 이후 변경분. 최대 500행 — 클라이언트가 반복 호출한다. */
+/** 안전 지평선의 커서 id — ts 이후의 모든 id가 다시 잡히도록 최솟값 UUID를 쓴다. */
+const NIL_UUID = '00000000-0000-0000-0000-000000000000';
+
+/** (updated_at, id) 키셋 커서 이후 변경분. 최대 500행 — 클라이언트가 반복 호출한다.
+
+    커서는 "지금 - 60초" 안전 지평선까지만 전진한다. updated_at의 now()는 커밋 시각이
+    아니라 트랜잭션 시작 시각이라, 먼저 시작해 늦게 커밋된 쓰기가 이미 지나간 커서
+    뒤편에 나타나 영구 누락될 수 있다. 지평선 안쪽(최근 60초)의 행은 다음 pull에
+    다시 실려 보내고, 클라이언트가 버전(v) 비교로 중복을 무시한다. */
 export async function pullSince(db: Db, cursor: PullCursor | null): Promise<PullResult> {
   const rows = await db
     .select()
@@ -99,9 +107,22 @@ export async function pullSince(db: Db, cursor: PullCursor | null): Promise<Pull
     .orderBy(entries.updatedAt, entries.id)
     .limit(500);
   const last = rows[rows.length - 1];
+  if (!last) return { rows: [], cursor };
+  // 마지막 행이 지평선보다 오래됐으면 키셋으로 정상 전진, 아니면 지평선에서 멈춘다.
+  // (비교는 SQL에서 — 드라이버별 타임스탬프 문자열을 JS로 파싱하지 않는다)
+  // 한도(500)에 걸린 페이지는 키셋으로 전진해 페이지네이션이 항상 앞으로 가게 한다 —
+  // 마지막 페이지(<500)가 다시 지평선에서 멈추므로 최근 윈도우는 결국 재검사된다.
+  const [h] = await db
+    .select({
+      olderThanHorizon: sql<boolean>`${last.updatedAt}::timestamptz <= now() - interval '60 seconds'`,
+      horizon: sql<string>`(now() - interval '60 seconds')::text`,
+    })
+    .from(entries)
+    .limit(1);
+  const holdAtHorizon = rows.length < 500 && h && !h.olderThanHorizon;
   return {
     rows: rows.map(toEntry),
-    cursor: last ? { ts: last.updatedAt, id: last.id } : cursor,
+    cursor: holdAtHorizon ? { ts: h.horizon, id: NIL_UUID } : { ts: last.updatedAt, id: last.id },
   };
 }
 
