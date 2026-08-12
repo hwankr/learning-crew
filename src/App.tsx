@@ -1,0 +1,144 @@
+import { useCallback, useState, useSyncExternalStore } from 'react';
+import type { Entry } from '../shared/types';
+import { BY_ID, COPY, MEMBERS, W, dayKey, pad2, shiftKey } from './lib/constants';
+import type { AppConfig } from './lib/config';
+import type { CrewStore } from './local/store';
+import { Avatar, Icon, PLUS_D } from './components/icons';
+import { Board } from './components/Board';
+import { Feed } from './components/Feed';
+import { CalendarView } from './components/CalendarView';
+import { EMPTY_MODAL, EntryModal, type ModalState } from './components/EntryModal';
+
+export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
+  const snap = useSyncExternalStore(store.subscribe, store.getSnapshot);
+  const [view, setView] = useState<'feed' | 'cal'>(cfg.initialView);
+  const [calOff, setCalOff] = useState(0);
+  const [selDay, setSelDay] = useState<string | null>(null);
+  const [modal, setModal] = useState<ModalState>(EMPTY_MODAL);
+  const patch = useCallback((p: Partial<ModalState>) => setModal((m) => ({ ...m, ...p })), []);
+
+  const wit = COPY[cfg.wit];
+  const me = BY_ID[cfg.memberId] ?? MEMBERS[0]!;
+  const now = new Date();
+  const todayKey = dayKey(now);
+  const yKey = shiftKey(-1);
+  const entries = snap.entries;
+  const todays = entries.filter((e) => e.day === todayKey);
+  const doneSet = new Set(todays.map((e) => e.m));
+  const myToday = todays.filter((e) => e.m === me.id).length;
+
+  const closeModal = useCallback(() => setModal(EMPTY_MODAL), []);
+  const openNew = () => setModal({ ...EMPTY_MODAL, open: true });
+
+  const submit = () => {
+    const isOff = modal.tag === 'OFF';
+    if (!modal.tag || (!isOff && modal.stars <= 0)) return;
+    const cleanTodos = modal.mode === 'todo'
+      ? modal.todos.filter((t) => t.t.trim()).map((t) => ({ t: t.t.trim(), done: t.done }))
+      : [];
+    const cleanBody = modal.mode === 'diary' ? modal.body.trim() : '';
+    const stamp = new Date();
+    const common = {
+      tag: modal.tag,
+      stars: isOff ? null : modal.stars,
+      memo: modal.memo.trim(),
+      body: cleanBody,
+      todos: cleanTodos,
+      updatedAt: stamp.toISOString(),
+      deletedAt: null,
+    };
+    if (modal.editingId) {
+      const orig = store.getById(modal.editingId);
+      if (orig) store.upsert({ ...orig, ...common });
+    } else {
+      store.upsert({
+        id: crypto.randomUUID(),
+        m: me.id,
+        day: dayKey(stamp),
+        time: `${pad2(stamp.getHours())}:${pad2(stamp.getMinutes())}`,
+        ...common,
+      });
+    }
+    closeModal();
+  };
+
+  const actions = {
+    onEdit: (e: Entry) =>
+      setModal({
+        open: true,
+        editingId: e.id,
+        tag: e.tag,
+        stars: e.stars ?? 0,
+        memo: e.memo,
+        body: e.body,
+        todos: e.todos.map((t) => ({ ...t })),
+        mode: e.todos.length ? 'todo' : e.body ? 'diary' : 'plain',
+      }),
+    onDelete: (e: Entry) => store.remove(e.id),
+    onToggleTodo: (e: Entry, i: number) =>
+      store.upsert({
+        ...e,
+        todos: e.todos.map((t, j) => (j === i ? { ...t, done: !t.done } : t)),
+        updatedAt: new Date().toISOString(),
+      }),
+  };
+
+  return (
+    <div className="screen">
+      <div className="shell">
+        <div className="left">
+          <div className="brand-row">
+            <div className="brand">러닝 크루 👟</div>
+            <div className="stack">
+              {MEMBERS.map((m) => (
+                <Avatar key={m.id} m={m} size={36} className="stack-av" bg={m.soft} />
+              ))}
+            </div>
+          </div>
+          <div className="sub">
+            {now.getMonth() + 1}월 {now.getDate()}일 {W[now.getDay()]}요일 · {wit.greeting}
+          </div>
+          <button className="cta" onClick={openNew}>
+            <Icon d={PLUS_D} size={17} sw={2.6} />
+            <span>{wit.cta}</span>
+          </button>
+          <div className="cta-cap">{myToday > 0 ? wit.ctaSome(myToday) : wit.ctaNone}</div>
+          <div className="board-head">
+            <div className="board-title">오늘의 크루</div>
+            <div className="board-meta">
+              <div className="board-dots">
+                {MEMBERS.map((m) => (
+                  <span key={m.id} className="board-dot"
+                    style={{ background: doneSet.has(m.id) ? m.color : '#E4E7EC' }} />
+                ))}
+              </div>
+              <span className="board-count">{wit.count(doneSet.size)}</span>
+            </div>
+          </div>
+          <Board todays={todays} meId={me.id} wit={wit} />
+        </div>
+        <div className="feed-col">
+          <div className="tabs">
+            <button className={'tab' + (view === 'feed' ? ' on' : '')} onClick={() => setView('feed')}>피드</button>
+            <button className={'tab' + (view === 'cal' ? ' on' : '')} onClick={() => setView('cal')}>캘린더</button>
+          </div>
+          {view === 'feed' ? (
+            <Feed entries={entries} todayKey={todayKey} yKey={yKey} meId={me.id}
+              editingId={modal.editingId} actions={actions} />
+          ) : (
+            <CalendarView entries={entries} calOff={calOff} setCalOff={setCalOff}
+              selDay={selDay ?? todayKey} setSelDay={setSelDay} todayKey={todayKey}
+              meId={me.id} editingId={modal.editingId} wit={wit} actions={actions} />
+          )}
+          <div className="footer">
+            {wit.footer}
+            {cfg.demo && <div className="demo-note">데모 모드 — 초대 링크로 접속하면 크루와 동기화됩니다.</div>}
+          </div>
+        </div>
+      </div>
+      {modal.open && (
+        <EntryModal modal={modal} patch={patch} close={closeModal} submit={submit} wit={wit} />
+      )}
+    </div>
+  );
+}

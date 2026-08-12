@@ -1,0 +1,64 @@
+import { MEMBER_IDS, type MemberId } from '../../shared/types';
+import { MEMBERS } from './constants';
+
+export interface AppConfig {
+  token: string | null;
+  memberId: MemberId;
+  wit: 'subtle' | 'drip';
+  initialView: 'feed' | 'cal';
+  demo: boolean;
+  /** 토큰도 없고 데모(?user=)도 아니면 이름 선택 화면을 보여준다. */
+  needsLogin: boolean;
+}
+
+const TOKEN_KEY = 'lc-token';
+const WIT_KEY = 'lc-wit';
+
+export function saveToken(token: string): void {
+  localStorage.setItem(TOKEN_KEY, token);
+}
+
+function memberIdFromToken(token: string): MemberId | null {
+  const head = token.split('.')[0];
+  if (!head) return null;
+  try {
+    const id = atob(head.replaceAll('-', '+').replaceAll('_', '/'));
+    return (MEMBER_IDS as readonly string[]).includes(id) ? (id as MemberId) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** URL 파라미터(?invite= / ?wit= / ?view= / 데모용 ?user=)와 저장된 토큰으로 앱 설정을 만든다. */
+export function loadConfig(): AppConfig {
+  const params = new URLSearchParams(location.search);
+
+  const invite = params.get('invite');
+  if (invite && memberIdFromToken(invite)) {
+    saveToken(invite);
+    params.delete('invite');
+    const qs = params.toString();
+    history.replaceState(null, '', location.pathname + (qs ? '?' + qs : ''));
+  }
+
+  const token = localStorage.getItem(TOKEN_KEY);
+  const tokenMember = token ? memberIdFromToken(token) : null;
+
+  const witParam = params.get('wit');
+  if (witParam === 'drip' || witParam === '낄낄 풀드립') localStorage.setItem(WIT_KEY, 'drip');
+  else if (witParam === 'subtle' || witParam === '은은한 위트') localStorage.setItem(WIT_KEY, 'subtle');
+  const wit = localStorage.getItem(WIT_KEY) === 'drip' ? 'drip' : 'subtle';
+
+  const viewParam = params.get('view');
+  const initialView = viewParam === 'cal' || viewParam === '캘린더' ? 'cal' : 'feed';
+
+  if (tokenMember && token) {
+    return { token, memberId: tokenMember, wit, initialView, demo: false, needsLogin: false };
+  }
+  // 데모 모드 — ?user=이름 으로 명시했을 때만 (동기화 없이 시드 데이터로 동작)
+  const demoMember = MEMBERS.find((m) => m.name === params.get('user'));
+  if (demoMember) {
+    return { token: null, memberId: demoMember.id, wit, initialView, demo: true, needsLogin: false };
+  }
+  return { token: null, memberId: MEMBERS[0]!.id, wit, initialView, demo: false, needsLogin: true };
+}
