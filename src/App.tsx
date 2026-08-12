@@ -28,22 +28,19 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
   const myToday = todays.filter((e) => e.m === me.id).length;
 
   const closeModal = useCallback(() => setModal(EMPTY_MODAL), []);
-  const openNew = () => setModal({ ...EMPTY_MODAL, open: true });
+  const openNew = () => setModal({ ...EMPTY_MODAL, open: true, day: todayKey });
 
   const submit = () => {
     const isOff = modal.tag === 'OFF';
     if (!modal.tag || (!isOff && modal.stars <= 0)) return;
-    const cleanTodos = modal.mode === 'todo'
-      ? modal.todos.filter((t) => t.t.trim()).map((t) => ({ t: t.t.trim(), done: t.done }))
-      : [];
-    const cleanBody = modal.mode === 'diary' ? modal.body.trim() : '';
     const stamp = new Date();
     const common = {
       tag: modal.tag,
       stars: isOff ? null : modal.stars,
-      memo: modal.memo.trim(),
-      body: cleanBody,
-      todos: cleanTodos,
+      memo: '',
+      body: modal.body.trim(),
+      todos: modal.todos.filter((t) => t.t.trim()).map((t) => ({ t: t.t.trim(), done: t.done })),
+      day: modal.day || dayKey(stamp),
       updatedAt: stamp.toISOString(),
       deletedAt: null,
     };
@@ -54,7 +51,6 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
       store.upsert({
         id: crypto.randomUUID(),
         m: me.id,
-        day: dayKey(stamp),
         time: `${pad2(stamp.getHours())}:${pad2(stamp.getMinutes())}`,
         ...common,
       });
@@ -69,10 +65,10 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
         editingId: e.id,
         tag: e.tag,
         stars: e.stars ?? 0,
-        memo: e.memo,
-        body: e.body,
+        // 예전 한 줄 메모는 본문 첫 줄로 승격해서 이어 쓴다
+        body: [e.memo, e.body].filter(Boolean).join('\n'),
         todos: e.todos.map((t) => ({ ...t })),
-        mode: e.todos.length ? 'todo' : e.body ? 'diary' : 'plain',
+        day: e.day,
       }),
     onDelete: (e: Entry) => store.remove(e.id),
     onToggleTodo: (e: Entry, i: number) =>

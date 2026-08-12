@@ -38,8 +38,6 @@ export interface CopySet {
   cta: string;
   ctaNone: string;
   ctaSome: (n: number) => string;
-  memoPh: string;
-  modalHint: string;
   diaryPh: string;
   todoPh: string;
   submit: string;
@@ -57,7 +55,6 @@ export const COPY: Record<'subtle' | 'drip', CopySet> = {
   subtle: {
     greeting: '오늘도 조용히 성장 중',
     cta: '오늘 기록 남기기', ctaNone: '아직 오늘 기록이 없어요', ctaSome: (n) => `오늘 ${n}개 남겼어요. 하나 더?`,
-    memoPh: '오늘 한 줄, 남겨볼까요?', modalHint: '한 줄이면 충분해요. 일기나 할 일 목록을 붙여도 좋고요.',
     diaryPh: '오늘 있었던 일, 편하게 풀어놓아요.', todoPh: '할 일 내용',
     submit: '기록 남기기', editSubmit: '수정 저장',
     empty: '아직 안 옴', emptyMe: '오늘 첫 기록을 남겨보세요',
@@ -70,7 +67,6 @@ export const COPY: Record<'subtle' | 'drip', CopySet> = {
   drip: {
     greeting: '뇌 용량 증설 공사 중',
     cta: '오늘 기록 남기기', ctaNone: '오늘 아직 0개. 크루가 지켜봅니다', ctaSome: (n) => `오늘 ${n}개째. 멈추지 마세요`,
-    memoPh: '변명이든 자랑이든 한 줄', modalHint: '어차피 크루는 다 알아봅니다. 솔직하게.',
     diaryPh: '오늘의 서사, 마음껏 펼치세요.', todoPh: '뭘 하려고 했더라',
     submit: '박제하기', editSubmit: '변명 수정',
     empty: '잠수 중', emptyMe: '본인 도장부터 찍으시죠?',
