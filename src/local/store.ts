@@ -18,10 +18,19 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const LEGACY_KEY = 'running-crew-entries-v2';
 const MIGRATED_FLAG = 'migrated-legacy-v2';
 
+/** 동기화 국면 — SyncClient가 갱신하고 UI가 그대로 표시한다. */
+export type SyncPhase = 'ok' | 'syncing' | 'offline' | 'error' | 'auth';
+export interface SyncInfo {
+  phase: SyncPhase;
+  /** 아직 서버에 안 간 변경 수 (기록 큐 + 지금 상태 dirty) */
+  pending: number;
+}
+
 export interface StoreSnapshot {
   rev: number;
   entries: Entry[]; // deletedAt이 없는 살아있는 행만
   statuses: Partial<Record<MemberId, MemberStatus>>; // 멤버별 지금 상태
+  sync: SyncInfo;
 }
 
 // meta 스토어의 지금 상태 저장 키
@@ -73,7 +82,13 @@ export class CrewStore {
   private me: MemberId = 'sh';
   private demo = false;
   private listeners = new Set<() => void>();
-  private snapshot: StoreSnapshot = { rev: 0, entries: [], statuses: {} };
+  private syncPhase: SyncPhase = 'ok';
+  private snapshot: StoreSnapshot = {
+    rev: 0,
+    entries: [],
+    statuses: {},
+    sync: { phase: 'ok', pending: 0 },
+  };
   private db: CrewDatabase | null = null;
 
   /** SyncClient가 등록 — 로컬 쓰기 직후 push를 예약한다. */
@@ -356,6 +371,13 @@ export class CrewStore {
     this.bump();
   }
 
+  /** SyncClient가 사이클 결과를 알려 준다 — 값이 바뀔 때만 스냅샷을 갱신한다. */
+  setSyncPhase(phase: SyncPhase): void {
+    if (this.syncPhase === phase) return;
+    this.syncPhase = phase;
+    this.bump();
+  }
+
   async getCursor(): Promise<PullCursor | null> {
     const v = await this.db?.get('meta', 'cursor');
     return v && typeof v === 'object' && 'ts' in v ? v : null;
@@ -429,6 +451,7 @@ export class CrewStore {
       rev: this.snapshot.rev + 1,
       entries: [...this.map.values()].filter((e) => !e.deletedAt),
       statuses: Object.fromEntries(this.statuses) as Partial<Record<MemberId, MemberStatus>>,
+      sync: { phase: this.syncPhase, pending: this.queue.size + (this.statusDirty ? 1 : 0) },
     };
     for (const fn of this.listeners) fn();
   }

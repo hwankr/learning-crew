@@ -16,6 +16,14 @@ import type { CrewStore } from './store';
 
 const POLL_MS = 20_000;
 
+/** 401 — 토큰 만료/서명 키 교체. 재시도해도 소용없고 재로그인이 필요하다. */
+class AuthError extends Error {}
+
+function ensureOk(res: Response, what: string): void {
+  if (res.status === 401) throw new AuthError(`${what} 401`);
+  if (!res.ok) throw new Error(`${what} ${res.status}`);
+}
+
 export class SyncClient {
   private pushTimer: ReturnType<typeof setTimeout> | null = null;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -36,6 +44,8 @@ export class SyncClient {
       if (document.visibilityState === 'visible') void this.cycle();
     });
     window.addEventListener('online', () => void this.cycle());
+    window.addEventListener('offline', () => this.store.setSyncPhase('offline'));
+    if (!navigator.onLine) this.store.setSyncPhase('offline');
     void this.cycle();
   }
 
@@ -53,16 +63,25 @@ export class SyncClient {
 
   /** push(큐가 있으면) → pull 한 사이클. 동시 실행은 막는다. */
   private async cycle(): Promise<void> {
-    if (this.busy || !navigator.onLine) return;
+    if (this.busy) return;
+    if (!navigator.onLine) {
+      this.store.setSyncPhase('offline');
+      return;
+    }
     this.busy = true;
+    if (this.store.pendingIds().length > 0) this.store.setSyncPhase('syncing');
     try {
       await this.push();
       await this.pushStatus();
       await this.pull();
+      this.store.setSyncPhase('ok');
       // 충돌 병합/전송 중 재수정으로 큐가 남았으면 곧바로 다음 라운드를 예약한다
       if (this.store.pendingIds().length > 0) this.schedulePush();
-    } catch {
-      // 오프라인/서버 오류 — 큐와 커서가 남아 있으니 다음 사이클에 재시도
+    } catch (err) {
+      // 큐와 커서가 남아 있으니 다음 사이클에 재시도 — 상태만 UI에 알린다
+      this.store.setSyncPhase(
+        err instanceof AuthError ? 'auth' : navigator.onLine ? 'error' : 'offline',
+      );
     } finally {
       this.busy = false;
     }
@@ -86,7 +105,7 @@ export class SyncClient {
         headers: { 'content-type': 'application/json', authorization: `Bearer ${this.token}` },
         body: JSON.stringify({ entries: batch.map((p) => p.entry) } satisfies PushRequest),
       });
-      if (!res.ok) throw new Error(`push ${res.status}`);
+      ensureOk(res, 'push');
       const data = (await res.json()) as PushResponse;
       for (const r of data.results ?? []) {
         const rev = revById.get(r.id);
@@ -113,7 +132,7 @@ export class SyncClient {
         at: st.updatedAt,
       } satisfies StatusSetRequest),
     });
-    if (!res.ok) throw new Error(`status ${res.status}`);
+    ensureOk(res, 'status');
     const data = (await res.json()) as StatusSetResponse;
     this.store.ackStatus(st.updatedAt, data.status);
   }
@@ -126,7 +145,7 @@ export class SyncClient {
       const res = await fetch(`/api/sync/pull${qs}`, {
         headers: { authorization: `Bearer ${this.token}` },
       });
-      if (!res.ok) throw new Error(`pull ${res.status}`);
+      ensureOk(res, 'pull');
       const data = (await res.json()) as PullResponse;
       // 행 반영과 커서 전진을 스토어가 한 트랜잭션으로 처리한다
       this.store.applyPull(

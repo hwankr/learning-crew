@@ -7,6 +7,7 @@ import { Avatar, Icon, PENCIL_D } from './components/icons';
 import { Board } from './components/Board';
 import { StatusBar } from './components/StatusBar';
 import { NotifyToggle } from './components/NotifyToggle';
+import { SyncStatus } from './components/SyncStatus';
 import { Feed } from './components/Feed';
 import { CalendarView } from './components/CalendarView';
 import { EMPTY_MODAL, EntryModal, type ModalState } from './components/EntryModal';
@@ -120,6 +121,7 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
               setNowTick(Date.now());
             }} />
           {cfg.token && <NotifyToggle token={cfg.token} />}
+          {cfg.token && <SyncStatus sync={snap.sync} />}
           <div className="board-head">
             <div className="board-title">오늘의 크루</div>
             <div className="board-meta">
