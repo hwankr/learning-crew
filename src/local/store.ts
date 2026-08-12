@@ -90,6 +90,10 @@ export class CrewStore {
     sync: { phase: 'ok', pending: 0 },
   };
   private db: CrewDatabase | null = null;
+  // 같은 기기의 다른 탭과 변경을 주고받는 채널 — 한 탭이 pull/push한 결과를 다른 탭도 반영한다
+  private bc: BroadcastChannel | null = null;
+  private refreshTimer: ReturnType<typeof setTimeout> | null = null;
+  private refreshing = false;
 
   /** SyncClient가 등록 — 로컬 쓰기 직후 push를 예약한다. */
   onLocalWrite: (() => void) | null = null;
@@ -130,6 +134,14 @@ export class CrewStore {
     if (opts.demo) {
       if (this.map.size === 0) for (const e of seedEntries()) this.map.set(e.id, e);
       for (const s of seedStatuses()) if (s.m !== opts.memberId) this.statuses.set(s.m, s);
+    }
+    if (this.db && !opts.demo && typeof BroadcastChannel !== 'undefined') {
+      this.bc = new BroadcastChannel('lc-sync');
+      this.bc.onmessage = () => {
+        // 다른 탭이 IDB를 갱신했다 — 짧게 모아서 다시 읽는다
+        if (this.refreshTimer) clearTimeout(this.refreshTimer);
+        this.refreshTimer = setTimeout(() => void this.refreshFromDB(), 200);
+      };
     }
     this.bump();
   }
@@ -392,16 +404,96 @@ export class CrewStore {
     });
   }
 
-  /** fire-and-forget IDB 트랜잭션 — UI는 기다리지 않고, 실패해도 트랜잭션이라 반쪽 상태는 없다. */
+  /** fire-and-forget IDB 트랜잭션 — UI는 기다리지 않고, 실패해도 트랜잭션이라 반쪽 상태는 없다.
+      커밋되면 다른 탭에 알린다(BroadcastChannel) — 그쪽 메모리도 IDB를 다시 읽는다. */
   private txWrite(stores: StoreName[], fill: (tx: CrewTx) => void): void {
     const db = this.db;
     if (!db) return;
     try {
       const tx = db.transaction(stores, 'readwrite');
       fill(tx);
-      void tx.done.catch(() => {});
+      tx.done.then(
+        () => this.bc?.postMessage('changed'),
+        () => {},
+      );
     } catch {
       // 닫힌 DB 등 — 메모리 상태는 유효하므로 무시
+    }
+  }
+
+  /** IndexedDB를 다시 읽어 다른 탭의 변경을 메모리에 반영한다.
+      원칙: 내 큐(dirty)가 이긴다 — 단, 다른 탭의 더 새 로컬 쓰기(rev가 높은 큐)는 채택한다. */
+  async refreshFromDB(): Promise<void> {
+    const db = this.db;
+    if (!db || this.demo || this.refreshing) return;
+    this.refreshing = true;
+    try {
+      const tx = db.transaction(['entries', 'queue', 'meta']);
+      const [rows, qkeys, qvals, dbSt, dbDirty] = await Promise.all([
+        tx.objectStore('entries').getAll(),
+        tx.objectStore('queue').getAllKeys(),
+        tx.objectStore('queue').getAll(),
+        tx.objectStore('meta').get(MY_STATUS_KEY),
+        tx.objectStore('meta').get(STATUS_DIRTY_KEY),
+      ]);
+      await tx.done;
+      let changed = false;
+
+      // 큐 병합 — 다른 탭의 로컬 쓰기(내게 없거나 rev가 높음)를 채택.
+      // 내 메모리에만 있는 큐 항목은 유지한다: 아직 지속 전이거나, 다른 탭이 ack한
+      // 것이라면 다음 push의 CAS 에코가 정리해 준다.
+      const dbQueue = new Map<string, QueueMeta>();
+      qkeys.forEach((k, i) => dbQueue.set(String(k), qvals[i]!));
+      const adopted = new Set<string>();
+      for (const [id, meta] of dbQueue) {
+        const mine = this.queue.get(id);
+        if (!mine || meta.rev > mine.rev) {
+          this.queue.set(id, meta);
+          adopted.add(id);
+          changed = true;
+        }
+      }
+
+      // 행 병합 — 큐에 없는(clean) 행과 방금 채택한 dirty 행은 IDB 내용을 따른다
+      const dbIds = new Set<string>();
+      for (const e of rows) {
+        dbIds.add(e.id);
+        if (this.queue.has(e.id) && !adopted.has(e.id)) continue;
+        const norm: Entry = { ...e, v: typeof e.v === 'number' ? e.v : 0 };
+        const cur = this.map.get(e.id);
+        if (!cur || JSON.stringify(cur) !== JSON.stringify(norm)) {
+          this.map.set(e.id, norm);
+          changed = true;
+        }
+      }
+      // IDB에서 사라진 행(다른 탭이 tombstone을 ack) — 내 큐에 없으면 메모리에서도 제거
+      for (const id of [...this.map.keys()]) {
+        if (!dbIds.has(id) && !this.queue.has(id) && UUID_RE.test(id)) {
+          this.map.delete(id);
+          changed = true;
+        }
+      }
+
+      // 내 지금 상태 — 더 새 액션 시각이면 채택, 같은 액션을 다른 탭이 push했으면 dirty 해제
+      if (dbSt && typeof dbSt === 'object' && 'm' in dbSt && dbSt.m === this.me) {
+        const mem = this.statuses.get(this.me);
+        const dbT = Date.parse(dbSt.updatedAt);
+        const memT = mem ? Date.parse(mem.updatedAt) : Number.NEGATIVE_INFINITY;
+        if (Number.isFinite(dbT) && dbT >= memT && dbSt.updatedAt !== mem?.updatedAt) {
+          this.statuses.set(this.me, dbSt);
+          this.statusDirty = !!dbDirty;
+          changed = true;
+        } else if (mem && dbSt.updatedAt === mem.updatedAt && this.statusDirty && !dbDirty) {
+          this.statusDirty = false;
+          changed = true;
+        }
+      }
+
+      if (changed) this.bump();
+    } catch {
+      // 읽기 실패 — 다음 신호/가시화 때 다시 시도된다
+    } finally {
+      this.refreshing = false;
     }
   }
 

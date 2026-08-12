@@ -16,26 +16,35 @@
 
 ```
 [브라우저]  React SPA + IndexedDB 복제본 + 뮤테이션 큐   ← UI는 로컬만 읽고 쓴다 (0ms, 오프라인 동작)
-    │  POST /api/sync/push   (백그라운드, 멱등 업서트)
-    │  GET  /api/sync/pull   ((updated_at, id) 키셋 커서, 탭 보일 때만 20초 폴링)
-    │  POST /api/sync/status (지금 상태 덮어쓰기 — pull 응답에 전 멤버 상태 동봉)
+    │  POST /api/sync/push   (백그라운드, 버전 CAS 업서트 — 충돌 시 서버 행을 받아 3-way 병합)
+    │  GET  /api/sync/pull   ((updated_at, id) 키셋 커서 + 60초 안전 지평선, 탭 보일 때만 20초 폴링)
+    │  POST /api/sync/status (지금 상태 — 액션 시각 기준 LWW, pull 응답에 전 멤버 상태 동봉)
     │  POST /api/push/subscribe·unsubscribe (웹 푸시 구독 — 기기당 1행)
 [Cloudflare Worker]  인증(HMAC 초대 토큰) + 동기화 API + SPA 정적 서빙
-    │                상태 off→on 전환 시 VAPID 웹 푸시 발송 (waitUntil 백그라운드,
-    │                30분 쿨다운, 404/410 구독 자동 정리 — worker/push.ts)
+    │                상태 off→on 전환 시 VAPID 웹 푸시 발송 (waitUntil 백그라운드, 30분 쿨다운을
+    │                조건부 UPDATE로 원자 선점 — 중복 발송 없음, 404/410 구독 자동 정리)
     │  @neondatabase/serverless (HTTP)
-[Neon Postgres]  진실의 원천. entries 테이블, soft delete, 서버 시계 updated_at
+[Neon Postgres]  진실의 원천. entries 테이블(version = push CAS 기준), soft delete
                  status 테이블(멤버당 1행) — 지금 상태(장소/시작 시각/알림 도장)
                  push_subs 테이블 — 웹 푸시 구독 (endpoint가 기기 식별자)
 ```
 
 - 스택: React 19 + TypeScript + Vite / Hono / Drizzle ORM / PGlite(테스트)
-- 삭제는 `deleted_at` soft delete로 전파, 수정 충돌은 행 단위 last-write-wins
+- 수정 충돌: push는 base 버전 CAS — 충돌하면 서버 현재 행을 받아 **필드 단위 3-way 병합**
+  (다른 필드끼리는 양쪽 다 살고, 같은 필드는 로컬 승리, 삭제는 항상 승리 — 부활 없음).
+  전송 중 재수정은 rev 카운터로 감지해 큐에 남긴다 — ACK가 최신 수정을 지우지 못한다
+- 삭제는 `deleted_at` soft delete로 전파. pull 커서는 "지금-60초" 지평선까지만 전진해
+  트랜잭션 커밋 지연으로 과거 시각에 나타나는 행도 놓치지 않는다 (중복은 v 비교로 무시)
 - 서버는 "기존 행이 본인 것일 때만" 갱신을 허용 (`setWhere` 가드) — 남의 기록을 덮을 수 없다
-- IndexedDB가 막힌 환경에서도 메모리 전용으로 동작 (첫 렌더는 무조건 된다)
+- IndexedDB 쓰기는 단일 트랜잭션(기록+큐, pull 행+커서) — 중단돼도 반쪽 상태가 없다.
+  같은 기기의 다른 탭과는 BroadcastChannel + 재적재로 즉시 맞춘다.
+  IndexedDB가 막힌 환경에서도 메모리 전용으로 동작 (첫 렌더는 무조건 된다)
 - 초대 토큰이 없으면 **데모 모드**: 시드 데이터, 동기화 없음, `?user=이름`으로 시점 변경
-- 지금 상태는 기록과 달리 멤버당 1행을 덮어쓴다. 끄는 걸 잊어도 14시간(TTL) 지나면
+- 지금 상태는 멤버당 1행 — 도착 순서가 아니라 **액션 시각**으로 LWW 판정하므로 오프라인이었다
+  재접속한 기기의 옛 토글이 최신 상태를 덮지 못한다. 끄는 걸 잊어도 14시간(TTL) 지나면
   꺼진 것으로 표시 — 오프라인 토글은 dirty 플래그로 남아 다음 사이클에 재전송된다
+- 동기화 상태(대기 N개/오프라인/서버 오류/재로그인)는 왼쪽 컬럼에 항상 표시된다
+- 서비스 워커가 앱 셸을 캐시 — 오프라인에서도 앱을 완전히 다시 열 수 있다 (API는 캐시 안 함)
 - 알림은 PWA 웹 푸시([public/sw.js](public/sw.js) + [public/manifest.webmanifest](public/manifest.webmanifest)):
   상태 바 아래 "알림 받기"를 켜면 이 기기가 구독된다. 아이폰은 iOS 16.4+에서
   공유 → 홈 화면에 추가한 뒤에만 켤 수 있다(앱 내 안내 문구가 뜬다).

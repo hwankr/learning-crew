@@ -41,7 +41,11 @@ export class SyncClient {
       if (document.visibilityState === 'visible') void this.cycle();
     }, POLL_MS);
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible') void this.cycle();
+      if (document.visibilityState === 'visible') {
+        // 다른 탭이 그동안 pull한 결과가 IDB에만 있을 수 있다(공유 커서) — 먼저 재적재
+        void this.store.refreshFromDB();
+        void this.cycle();
+      }
     });
     window.addEventListener('online', () => void this.cycle());
     window.addEventListener('offline', () => this.store.setSyncPhase('offline'));
