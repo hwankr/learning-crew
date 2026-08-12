@@ -74,17 +74,21 @@ export interface MemberStatus {
   on: boolean;
   place: Place | null; // off면 null
   since: string | null; // 켠 시각(ISO), off면 null
-  updatedAt: string; // 서버 시계 기준
+  updatedAt: string; // 액션 시각(토글한 순간) — 도착 순서가 아니라 이 시각으로 LWW 판정한다
 }
 
 export interface StatusSetRequest {
   on: boolean;
   place?: Place;
   since?: string; // 오프라인에서 켠 경우를 위해 클라이언트 시각을 보낸다 (서버가 범위 검증)
+  /** 토글한 액션 시각 — 오프라인이었다가 뒤늦게 도착해도 더 새 액션을 덮지 못하게 한다. */
+  at?: string;
 }
 export interface StatusSetResponse {
   ok: true;
+  /** 처리 후 서버의 현재 상태 — 거부됐으면(다른 기기의 더 새 액션 존재) 그쪽 상태다. */
   status: MemberStatus;
+  applied: boolean;
 }
 
 /* ---------- 웹 푸시 구독 ---------- */

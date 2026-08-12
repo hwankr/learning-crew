@@ -11,7 +11,7 @@ import {
   setStatus,
   allStatuses,
   getStatusRow,
-  stampNotified,
+  claimNotifySlot,
   upsertPushSub,
   deletePushSub,
   deleteGonePushSub,
@@ -185,18 +185,23 @@ describe('pull 커서 안전 지평선', () => {
 });
 
 describe('status queries', () => {
+  const t0 = Date.now();
+  const iso = (ms: number) => new Date(ms).toISOString();
+
   it('켜면 멤버당 1행이 저장되고 저장된 행을 돌려준다', async () => {
-    const since = new Date().toISOString();
-    const saved = await setStatus(db, 'sh', { on: true, place: '도서관', since });
-    expect(saved.m).toBe('sh');
-    expect(saved.on).toBe(true);
-    expect(saved.place).toBe('도서관');
+    const since = iso(t0);
+    const r = await setStatus(db, 'sh', { on: true, place: '도서관', since, at: iso(t0) });
+    expect(r.applied).toBe(true);
+    expect(r.status.m).toBe('sh');
+    expect(r.status.on).toBe(true);
+    expect(r.status.place).toBe('도서관');
     const all = await allStatuses(db);
     expect(all.filter((s) => s.m === 'sh')).toHaveLength(1);
   });
 
   it('재설정은 같은 행을 덮어쓴다 (끄면 place/since가 비워진다)', async () => {
-    await setStatus(db, 'sh', { on: false, place: null, since: null });
+    const r = await setStatus(db, 'sh', { on: false, place: null, since: null, at: iso(t0 + 1000) });
+    expect(r.applied).toBe(true);
     const all = await allStatuses(db);
     const sh = all.find((s) => s.m === 'sh')!;
     expect(sh.on).toBe(false);
@@ -205,8 +210,25 @@ describe('status queries', () => {
     expect(all.filter((s) => s.m === 'sh')).toHaveLength(1);
   });
 
+  it('더 오래된 액션 시각은 거부된다 — 뒤늦게 도착한 오프라인 ON이 최신 OFF를 못 덮는다', async () => {
+    // 시나리오: 휴대폰이 오프라인에서 t0-10분에 ON → 노트북이 t0+1초에 OFF(위 테스트)
+    // → 휴대폰이 재접속해 옛 ON을 밀어 올린다. 도착은 늦지만 액션은 과거 — 거부돼야 한다.
+    const stale = await setStatus(db, 'sh', {
+      on: true, place: '도서관', since: iso(t0 - 600_000), at: iso(t0 - 600_000),
+    });
+    expect(stale.applied).toBe(false);
+    expect(stale.status.on).toBe(false); // 서버의 현재 상태(OFF)를 돌려준다 — 클라이언트가 채택
+    const sh = (await allStatuses(db)).find((s) => s.m === 'sh')!;
+    expect(sh.on).toBe(false);
+  });
+
+  it('같은 액션 시각의 재전송은 멱등하게 허용된다 (잃어버린 응답 재시도)', async () => {
+    const r = await setStatus(db, 'sh', { on: false, place: null, since: null, at: iso(t0 + 1000) });
+    expect(r.applied).toBe(true);
+  });
+
   it('멤버별로 행이 따로 쌓인다', async () => {
-    await setStatus(db, 'wg', { on: true, place: '카페', since: new Date().toISOString() });
+    await setStatus(db, 'wg', { on: true, place: '카페', since: iso(t0), at: iso(t0) });
     const all = await allStatuses(db);
     expect(all).toHaveLength(2);
     expect(all.find((s) => s.m === 'wg')!.on).toBe(true);
@@ -303,11 +325,20 @@ describe('push subscription queries', () => {
     expect(await pushSubsExcept(db, 'jj')).toHaveLength(0);
   });
 
-  it('stampNotified가 쿨다운 기준 시각을 남긴다', async () => {
-    await setStatus(db, 'jj', { on: true, place: '도서관', since: new Date().toISOString() });
+  it('claimNotifySlot은 첫 선점만 성공한다 — 두 기기 동시 켜기의 중복 발송 방지', async () => {
+    const now = new Date().toISOString();
+    await setStatus(db, 'jj', { on: true, place: '도서관', since: now, at: now });
     expect((await getStatusRow(db, 'jj'))!.lastNotifiedAt).toBeNull();
-    await stampNotified(db, 'jj');
-    const row = await getStatusRow(db, 'jj');
-    expect(row!.lastNotifiedAt).not.toBeNull();
+    expect(await claimNotifySlot(db, 'jj', NOTIFY_COOLDOWN_MS)).toBe(true);
+    expect((await getStatusRow(db, 'jj'))!.lastNotifiedAt).not.toBeNull();
+    // 도장이 방금 찍혔으니 쿨다운 안 — 두 번째 선점은 실패한다
+    expect(await claimNotifySlot(db, 'jj', NOTIFY_COOLDOWN_MS)).toBe(false);
+  });
+
+  it('쿨다운이 지나면 다시 선점할 수 있다', async () => {
+    await db.execute(
+      sql`update status set last_notified_at = now() - interval '31 minutes' where member_id = 'jj'`,
+    );
+    expect(await claimNotifySlot(db, 'jj', NOTIFY_COOLDOWN_MS)).toBe(true);
   });
 });

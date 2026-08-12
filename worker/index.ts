@@ -8,13 +8,13 @@ import {
   setStatus,
   allStatuses,
   getStatusRow,
-  stampNotified,
+  claimNotifySlot,
   upsertPushSub,
   deletePushSub,
   deleteGonePushSub,
   pushSubsExcept,
 } from './queries';
-import { sendPushToAll, shouldNotify } from './push';
+import { NOTIFY_COOLDOWN_MS, sendPushToAll, shouldNotify } from './push';
 import {
   MEMBER_IDS,
   MEMBER_NAMES,
@@ -156,6 +156,17 @@ function normalizeSince(raw: unknown, now: number): string {
   return new Date(now).toISOString();
 }
 
+/** 액션 시각(LWW 기준) 정규화 — 미래는 지금으로, 24시간보다 오래된 것은 바닥으로 클램프.
+    (범위 밖을 "지금"으로 바꾸면 아주 오래된 오프라인 토글이 오히려 이겨 버린다) */
+function normalizeAt(raw: unknown, now: number): string {
+  const floor = now - 24 * 3_600_000;
+  if (typeof raw === 'string') {
+    const t = Date.parse(raw);
+    if (Number.isFinite(t)) return new Date(Math.min(Math.max(t, floor), now + 5 * 60_000)).toISOString();
+  }
+  return new Date(now).toISOString();
+}
+
 app.post('/api/sync/status', async (c) => {
   const me = c.get('memberId');
   let body: StatusSetRequest;
@@ -168,20 +179,23 @@ app.post('/api/sync/status', async (c) => {
   if (body.on && !(PLACES as readonly string[]).includes(body.place ?? '')) {
     return c.json({ error: 'bad place' }, 400);
   }
+  const now = Date.now();
+  const at = normalizeAt(body.at, now);
   const s = body.on
-    ? { on: true, place: body.place!, since: normalizeSince(body.since, Date.now()) }
-    : { on: false, place: null, since: null };
+    ? { on: true, place: body.place!, since: normalizeSince(body.since, now), at }
+    : { on: false, place: null, since: null, at };
   const db = drizzle(neon(c.env.DATABASE_URL));
   const prev = await getStatusRow(db, me);
-  const saved = await setStatus(db, me, s);
+  const { status: saved, applied } = await setStatus(db, me, s);
 
-  // off→on 전환이면 크루에게 푸시 — 응답을 막지 않게 백그라운드로
-  if (shouldNotify(prev, s.on, Date.now())) {
+  // off→on 전환이면 크루에게 푸시 — 응답을 막지 않게 백그라운드로.
+  // 발송 슬롯은 조건부 UPDATE로 선점한다: 두 기기가 동시에 켜도 한쪽만 보낸다.
+  if (applied && shouldNotify(prev, s.on, now)) {
     c.executionCtx.waitUntil(
       (async () => {
+        if (!(await claimNotifySlot(db, me, NOTIFY_COOLDOWN_MS))) return;
         const targets = await pushSubsExcept(db, me);
         if (targets.length === 0) return;
-        await stampNotified(db, me);
         await sendPushToAll(
           c.env,
           targets,
@@ -195,7 +209,7 @@ app.post('/api/sync/status', async (c) => {
       })(),
     );
   }
-  return c.json({ ok: true, status: saved } satisfies StatusSetResponse);
+  return c.json({ ok: true, status: saved, applied } satisfies StatusSetResponse);
 });
 
 /* ---------- 웹 푸시 구독 관리 ---------- */

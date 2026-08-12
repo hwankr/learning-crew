@@ -138,26 +138,32 @@ function toMemberStatus(r: typeof status.$inferSelect): MemberStatus {
   };
 }
 
-/** 내 상태 행을 덮어쓴다. updated_at은 항상 서버 시계. 저장된 행을 돌려준다. */
+/** 내 상태 행을 액션 시각(at) 기준 LWW로 갱신한다.
+    기존 행의 updated_at(=이전 액션 시각)보다 오래된 액션은 거부 — 오프라인이었다가
+    뒤늦게 도착한 옛 토글이 다른 기기의 더 새 상태를 덮지 못한다. 거부 시 현재 행을 돌려준다. */
 export async function setStatus(
   db: Db,
   me: MemberId,
-  s: { on: boolean; place: Place | null; since: string | null },
-): Promise<MemberStatus> {
+  s: { on: boolean; place: Place | null; since: string | null; at: string },
+): Promise<{ status: MemberStatus; applied: boolean }> {
   const [row] = await db
     .insert(status)
-    .values({ memberId: me, on: s.on, place: s.place, since: s.since })
+    .values({ memberId: me, on: s.on, place: s.place, since: s.since, updatedAt: s.at })
     .onConflictDoUpdate({
       target: status.memberId,
       set: {
         on: sql`excluded.is_on`,
         place: sql`excluded.place`,
         since: sql`excluded.since`,
-        updatedAt: sql`now()`,
+        updatedAt: sql`excluded.updated_at`,
       },
+      // 같은 시각(재전송)은 멱등하게 허용, 더 오래된 액션만 거부한다
+      setWhere: sql`excluded.updated_at >= ${status.updatedAt}`,
     })
     .returning();
-  return toMemberStatus(row!);
+  if (row) return { status: toMemberStatus(row), applied: true };
+  const [cur] = await db.select().from(status).where(eq(status.memberId, me)).limit(1);
+  return { status: toMemberStatus(cur!), applied: false };
 }
 
 export async function allStatuses(db: Db): Promise<MemberStatus[]> {
@@ -173,9 +179,21 @@ export async function getStatusRow(
   return row ? { on: row.on, since: row.since, lastNotifiedAt: row.lastNotifiedAt } : null;
 }
 
-/** 푸시를 보냈다는 도장 — 쿨다운 계산의 기준. */
-export async function stampNotified(db: Db, me: MemberId): Promise<void> {
-  await db.update(status).set({ lastNotifiedAt: sql`now()` }).where(eq(status.memberId, me));
+/** 알림 발송 슬롯을 원자적으로 선점한다 — 조건부 UPDATE라 두 기기가 동시에 켜도
+    한쪽만 true를 받는다(중복 발송 방지). 도장(last_notified_at)이 곧 쿨다운의 기준. */
+export async function claimNotifySlot(db: Db, me: MemberId, cooldownMs: number): Promise<boolean> {
+  const secs = Math.floor(cooldownMs / 1000);
+  const rows = await db
+    .update(status)
+    .set({ lastNotifiedAt: sql`now()` })
+    .where(
+      and(
+        eq(status.memberId, me),
+        sql`(${status.lastNotifiedAt} is null or ${status.lastNotifiedAt} <= now() - make_interval(secs => ${secs}))`,
+      ),
+    )
+    .returning({ m: status.memberId });
+  return rows.length > 0;
 }
 
 /* ---------- 웹 푸시 구독 ---------- */

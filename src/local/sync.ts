@@ -97,7 +97,9 @@ export class SyncClient {
     }
   }
 
-  /** 아직 서버에 안 간 내 지금 상태를 전송. 실패하면 dirty로 남아 다음 사이클에 재시도. */
+  /** 아직 서버에 안 간 내 지금 상태를 전송. 실패하면 dirty로 남아 다음 사이클에 재시도.
+      액션 시각(at)을 실어 보내 서버가 도착 순서가 아니라 토글한 순서로 LWW 판정한다 —
+      거부되면(다른 기기의 더 새 액션) 응답의 서버 상태를 그대로 채택한다. */
   private async pushStatus(): Promise<void> {
     const st = this.store.myStatusPending();
     if (!st) return;
@@ -108,6 +110,7 @@ export class SyncClient {
         on: st.on,
         place: st.place ?? undefined,
         since: st.since ?? undefined,
+        at: st.updatedAt,
       } satisfies StatusSetRequest),
     });
     if (!res.ok) throw new Error(`status ${res.status}`);
