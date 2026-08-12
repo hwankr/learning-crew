@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
-import type { Entry } from '../shared/types';
+import type { Entry, Tag, Todo } from '../shared/types';
 import { BY_ID, COPY, MEMBERS, W, dayKey, pad2, shiftKey } from './lib/constants';
 import type { AppConfig } from './lib/config';
 import type { CrewStore } from './local/store';
@@ -11,6 +11,49 @@ import { SyncStatus } from './components/SyncStatus';
 import { Feed } from './components/Feed';
 import { CalendarView } from './components/CalendarView';
 import { EMPTY_MODAL, EntryModal, type ModalState } from './components/EntryModal';
+
+/* ---------- 초안 — "초안 저장됨"이 진짜가 되도록 localStorage에 실제로 저장한다 ---------- */
+interface Draft {
+  editingId: string | null;
+  tag: Tag | null;
+  stars: number;
+  body: string;
+  todos: Todo[];
+  day: string;
+  savedAt: number;
+}
+
+function draftHasContent(d: { body: string; todos: Todo[] }): boolean {
+  return !!d.body.trim() || d.todos.some((t) => t.t.trim());
+}
+
+function loadDraft(key: string): Draft | null {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const d = JSON.parse(raw) as Draft;
+    if (!d || typeof d !== 'object' || typeof d.body !== 'string' || !Array.isArray(d.todos)) return null;
+    return d;
+  } catch {
+    return null;
+  }
+}
+
+function saveDraft(key: string, m: ModalState): void {
+  try {
+    if (draftHasContent(m)) {
+      const d: Draft = {
+        editingId: m.editingId, tag: m.tag, stars: m.stars,
+        body: m.body, todos: m.todos, day: m.day, savedAt: Date.now(),
+      };
+      localStorage.setItem(key, JSON.stringify(d));
+    } else {
+      localStorage.removeItem(key); // 내용을 다 지웠으면 초안도 지운다
+    }
+  } catch {
+    // 저장 공간 초과 등 — 초안은 best-effort
+  }
+}
 
 export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
   const snap = useSyncExternalStore(store.subscribe, store.getSnapshot);
@@ -37,8 +80,33 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
   const doneSet = new Set(todays.map((e) => e.m));
   const myToday = todays.filter((e) => e.m === me.id).length;
 
-  const closeModal = useCallback(() => setModal(EMPTY_MODAL), []);
-  const openNew = () => setModal({ ...EMPTY_MODAL, open: true, day: todayKey });
+  // 초안: 열려 있는 동안 짧게 모아 저장하고, 닫는 순간에도 즉시 저장한다(마지막 타이핑 유실 방지)
+  const draftKey = `lc-draft:${me.id}`;
+  useEffect(() => {
+    if (!modal.open) return;
+    const t = setTimeout(() => saveDraft(draftKey, modal), 350);
+    return () => clearTimeout(t);
+  }, [modal, draftKey]);
+
+  const closeModal = useCallback(() => {
+    setModal((m) => {
+      if (m.open) saveDraft(draftKey, m);
+      return EMPTY_MODAL;
+    });
+  }, [draftKey]);
+
+  const openNew = () => {
+    const d = loadDraft(draftKey);
+    if (d && d.editingId === null && draftHasContent(d)) {
+      // 마무리하지 못한 초안이 있으면 이어서 쓴다
+      setModal({
+        open: true, editingId: null, tag: d.tag, stars: d.stars,
+        body: d.body, todos: d.todos, day: d.day || todayKey,
+      });
+      return;
+    }
+    setModal({ ...EMPTY_MODAL, open: true, day: todayKey });
+  };
 
   const submit = () => {
     const isOff = modal.tag === 'OFF';
@@ -66,11 +134,26 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
         ...common,
       });
     }
-    closeModal();
+    try {
+      localStorage.removeItem(draftKey); // 제출됐으니 초안은 소임을 다했다
+    } catch {
+      // 접근 불가 환경 — 무시
+    }
+    setModal(EMPTY_MODAL);
   };
 
   const actions = {
-    onEdit: (e: Entry) =>
+    onEdit: (e: Entry) => {
+      // 이 기록을 고치다 만 초안이 있고 기록 자체가 그 뒤로 안 바뀌었으면 이어서 쓴다
+      const d = loadDraft(draftKey);
+      const entryAt = Date.parse(e.updatedAt);
+      if (d && d.editingId === e.id && d.savedAt > (Number.isFinite(entryAt) ? entryAt : 0)) {
+        setModal({
+          open: true, editingId: e.id, tag: d.tag, stars: d.stars,
+          body: d.body, todos: d.todos, day: d.day || e.day,
+        });
+        return;
+      }
       setModal({
         open: true,
         editingId: e.id,
@@ -80,7 +163,8 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
         body: [e.memo, e.body].filter(Boolean).join('\n'),
         todos: e.todos.map((t) => ({ ...t })),
         day: e.day,
-      }),
+      });
+    },
     onDelete: (e: Entry) => store.remove(e.id),
     onToggleTodo: (e: Entry, i: number) =>
       store.upsert({

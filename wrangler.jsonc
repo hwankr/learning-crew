@@ -3,6 +3,8 @@
   "name": "learning-crew",
   "main": "worker/index.ts",
   "compatibility_date": "2026-08-01",
+  // 웹 푸시 라이브러리의 node:crypto import에 필요 (Cloudflare 권장)
+  "compatibility_flags": ["nodejs_compat"],
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",
