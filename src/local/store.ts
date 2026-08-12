@@ -1,10 +1,17 @@
 /* 로컬 퍼스트 저장소.
    - UI는 이 스토어(메모리 Map)만 읽고 쓴다 — 상호작용은 네트워크를 기다리지 않는다.
    - 실제 쓰기는 IndexedDB에 지속 + 큐에 등록 → SyncClient가 백그라운드로 push.
+   - 큐 항목은 rev(로컬 수정 카운터)와 base(마지막 서버 일치 스냅샷)를 함께 지녀서:
+     · 전송 중 또 수정해도 ACK가 최신 수정을 지우지 못하고(rev 불일치 → 큐 유지),
+     · 서버 CAS 충돌 시 base를 기준으로 필드 단위 3-way 병합을 한다 (삭제는 항상 승리).
    - id가 UUID가 아닌 행(데모 시드 s*)은 메모리 전용: 저장도 동기화도 하지 않는다. */
+import type { IDBPTransaction } from 'idb';
 import type { Entry, MemberId, MemberStatus, Place, PullCursor } from '../../shared/types';
-import { openCrewDB, type CrewDatabase } from './idb';
+import { openCrewDB, type CrewDatabase, type CrewDB, type QueueMeta } from './idb';
 import { seedEntries, seedStatuses } from '../lib/constants';
+
+type StoreName = 'entries' | 'queue' | 'meta';
+type CrewTx = IDBPTransaction<CrewDB, StoreName[], 'readwrite'>;
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 // 구 프로토타입이 쓰던 localStorage 키 — 이관용이므로 이 이름 그대로 둬야 한다
@@ -21,9 +28,46 @@ export interface StoreSnapshot {
 const MY_STATUS_KEY = 'myStatus';
 const STATUS_DIRTY_KEY = 'statusDirty';
 
+/** 3-way 병합 대상 필드 — 이 밖의 필드(v/updatedAt)는 동기화 메타데이터다. */
+const MERGE_FIELDS = ['day', 'time', 'tag', 'stars', 'memo', 'body'] as const;
+
+function fieldEq(a: Entry, b: Entry, f: (typeof MERGE_FIELDS)[number] | 'todos'): boolean {
+  if (f === 'todos') return JSON.stringify(a.todos) === JSON.stringify(b.todos);
+  return a[f] === b[f];
+}
+
+/** 내용(동기화 메타 제외)이 같은가 — 충돌 응답이 사실상 내 쓰기의 에코일 때를 판별한다. */
+export function contentEqual(a: Entry, b: Entry): boolean {
+  return (
+    MERGE_FIELDS.every((f) => fieldEq(a, b, f)) &&
+    fieldEq(a, b, 'todos') &&
+    (a.deletedAt === null) === (b.deletedAt === null)
+  );
+}
+
+/** 필드 단위 3-way 병합 — base에서 로컬이 고친 필드만 로컬을 취하고 나머지는 서버를 따른다.
+    양쪽이 같은 필드를 고쳤으면 로컬이 이긴다. base가 없으면(신규 행 에코 등) 전부 로컬. */
+export function mergeEntry(base: Entry | null, local: Entry, server: Entry): Entry {
+  const pick = <K extends (typeof MERGE_FIELDS)[number] | 'todos'>(f: K): Entry[K] => {
+    if (!base || !fieldEq(local, base, f)) return local[f];
+    return server[f];
+  };
+  return {
+    ...server, // id/m/v/updatedAt은 서버 기준
+    day: pick('day'),
+    time: pick('time'),
+    tag: pick('tag'),
+    stars: pick('stars'),
+    memo: pick('memo'),
+    body: pick('body'),
+    todos: pick('todos'),
+    deletedAt: null, // 삭제 충돌은 병합 전에 별도 규칙으로 처리된다
+  };
+}
+
 export class CrewStore {
   private map = new Map<string, Entry>();
-  private queue = new Set<string>();
+  private queue = new Map<string, QueueMeta>();
   private statuses = new Map<MemberId, MemberStatus>();
   private statusDirty = false; // 내 상태가 아직 서버에 안 갔음
   private me: MemberId = 'sh';
@@ -49,8 +93,17 @@ export class CrewStore {
       this.db = null;
     }
     if (this.db) {
-      for (const e of await this.db.getAll('entries')) this.map.set(e.id, e);
-      for (const k of await this.db.getAllKeys('queue')) this.queue.add(String(k));
+      // 구버전(IDB v1 이전 데이터)에 v가 없을 수 있다 — 0(=서버 리비전 모름)으로 정규화.
+      // 첫 push가 CAS 충돌을 내면 병합 경로가 base를 되찾아 준다.
+      for (const e of await this.db.getAll('entries')) {
+        this.map.set(e.id, { ...e, v: typeof e.v === 'number' ? e.v : 0 });
+      }
+      const tx = this.db.transaction('queue');
+      let cur = await tx.store.openCursor();
+      while (cur) {
+        this.queue.set(String(cur.key), cur.value);
+        cur = await cur.continue();
+      }
       // 내 상태는 지속 — 다른 멤버 상태는 어차피 첫 pull에 실려 온다
       const st = await this.db.get('meta', MY_STATUS_KEY);
       if (!opts.demo && st && typeof st === 'object' && 'm' in st && st.m === opts.memberId) {
@@ -77,16 +130,31 @@ export class CrewStore {
     return this.map.get(id);
   }
   pendingIds(): string[] {
-    return [...this.queue];
+    return [...this.queue.keys()];
+  }
+
+  /** push용 스냅샷 — 각 행의 현재 rev를 함께 찍는다. ACK는 이 rev와 일치할 때만 큐를 비운다. */
+  pendingSnapshot(): { entry: Entry; rev: number }[] {
+    const out: { entry: Entry; rev: number }[] = [];
+    for (const [id, meta] of this.queue) {
+      const entry = this.map.get(id);
+      if (entry) out.push({ entry, rev: meta.rev });
+    }
+    return out;
   }
 
   /* ---------- 쓰기 (UI 경로 — 항상 즉시 반영) ---------- */
   upsert(entry: Entry): void {
+    const prev = this.map.get(entry.id);
     this.map.set(entry.id, entry);
     if (UUID_RE.test(entry.id)) {
-      void this.db?.put('entries', entry);
-      this.queue.add(entry.id);
-      void this.db?.put('queue', true, entry.id);
+      const q = this.queue.get(entry.id);
+      // 첫 dirty 전환 시의 직전(clean) 상태가 3-way 병합의 base — 이미 dirty면 base 유지
+      const meta: QueueMeta = q
+        ? { rev: q.rev + 1, base: q.base }
+        : { rev: 1, base: prev ?? null };
+      this.queue.set(entry.id, meta);
+      this.persistEntry(entry, meta);
       this.onLocalWrite?.();
     }
     this.bump();
@@ -100,14 +168,16 @@ export class CrewStore {
       on,
       place: on ? place : null,
       since: on ? nowIso : null,
-      updatedAt: nowIso, // 잠정치 — 서버 반영 시 서버 시계로 교체
+      updatedAt: nowIso, // 액션 시각 — 서버가 이 시각 기준 LWW로 판정한다
     };
     this.statuses.set(this.me, st);
     if (!this.demo) {
       // 데모는 메모리 전용 — 지속하면 나중에 실계정 로그인에 새어 들어간다
       this.statusDirty = true;
-      void this.db?.put('meta', st, MY_STATUS_KEY);
-      void this.db?.put('meta', true, STATUS_DIRTY_KEY);
+      this.txWrite(['meta'], (tx) => {
+        void tx.objectStore('meta').put(st, MY_STATUS_KEY);
+        void tx.objectStore('meta').put(true, STATUS_DIRTY_KEY);
+      });
       this.onLocalWrite?.();
     }
     this.bump();
@@ -126,41 +196,147 @@ export class CrewStore {
   }
 
   /* ---------- 동기화 경로 (SyncClient 전용) ---------- */
-  /** pull 결과 병합. 큐에 있는(아직 push 안 된) 행은 로컬이 이긴다. */
-  applyServer(rows: Entry[]): void {
+  /** pull 결과 반영 — 행 저장과 커서 전진을 한 IndexedDB 트랜잭션으로 묶는다.
+      (따로 쓰면 "행은 저장됐는데 커서만 전진" 같은 반쪽 상태가 생길 수 있다) */
+  applyPull(rows: Entry[], statuses: MemberStatus[] | undefined, cursor: PullCursor | null): void {
     let changed = false;
+    const puts: Entry[] = [];
+    const dels: string[] = [];
     for (const row of rows) {
-      if (this.queue.has(row.id)) continue;
+      if (this.queue.has(row.id)) continue; // 아직 push 안 된 로컬 수정이 이긴다
+      const cur = this.map.get(row.id);
+      if (cur && cur.v === row.v) continue; // 커서 안전 윈도우의 중복 전달 — 조용히 무시
       if (row.deletedAt) {
         if (this.map.delete(row.id)) changed = true;
-        void this.db?.delete('entries', row.id);
+        dels.push(row.id);
       } else {
         this.map.set(row.id, row);
-        void this.db?.put('entries', row);
+        puts.push(row);
         changed = true;
       }
     }
+    let myStatus: MemberStatus | null = null;
+    if (statuses) {
+      for (const r of statuses) {
+        if (r.m === this.me && this.statusDirty) continue; // 아직 push 안 된 내 상태가 이긴다
+        const cur = this.statuses.get(r.m);
+        if (cur && cur.updatedAt === r.updatedAt) continue;
+        this.statuses.set(r.m, r);
+        if (r.m === this.me) myStatus = r;
+        changed = true;
+      }
+    }
+    this.txWrite(['entries', 'meta'], (tx) => {
+      const store = tx.objectStore('entries');
+      for (const e of puts) void store.put(e);
+      for (const id of dels) void store.delete(id);
+      if (myStatus) void tx.objectStore('meta').put(myStatus, MY_STATUS_KEY);
+      if (cursor) void tx.objectStore('meta').put(cursor, 'cursor');
+    });
     if (changed) this.bump();
   }
 
-  /** push 성공 후: 큐 비우고, 서버에 반영된 tombstone은 로컬에서 완전히 제거. */
-  ackPushed(ids: string[]): void {
-    for (const id of ids) {
-      this.queue.delete(id);
-      void this.db?.delete('queue', id);
-      const e = this.map.get(id);
-      if (e?.deletedAt) {
-        this.map.delete(id);
-        void this.db?.delete('entries', id);
+  /** push 반영 성공. rev가 다르면 전송 중 또 수정된 것 — 큐에 남기되 서버 행을 새 base로 삼는다. */
+  ackApplied(id: string, rev: number, server: Entry): void {
+    const q = this.queue.get(id);
+    if (!q) return;
+    const cur = this.map.get(id);
+    if (q.rev !== rev) {
+      // 방금 서버에 반영된 내용이 이 행의 새 base — 다음 push가 그 위에 CAS한다
+      const meta: QueueMeta = { rev: q.rev, base: server };
+      this.queue.set(id, meta);
+      if (cur) {
+        const next = { ...cur, v: server.v };
+        this.map.set(id, next);
+        this.persistEntry(next, meta);
       }
+      return;
     }
+    this.queue.delete(id);
+    if (server.deletedAt) {
+      this.map.delete(id);
+      this.txWrite(['entries', 'queue'], (tx) => {
+        void tx.objectStore('entries').delete(id);
+        void tx.objectStore('queue').delete(id);
+      });
+    } else {
+      this.map.set(id, server);
+      this.txWrite(['entries', 'queue'], (tx) => {
+        void tx.objectStore('entries').put(server);
+        void tx.objectStore('queue').delete(id);
+      });
+    }
+    this.bump();
+  }
+
+  /** push CAS 충돌 — 서버 현재 행과 병합한다.
+      규칙: ① 어느 쪽이든 삭제면 삭제 승리(부활 방지) ② 남의 행이면 서버 채택
+            ③ 그 외 base 기준 필드 단위 병합 → 서버와 같아지면 종료, 다르면 재전송 대기. */
+  resolveConflict(id: string, server: Entry): void {
+    const q = this.queue.get(id);
+    const local = this.map.get(id);
+    if (!q || !local) {
+      this.applyPull([server], undefined, null);
+      return;
+    }
+    // ① 서버가 삭제 — 로컬 수정을 버리고 삭제를 따른다 (삭제된 기록 부활 방지)
+    if (server.deletedAt) {
+      this.queue.delete(id);
+      this.map.delete(id);
+      this.txWrite(['entries', 'queue'], (tx) => {
+        void tx.objectStore('entries').delete(id);
+        void tx.objectStore('queue').delete(id);
+      });
+      this.bump();
+      return;
+    }
+    // ② 내 행이 아니면 이길 수 없다 — 서버를 채택하고 큐에서 뺀다
+    if (server.m !== this.me) {
+      this.queue.delete(id);
+      this.map.set(id, server);
+      this.txWrite(['entries', 'queue'], (tx) => {
+        void tx.objectStore('entries').put(server);
+        void tx.objectStore('queue').delete(id);
+      });
+      this.bump();
+      return;
+    }
+    // ① 로컬이 삭제 — 서버 리비전 위에 tombstone을 다시 얹어 재전송한다 (삭제 승리)
+    if (local.deletedAt) {
+      const next = { ...local, v: server.v };
+      const meta: QueueMeta = { rev: q.rev + 1, base: server };
+      this.map.set(id, next);
+      this.queue.set(id, meta);
+      this.persistEntry(next, meta);
+      return;
+    }
+    // ③ 필드 단위 3-way 병합
+    const merged = mergeEntry(q.base, local, server);
+    if (contentEqual(merged, server)) {
+      // 병합 결과가 서버와 동일(내 쓰기의 에코 포함) — 재전송 없이 서버 버전을 채택
+      this.queue.delete(id);
+      this.map.set(id, server);
+      this.txWrite(['entries', 'queue'], (tx) => {
+        void tx.objectStore('entries').put(server);
+        void tx.objectStore('queue').delete(id);
+      });
+      this.bump();
+      return;
+    }
+    const next = { ...merged, updatedAt: local.updatedAt };
+    const meta: QueueMeta = { rev: q.rev + 1, base: server };
+    this.map.set(id, next);
+    this.queue.set(id, meta);
+    this.persistEntry(next, meta);
     this.bump();
   }
 
   /** 큐에 있지만 내 것이 아닌 행(비정상 상태)을 버려 push가 막히지 않게 한다. */
   dropFromQueue(id: string): void {
     this.queue.delete(id);
-    void this.db?.delete('queue', id);
+    this.txWrite(['queue'], (tx) => {
+      void tx.objectStore('queue').delete(id);
+    });
   }
 
   /** 서버에 아직 안 보낸 내 상태. 없으면 null. */
@@ -168,36 +344,43 @@ export class CrewStore {
     return this.statusDirty ? (this.statuses.get(this.me) ?? null) : null;
   }
 
-  /** 상태 push 성공 — 단, 전송 중에 또 토글했으면 dirty를 유지해 재전송되게 한다. */
+  /** 상태 push 완료(반영 또는 다른 기기 승리) — 전송 중 또 토글했으면 dirty를 유지해 재전송. */
   ackStatus(sentUpdatedAt: string, server: MemberStatus): void {
     if (this.statuses.get(this.me)?.updatedAt !== sentUpdatedAt) return;
     this.statusDirty = false;
-    void this.db?.delete('meta', STATUS_DIRTY_KEY);
     this.statuses.set(server.m, server);
-    void this.db?.put('meta', server, MY_STATUS_KEY);
+    this.txWrite(['meta'], (tx) => {
+      void tx.objectStore('meta').delete(STATUS_DIRTY_KEY);
+      void tx.objectStore('meta').put(server, MY_STATUS_KEY);
+    });
     this.bump();
-  }
-
-  /** pull에 실려 온 전 멤버 상태 병합. 아직 push 안 된 내 상태는 로컬이 이긴다. */
-  applyStatuses(rows: MemberStatus[]): void {
-    let changed = false;
-    for (const r of rows) {
-      if (r.m === this.me && this.statusDirty) continue;
-      const cur = this.statuses.get(r.m);
-      if (cur && cur.updatedAt === r.updatedAt) continue;
-      this.statuses.set(r.m, r);
-      if (r.m === this.me) void this.db?.put('meta', r, MY_STATUS_KEY);
-      changed = true;
-    }
-    if (changed) this.bump();
   }
 
   async getCursor(): Promise<PullCursor | null> {
     const v = await this.db?.get('meta', 'cursor');
     return v && typeof v === 'object' && 'ts' in v ? v : null;
   }
-  async setCursor(c: PullCursor): Promise<void> {
-    await this.db?.put('meta', c, 'cursor');
+
+  /* ---------- IndexedDB 쓰기 (원자 단위) ---------- */
+  /** 기록 + 큐 메타를 한 트랜잭션으로 — "기록은 있는데 큐가 없음" 반쪽 상태를 막는다. */
+  private persistEntry(entry: Entry, meta: QueueMeta): void {
+    this.txWrite(['entries', 'queue'], (tx) => {
+      void tx.objectStore('entries').put(entry);
+      void tx.objectStore('queue').put(meta, entry.id);
+    });
+  }
+
+  /** fire-and-forget IDB 트랜잭션 — UI는 기다리지 않고, 실패해도 트랜잭션이라 반쪽 상태는 없다. */
+  private txWrite(stores: StoreName[], fill: (tx: CrewTx) => void): void {
+    const db = this.db;
+    if (!db) return;
+    try {
+      const tx = db.transaction(stores, 'readwrite');
+      fill(tx);
+      void tx.done.catch(() => {});
+    } catch {
+      // 닫힌 DB 등 — 메모리 상태는 유효하므로 무시
+    }
   }
 
   /* ---------- 구 프로토타입(localStorage) 데이터 1회 이관 ---------- */
@@ -228,6 +411,7 @@ export class CrewStore {
                     done: !!t.done,
                   }))
                 : [],
+              v: 0,
               updatedAt: new Date().toISOString(),
               deletedAt: null,
             });

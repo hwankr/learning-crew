@@ -32,6 +32,7 @@ function entry(partial: Partial<Entry> & Pick<Entry, 'id' | 'm'>): Entry {
     memo: '',
     body: '',
     todos: [],
+    v: 0,
     updatedAt: new Date().toISOString(),
     deletedAt: null,
     ...partial,
@@ -53,16 +54,26 @@ beforeAll(async () => {
 describe('sync queries', () => {
   let cursor: PullCursor | null = null;
 
-  it('push는 새 행을 넣고 pull은 전부 돌려준다', async () => {
-    await pushEntries(db, [entry({ id: A, m: 'sh', memo: '첫 기록' }), entry({ id: B, m: 'sh' })], 'sh');
+  it('push는 새 행을 넣고(v0 → version 1) pull은 전부 돌려준다', async () => {
+    const out = await pushEntries(
+      db,
+      [entry({ id: A, m: 'sh', memo: '첫 기록' }), entry({ id: B, m: 'sh' })],
+      'sh',
+    );
+    expect(out.applied.map((e) => e.id).sort()).toEqual([A, B].sort());
+    expect(out.conflicts).toHaveLength(0);
+    expect(out.applied.find((e) => e.id === A)!.v).toBe(1);
     const r = await pullSince(db, null);
     expect(r.rows).toHaveLength(2);
+    expect(r.rows.every((x) => x.v === 1)).toBe(true);
     expect(r.cursor).not.toBeNull();
     cursor = r.cursor;
   });
 
-  it('같은 id 재전송은 멱등 업데이트이고, 커서 이후 pull에 그 행만 나온다', async () => {
-    await pushEntries(db, [entry({ id: A, m: 'sh', memo: '수정된 기록', stars: 5 })], 'sh');
+  it('base 버전이 맞는 수정은 반영되고 version이 올라간다', async () => {
+    const out = await pushEntries(db, [entry({ id: A, m: 'sh', memo: '수정된 기록', stars: 5, v: 1 })], 'sh');
+    expect(out.applied).toHaveLength(1);
+    expect(out.applied[0]!.v).toBe(2);
     const r = await pullSince(db, cursor);
     expect(r.rows).toHaveLength(1);
     expect(r.rows[0]!.id).toBe(A);
@@ -70,8 +81,26 @@ describe('sync queries', () => {
     cursor = r.cursor;
   });
 
+  it('오래된 base로 push하면 CAS 충돌 — 서버의 현재 행을 돌려준다', async () => {
+    // 다른 기기가 v1을 base로 뒤늦게 수정 시도 (서버는 이미 v2)
+    const out = await pushEntries(db, [entry({ id: A, m: 'sh', memo: '뒤늦은 수정', v: 1 })], 'sh');
+    expect(out.applied).toHaveLength(0);
+    expect(out.conflicts).toHaveLength(1);
+    expect(out.conflicts[0]!.memo).toBe('수정된 기록'); // 서버 내용 그대로
+    expect(out.conflicts[0]!.v).toBe(2);
+  });
+
+  it('반영 없는 재전송(잃어버린 응답 재시도)도 충돌로 현재 행을 에코한다', async () => {
+    // v1 → v2 push가 성공했는데 응답을 잃은 경우: 같은 내용을 v1 base로 재전송
+    const out = await pushEntries(db, [entry({ id: A, m: 'sh', memo: '수정된 기록', stars: 5, v: 1 })], 'sh');
+    expect(out.applied).toHaveLength(0);
+    expect(out.conflicts[0]!.memo).toBe('수정된 기록'); // 내용이 같아 클라이언트가 ACK 처리 가능
+  });
+
   it('남의 행은 같은 id로 덮어쓸 수 없다 (setWhere 가드)', async () => {
-    await pushEntries(db, [entry({ id: A, m: 'wg', memo: '탈취 시도' })], 'wg');
+    const out = await pushEntries(db, [entry({ id: A, m: 'wg', memo: '탈취 시도', v: 2 })], 'wg');
+    expect(out.applied).toHaveLength(0);
+    expect(out.conflicts[0]!.m).toBe('sh');
     const r = await pullSince(db, null);
     const rowA = r.rows.find((x) => x.id === A)!;
     expect(rowA.m).toBe('sh');
@@ -82,11 +111,24 @@ describe('sync queries', () => {
   });
 
   it('soft delete가 변경으로 전파된다', async () => {
-    await pushEntries(db, [entry({ id: B, m: 'sh', deletedAt: new Date().toISOString() })], 'sh');
+    const out = await pushEntries(
+      db,
+      [entry({ id: B, m: 'sh', deletedAt: new Date().toISOString(), v: 1 })],
+      'sh',
+    );
+    expect(out.applied).toHaveLength(1);
     const r = await pullSince(db, cursor);
     expect(r.rows).toHaveLength(1);
     expect(r.rows[0]!.id).toBe(B);
     expect(r.rows[0]!.deletedAt).not.toBeNull();
+  });
+
+  it('삭제된 행을 오래된 base로 수정하면 충돌 — tombstone이 돌아와 부활하지 않는다', async () => {
+    // 오프라인 기기가 삭제 전 버전(v1)을 base로 수정을 밀어 올리는 시나리오
+    const out = await pushEntries(db, [entry({ id: B, m: 'sh', memo: '부활 시도', v: 1 })], 'sh');
+    expect(out.applied).toHaveLength(0);
+    expect(out.conflicts).toHaveLength(1);
+    expect(out.conflicts[0]!.deletedAt).not.toBeNull(); // 클라이언트는 삭제 승리로 처리한다
   });
 
   it('OFF 태그는 별점이 null로 강제된다', async () => {

@@ -121,8 +121,8 @@ export function shiftKey(days: number): string {
 export function seedEntries(): Entry[] {
   const t = shiftKey(0), y = shiftKey(-1), b = shiftKey(-2);
   const now = new Date().toISOString();
-  const base: Pick<Entry, 'body' | 'todos' | 'updatedAt' | 'deletedAt'> = {
-    body: '', todos: [], updatedAt: now, deletedAt: null,
+  const base: Pick<Entry, 'body' | 'todos' | 'v' | 'updatedAt' | 'deletedAt'> = {
+    body: '', todos: [], v: 0, updatedAt: now, deletedAt: null,
   };
   return [
     { ...base, id: 's1', m: 'wg', day: t, time: '09:40', tag: '코딩테스트', stars: 4, memo: '오전 스퍼트 완료',

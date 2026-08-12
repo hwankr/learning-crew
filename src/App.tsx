@@ -61,6 +61,7 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
         id: crypto.randomUUID(),
         m: me.id,
         time: `${pad2(stamp.getHours())}:${pad2(stamp.getMinutes())}`,
+        v: 0, // 신규 행 — 서버 리비전 없음
         ...common,
       });
     }

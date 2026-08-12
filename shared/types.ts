@@ -29,17 +29,26 @@ export interface Entry {
   memo: string;
   body: string;
   todos: Todo[];
+  /** 서버 리비전. pull로 받은 값이 곧 base — push 시 이 값으로 CAS한다. 로컬 신규 행은 0. */
+  v: number;
   updatedAt: string; // 서버 시계 기준 (클라이언트 값은 잠정치)
   deletedAt: string | null; // soft delete — 삭제도 동기화로 전파된다
 }
 
-/** 행 전체를 last-write-wins로 업서트한다. 삭제는 deletedAt이 찍힌 행. */
+/** v(base 리비전) CAS 업서트 — 충돌하면 서버가 현재 행을 돌려주고 클라이언트가 병합한다. */
 export interface PushRequest {
   entries: Entry[];
+}
+/** 행별 결과. applied=false면 row는 서버의 현재 행(충돌) — 클라이언트가 병합 후 재전송한다. */
+export interface PushRowResult {
+  id: string;
+  applied: boolean;
+  row: Entry;
 }
 export interface PushResponse {
   ok: true;
   serverTime: string;
+  results: PushRowResult[];
 }
 
 /** (updated_at, id) 키셋 커서 — 같은 타임스탬프 행도 놓치지 않는다. */

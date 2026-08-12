@@ -1,5 +1,5 @@
 /* 동기화 쿼리 — Worker(neon-http)와 테스트(PGlite)가 같은 코드를 쓴다. */
-import { and, eq, ne, sql } from 'drizzle-orm';
+import { and, eq, inArray, ne, sql } from 'drizzle-orm';
 import type { PgDatabase } from 'drizzle-orm/pg-core';
 import { entries, pushSubs, status } from './schema';
 import type { Entry, MemberId, MemberStatus, Place, PullCursor, Tag, Todo } from '../shared/types';
@@ -8,11 +8,37 @@ import type { Entry, MemberId, MemberStatus, Place, PullCursor, Tag, Todo } from
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type Db = PgDatabase<any, any, any>;
 
-/** 멱등 다중 업서트. updated_at은 항상 서버 시계.
-    setWhere: 기존 행이 본인 것일 때만 갱신 — id 충돌로 남의 행을 덮을 수 없다. */
-export async function pushEntries(db: Db, rows: Entry[], me: MemberId): Promise<void> {
-  if (rows.length === 0) return;
-  await db
+function toEntry(r: typeof entries.$inferSelect): Entry {
+  return {
+    id: r.id,
+    m: r.memberId as MemberId,
+    day: r.day,
+    time: r.time,
+    tag: r.tag as Tag,
+    stars: r.stars,
+    memo: r.memo,
+    body: r.body,
+    todos: r.todos as Todo[],
+    v: r.version,
+    updatedAt: r.updatedAt,
+    deletedAt: r.deletedAt,
+  };
+}
+
+export interface PushOutcome {
+  /** 반영된 행 — 서버가 부여한 새 version/updated_at을 담아 돌려준다. */
+  applied: Entry[];
+  /** CAS 실패(base 불일치·남의 행) — 서버의 현재 행. 클라이언트가 병합 후 재전송한다. */
+  conflicts: Entry[];
+}
+
+/** 버전 CAS 업서트. updated_at은 항상 서버 시계.
+    - 신규 행은 version = base+1로 삽입된다 (base는 보통 0).
+    - 기존 행은 "본인 것 + version이 base와 일치"할 때만 갱신 — 동시 수정이 서로를 덮지 못하고,
+      전송이 겹쳐도 한쪽만 반영된다. 불일치 행은 현재 서버 행을 conflicts로 돌려준다. */
+export async function pushEntries(db: Db, rows: Entry[], me: MemberId): Promise<PushOutcome> {
+  if (rows.length === 0) return { applied: [], conflicts: [] };
+  const returned = await db
     .insert(entries)
     .values(
       rows.map((e) => ({
@@ -25,6 +51,7 @@ export async function pushEntries(db: Db, rows: Entry[], me: MemberId): Promise<
         memo: e.memo,
         body: e.body,
         todos: e.todos,
+        version: e.v + 1,
         deletedAt: e.deletedAt,
       })),
     )
@@ -38,11 +65,20 @@ export async function pushEntries(db: Db, rows: Entry[], me: MemberId): Promise<
         memo: sql`excluded.memo`,
         body: sql`excluded.body`,
         todos: sql`excluded.todos`,
+        version: sql`excluded.version`,
         deletedAt: sql`excluded.deleted_at`,
         updatedAt: sql`now()`,
       },
-      setWhere: sql`${entries.memberId} = ${me}`,
-    });
+      // excluded.version = base+1 이므로 "현재 version = base"가 CAS 조건이 된다
+      setWhere: sql`${entries.memberId} = ${me} and ${entries.version} = excluded.version - 1`,
+    })
+    .returning();
+  const appliedIds = new Set(returned.map((r) => r.id));
+  const missed = rows.filter((e) => !appliedIds.has(e.id)).map((e) => e.id);
+  const current = missed.length
+    ? await db.select().from(entries).where(inArray(entries.id, missed))
+    : [];
+  return { applied: returned.map(toEntry), conflicts: current.map(toEntry) };
 }
 
 export interface PullResult {
@@ -64,19 +100,7 @@ export async function pullSince(db: Db, cursor: PullCursor | null): Promise<Pull
     .limit(500);
   const last = rows[rows.length - 1];
   return {
-    rows: rows.map((r) => ({
-      id: r.id,
-      m: r.memberId as MemberId,
-      day: r.day,
-      time: r.time,
-      tag: r.tag as Tag,
-      stars: r.stars,
-      memo: r.memo,
-      body: r.body,
-      todos: r.todos as Todo[],
-      updatedAt: r.updatedAt,
-      deletedAt: r.deletedAt,
-    })),
+    rows: rows.map(toEntry),
     cursor: last ? { ts: last.updatedAt, id: last.id } : cursor,
   };
 }

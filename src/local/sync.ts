@@ -7,6 +7,7 @@ import type {
   MemberId,
   PullResponse,
   PushRequest,
+  PushResponse,
   StatusSetRequest,
   StatusSetResponse,
 } from '../../shared/types';
@@ -58,6 +59,8 @@ export class SyncClient {
       await this.push();
       await this.pushStatus();
       await this.pull();
+      // 충돌 병합/전송 중 재수정으로 큐가 남았으면 곧바로 다음 라운드를 예약한다
+      if (this.store.pendingIds().length > 0) this.schedulePush();
     } catch {
       // 오프라인/서버 오류 — 큐와 커서가 남아 있으니 다음 사이클에 재시도
     } finally {
@@ -66,32 +69,31 @@ export class SyncClient {
   }
 
   private async push(): Promise<void> {
-    const ids = this.store.pendingIds();
-    if (ids.length === 0) return;
-    const rows: Entry[] = [];
-    const acked: string[] = [];
-    for (const id of ids) {
-      const e = this.store.getById(id);
-      if (!e) {
-        this.store.dropFromQueue(id);
+    const pending = this.store.pendingSnapshot();
+    const rows: { entry: Entry; rev: number }[] = [];
+    for (const p of pending) {
+      if (p.entry.m !== this.memberId) {
+        this.store.dropFromQueue(p.entry.id); // 내 행이 아니면 서버가 거부 — 큐를 오염시키지 않는다
         continue;
       }
-      if (e.m !== this.memberId) {
-        this.store.dropFromQueue(id); // 내 행이 아니면 서버가 거부 — 큐를 오염시키지 않는다
-        continue;
-      }
-      rows.push(e);
-      acked.push(id);
+      rows.push(p);
     }
     for (let i = 0; i < rows.length; i += PUSH_LIMITS.batch) {
       const batch = rows.slice(i, i + PUSH_LIMITS.batch);
+      const revById = new Map(batch.map((p) => [p.entry.id, p.rev]));
       const res = await fetch('/api/sync/push', {
         method: 'POST',
         headers: { 'content-type': 'application/json', authorization: `Bearer ${this.token}` },
-        body: JSON.stringify({ entries: batch } satisfies PushRequest),
+        body: JSON.stringify({ entries: batch.map((p) => p.entry) } satisfies PushRequest),
       });
       if (!res.ok) throw new Error(`push ${res.status}`);
-      this.store.ackPushed(batch.map((e) => e.id));
+      const data = (await res.json()) as PushResponse;
+      for (const r of data.results ?? []) {
+        const rev = revById.get(r.id);
+        if (rev === undefined) continue; // 내가 보낸 행이 아니면 무시
+        if (r.applied) this.store.ackApplied(r.id, rev, r.row);
+        else this.store.resolveConflict(r.id, r.row);
+      }
     }
   }
 
@@ -123,12 +125,13 @@ export class SyncClient {
       });
       if (!res.ok) throw new Error(`pull ${res.status}`);
       const data = (await res.json()) as PullResponse;
-      if (data.rows.length > 0) this.store.applyServer(data.rows);
-      if (Array.isArray(data.statuses)) this.store.applyStatuses(data.statuses);
-      if (data.cursor) {
-        cursor = data.cursor;
-        await this.store.setCursor(data.cursor);
-      }
+      // 행 반영과 커서 전진을 스토어가 한 트랜잭션으로 처리한다
+      this.store.applyPull(
+        data.rows,
+        Array.isArray(data.statuses) ? data.statuses : undefined,
+        data.cursor,
+      );
+      if (data.cursor) cursor = data.cursor;
       if (data.rows.length < 500) break;
     }
   }

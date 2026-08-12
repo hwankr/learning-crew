@@ -101,6 +101,7 @@ function invalidReason(e: Entry, me: MemberId): string | null {
       return 'bad todo item';
     }
   }
+  if (!Number.isInteger(e.v) || e.v < 0 || e.v > 2_000_000_000) return 'bad v';
   if (e.deletedAt !== null && typeof e.deletedAt !== 'string') return 'bad deletedAt';
   return null;
 }
@@ -116,12 +117,22 @@ app.post('/api/sync/push', async (c) => {
   if (!Array.isArray(req.entries) || req.entries.length > PUSH_LIMITS.batch) {
     return c.json({ error: 'bad batch' }, 400);
   }
+  const seen = new Set<string>();
   for (const e of req.entries) {
     const reason = invalidReason(e, me);
     if (reason) return c.json({ error: reason, id: (e as { id?: string })?.id }, 400);
+    if (seen.has(e.id)) return c.json({ error: 'duplicate id', id: e.id }, 400);
+    seen.add(e.id);
   }
-  await pushEntries(drizzle(neon(c.env.DATABASE_URL)), req.entries, me);
-  const res: PushResponse = { ok: true, serverTime: new Date().toISOString() };
+  const outcome = await pushEntries(drizzle(neon(c.env.DATABASE_URL)), req.entries, me);
+  const res: PushResponse = {
+    ok: true,
+    serverTime: new Date().toISOString(),
+    results: [
+      ...outcome.applied.map((row) => ({ id: row.id, applied: true, row })),
+      ...outcome.conflicts.map((row) => ({ id: row.id, applied: false, row })),
+    ],
+  };
   return c.json(res);
 });
 
