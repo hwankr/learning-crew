@@ -71,6 +71,8 @@ export interface CopySet {
   empty: string;
   emptyMe: string;
   offNote: string;
+  delAsk: string; // 기록 삭제 확인 물음
+  delNote: string; // 되돌릴 수 없다는 안내
   footer: string;
   caps: string[];
   count: (n: number) => string;
@@ -89,6 +91,7 @@ export const COPY: Record<'subtle' | 'drip', CopySet> = {
     submit: '기록 남기기', editSubmit: '수정 저장',
     empty: '아직 안 옴', emptyMe: '오늘 첫 기록을 남겨보세요',
     offNote: '쉬는 날은 별점 없이 기록돼요.',
+    delAsk: '이 기록을 지울까요?', delNote: '지운 기록은 되돌릴 수 없어요.',
     footer: '오늘도 크루 중 누군가는 공부를 합니다.',
     caps: ['별점을 골라주세요', '…내일이 있으니까요', '시동은 걸었어요', '무난하게 순항 중', '오늘 좀 했는데요?', '이 구역의 공부왕'],
     count: (n) => `4명 중 ${n}명 도장 찍음`,
@@ -105,6 +108,7 @@ export const COPY: Record<'subtle' | 'drip', CopySet> = {
     submit: '박제하기', editSubmit: '변명 수정',
     empty: '잠수 중', emptyMe: '본인 도장부터 찍으시죠?',
     offNote: '공식 휴무. 죄책감은 반납하세요.',
+    delAsk: '진짜 지웁니다?', delNote: '지우면 끝. 크루 기억에서도 사라집니다.',
     footer: '공부는 원래 남이 하는 게 제일 재밌습니다.',
     caps: ['별점을 골라주세요', '별점이 아깝다는 건 아니고', '한 듯 안 한 듯', '평타는 쳤다', '꽤 진지했잖아요?', '수석 각'],
     count: (n) => `4명 중 ${n}명 생존 신고`,
