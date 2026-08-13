@@ -1,21 +1,28 @@
-import type { Entry } from '../../shared/types';
+import type { Comment, Entry, MemberId, ReactionEmoji, ReactionSet } from '../../shared/types';
 import { BY_ID, MEMBERS } from '../lib/constants';
 import { Avatar, CheckMark, StarsRow } from './icons';
 import { Chip } from './Chip';
+import { EntrySocial } from './EntrySocial';
 
 export interface EntryActions {
   onEdit: (e: Entry) => void;
   onDelete: (e: Entry) => void;
   onToggleTodo: (e: Entry, index: number) => void;
+  onAddComment: (entryId: string, body: string) => void;
+  onDeleteComment: (id: string) => void;
+  onToggleReaction: (entryId: string, emoji: ReactionEmoji) => void;
 }
 
 export function EntryCard({
-  e, compact, mine, editing, actions,
+  e, compact, mine, meId, editing, comments, reactions, actions,
 }: {
   e: Entry;
   compact: boolean;
   mine: boolean;
+  meId: MemberId;
   editing: boolean;
+  comments: Comment[];
+  reactions: ReactionSet[];
   actions: EntryActions;
 }) {
   const mm = BY_ID[e.m] ?? MEMBERS[0]!;
@@ -71,6 +78,7 @@ export function EntryCard({
             ))}
           </div>
         )}
+        <EntrySocial entryId={e.id} comments={comments} sets={reactions} meId={meId} actions={actions} />
       </div>
     </div>
   );

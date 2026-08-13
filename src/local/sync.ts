@@ -1,21 +1,27 @@
 /* 백그라운드 동기화 클라이언트.
    - push: 큐에 쌓인 내 행들을 버전 CAS 업서트로 전송 (실패하면 큐에 남아 재시도)
    - pull: (updated_at, id) 키셋 커서 이후 변경분만 수신
+   - 세 스트림(기록·댓글·리액션)은 커서가 서로 독립이지만 요청은 함께 실어 왕복을 아낀다
    - 탭이 보일 때만 폴링 — Neon 무료 컴퓨트를 아끼고, 안 보이는 탭은 조용히 둔다 */
 import type {
+  Comment,
   Entry,
   MemberId,
   PullResponse,
   PushRequest,
   PushResponse,
+  ReactionSet,
   StatusSetRequest,
   StatusSetResponse,
 } from '../../shared/types';
 import { PUSH_LIMITS } from '../../shared/types';
 import { authHeaders } from '../lib/push';
+import { reactionKey } from './idb';
 import type { CrewStore } from './store';
 
 const POLL_MS = 20_000;
+// 서버 pull 한 페이지 크기 — 가득 찬 페이지는 "더 있다"는 뜻이다
+const PAGE = 500;
 // 응답 없는 요청이 busy 플래그를 영원히 잠그지 않게 — 브라우저 fetch에는 기본 타임아웃이 없다
 const FETCH_TIMEOUT_MS = 20_000;
 
@@ -94,8 +100,12 @@ export class SyncClient {
       await this.pushStatus();
       await this.pull();
       this.store.setSyncPhase('ok');
-      // 충돌 병합/전송 중 재수정으로 큐가 남았으면 곧바로 다음 라운드를 예약한다
-      if (this.store.pendingIds().length > 0) this.schedulePush();
+      // 충돌 병합/전송 중 재수정으로 큐가 남았으면 곧바로 다음 라운드를 예약한다.
+      // 기록 큐만 보면 전송 중에 지운 댓글·다시 토글한 리액션이 20초 폴링까지 밀리므로
+      // 세 큐 + 상태 dirty를 합산한 스냅샷의 pending으로 판정한다.
+      // (pendingComments()/pendingReactions()는 고아 키를 정리하는 부수효과가 있어
+      //  판정용으로 부르면 의미가 흐려진다 — 읽기 전용인 스냅샷을 쓴다)
+      if (this.store.getSnapshot().sync.pending > 0) this.schedulePush();
     } catch (err) {
       // 큐와 커서가 남아 있으니 다음 사이클에 재시도 — 상태만 UI에 알린다
       this.store.setSyncPhase(
@@ -116,13 +126,36 @@ export class SyncClient {
       }
       rows.push(p);
     }
-    for (let i = 0; i < rows.length; i += PUSH_LIMITS.batch) {
-      const batch = rows.slice(i, i + PUSH_LIMITS.batch);
+    const comments: Comment[] = [];
+    for (const c of this.store.pendingComments()) {
+      if (c.m !== this.memberId) this.store.dropCommentFromQueue(c.id);
+      else comments.push(c);
+    }
+    const reactions: ReactionSet[] = [];
+    for (const r of this.store.pendingReactions()) {
+      if (r.m !== this.memberId) this.store.dropReactionFromQueue(r.entryId);
+      else reactions.push(r);
+    }
+    const B = PUSH_LIMITS.batch;
+    // 세 스트림을 각자 배치로 쪼개 한 요청에 함께 싣는다 — 라운드 수는 가장 긴 스트림 기준
+    const rounds = Math.max(
+      Math.ceil(rows.length / B),
+      Math.ceil(comments.length / B),
+      Math.ceil(reactions.length / B),
+    );
+    for (let i = 0; i < rounds; i++) {
+      const batch = rows.slice(i * B, i * B + B);
+      const cBatch = comments.slice(i * B, i * B + B);
+      const rBatch = reactions.slice(i * B, i * B + B);
       const revById = new Map(batch.map((p) => [p.entry.id, p.rev]));
       const res = await fetch('/api/sync/push', {
         method: 'POST',
         headers: authHeaders(this.token),
-        body: JSON.stringify({ entries: batch.map((p) => p.entry) } satisfies PushRequest),
+        body: JSON.stringify({
+          entries: batch.map((p) => p.entry),
+          comments: cBatch,
+          reactions: rBatch,
+        } satisfies PushRequest),
         signal: timeoutSignal(),
       });
       ensureOk(res, 'push');
@@ -134,6 +167,8 @@ export class SyncClient {
           if (r.applied) this.store.ackApplied(r.id, rev, r.row);
           else this.store.resolveConflict(r.id, r.row);
         }
+      } else if (batch.length === 0) {
+        // 보낸 기록이 없으면 결과 배열이 없어도 정산할 게 없다
       } else if (data && data.ok === true && typeof data.serverTime === 'string') {
         // 배포 이행기의 구버전 Worker(LWW) 응답 — 전량 반영됐으므로 보낸 내용을 에코로 ACK.
         // (ACK하지 않으면 큐가 안 비어 400ms 재전송 루프가 된다)
@@ -143,6 +178,24 @@ export class SyncClient {
         }
       } else {
         throw new Error('push malformed response');
+      }
+      // 보냈는데 결과 필드가 없으면 구버전 Worker가 통째로 무시한 것 — 큐를 비우면 조용히 유실된다.
+      // 오류를 던져 이 사이클을 끝내면 20초 폴링이 재시도한다(400ms 재전송 루프에 빠지지 않게).
+      if (cBatch.length > 0) {
+        if (!Array.isArray(data.commentResults)) throw new Error('push comment results missing');
+        const sent = new Map(cBatch.map((c) => [c.id, c]));
+        for (const r of data.commentResults) {
+          const mine = sent.get(r.id);
+          if (mine) this.store.ackComment(mine, r.row);
+        }
+      }
+      if (rBatch.length > 0) {
+        if (!Array.isArray(data.reactionResults)) throw new Error('push reaction results missing');
+        const sent = new Map(rBatch.map((r) => [reactionKey(r.entryId, r.m), r]));
+        for (const r of data.reactionResults) {
+          const mine = sent.get(reactionKey(r.entryId, r.m));
+          if (mine) this.store.ackReaction(mine, r.row);
+        }
       }
     }
   }
@@ -170,28 +223,58 @@ export class SyncClient {
   }
 
   private async pull(): Promise<void> {
-    let cursor = await this.store.getCursor();
-    // 500행 한도에 걸렸을 수 있으니 다 받을 때까지 반복
+    const start = await this.store.getCursors();
+    let cursor = start.entries;
+    let cCursor = start.comments;
+    let rCursor = start.reactions;
+    // 500행 한도에 걸렸을 수 있으니 세 스트림이 다 비워질 때까지 반복
     for (;;) {
-      const qs = cursor ? `?since=${encodeURIComponent(cursor.ts)}&sinceId=${cursor.id}` : '';
-      const res = await fetch(`/api/sync/pull${qs}`, {
+      const qs = new URLSearchParams();
+      if (cursor) {
+        qs.set('since', cursor.ts);
+        qs.set('sinceId', cursor.id);
+      }
+      if (cCursor) {
+        qs.set('csince', cCursor.ts);
+        qs.set('csinceId', cCursor.id);
+      }
+      if (rCursor) {
+        // 지평선 커서의 m은 빈 문자열일 수 있다 — 서버는 rsinceM의 "존재"로 판단하므로
+        // 값이 ''이어도 파라미터를 붙여야 그 스트림이 매번 처음부터 돌지 않는다
+        qs.set('rsince', rCursor.ts);
+        qs.set('rsinceEntry', rCursor.entryId);
+        qs.set('rsinceM', rCursor.m);
+      }
+      const q = qs.toString();
+      const res = await fetch(`/api/sync/pull${q ? `?${q}` : ''}`, {
         headers: authHeaders(this.token),
         signal: timeoutSignal(),
       });
       ensureOk(res, 'pull');
       const data = (await res.json()) as PullResponse;
-      const lastPage = data.rows.length < 500;
+      // 응답에 필드가 아예 없으면 구버전 Worker다 — 그 스트림은 없는 것으로 보고 커서도 안 건드린다
+      const cRows = Array.isArray(data.comments) ? data.comments : undefined;
+      const rRows = Array.isArray(data.reactions) ? data.reactions : undefined;
+      const eFull = data.rows.length >= PAGE;
+      const cFull = (cRows?.length ?? 0) >= PAGE;
+      const rFull = (rRows?.length ?? 0) >= PAGE;
       // 행 반영과 커서 전진을 스토어가 한 트랜잭션으로 처리한다.
-      // 중간 페이지(=500행)에서는 이전 커서를 영속화한다 — 페이지 사이에서 탭이 죽으면
-      // 다시 받으면 그만이지만(중복은 v로 무시), 전진한 커서가 지평선 너머로 영속화된 채
-      // 방치되면 늦게 커밋된 행을 영영 놓칠 수 있다.
-      this.store.applyPull(
-        data.rows,
-        Array.isArray(data.statuses) ? data.statuses : undefined,
-        lastPage ? data.cursor : cursor,
-      );
+      // 중간 페이지(=500행)인 스트림은 이전 커서를 영속화한다 — 페이지 사이에서 탭이 죽으면
+      // 다시 받으면 그만이지만(중복은 updatedAt으로 무시), 전진한 커서가 지평선 너머로
+      // 영속화된 채 방치되면 늦게 커밋된 행을 영영 놓칠 수 있다.
+      this.store.applyPull({
+        rows: data.rows,
+        cursor: eFull ? cursor : data.cursor,
+        statuses: Array.isArray(data.statuses) ? data.statuses : undefined,
+        comments: cRows,
+        commentCursor: cRows && (cFull ? cCursor : (data.commentCursor ?? null)),
+        reactions: rRows,
+        reactionCursor: rRows && (rFull ? rCursor : (data.reactionCursor ?? null)),
+      });
       if (data.cursor) cursor = data.cursor;
-      if (lastPage) break;
+      if (data.commentCursor) cCursor = data.commentCursor;
+      if (data.reactionCursor) rCursor = data.reactionCursor;
+      if (!eFull && !cFull && !rFull) break;
     }
   }
 }

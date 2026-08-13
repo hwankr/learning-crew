@@ -4,7 +4,8 @@
 "러닝"은 running이 아니라 **learning** — 공부 크루다. 한 줄 메모 + 일기/할 일 목록,
 태그(자격증/영어/코딩테스트/기타/OFF), 별점, 피드·캘린더,
 지금 상태 체크인(장소 칩을 탭하면 "도서관에서 공부 중 · n분째"가 크루 보드에 표시),
-공부 시작 웹 푸시 알림(체크인이 off→on으로 바뀌면 나머지 크루 기기로 알림).
+공부 시작 웹 푸시 알림(체크인이 off→on으로 바뀌면 나머지 크루 기기로 알림),
+서로의 기록에 남기는 이모지 리액션과 댓글.
 
 **운영 URL**: https://learning-crew.learning-crew.workers.dev
 **로그인**: 첫 방문에 이름(아바타)을 고르면 끝 — 서버가 해당 멤버의 서명 토큰을 발급해 기기에 저장한다.
@@ -16,8 +17,10 @@
 
 ```
 [브라우저]  React SPA + IndexedDB 복제본 + 뮤테이션 큐   ← UI는 로컬만 읽고 쓴다 (0ms, 오프라인 동작)
-    │  POST /api/sync/push   (백그라운드, 버전 CAS 업서트 — 충돌 시 서버 행을 받아 3-way 병합)
-    │  GET  /api/sync/pull   ((updated_at, id) 키셋 커서 + 90초 안전 지평선, 탭 보일 때만 20초 폴링)
+    │  POST /api/sync/push   (백그라운드, 기록·댓글·리액션 세 스트림을 한 요청에 함께
+    │                         기록은 버전 CAS 업서트 — 충돌 시 서버 행을 받아 3-way 병합)
+    │  GET  /api/sync/pull   (스트림별 독립 키셋 커서 + 90초 안전 지평선, 탭 보일 때만 20초 폴링
+    │                         since·sinceId / csince·csinceId / rsince·rsinceEntry·rsinceM)
     │  POST /api/sync/status (지금 상태 — 액션 시각 기준 LWW, pull 응답에 전 멤버 상태 동봉)
     │  POST /api/push/subscribe·unsubscribe (웹 푸시 구독 — 기기당 1행)
 [Cloudflare Worker]  인증(HMAC 초대 토큰) + 동기화 API + SPA 정적 서빙
@@ -26,6 +29,8 @@
     │  @neondatabase/serverless (HTTP)
 [Neon Postgres]  진실의 원천. entries 테이블(version = push CAS 기준), soft delete
                  status 테이블(멤버당 1행) — 지금 상태(장소/시작 시각/알림 도장)
+                 comments 테이블 — 기록에 달린 댓글, 내용 불변 + soft delete
+                 reactions 테이블 — (기록, 멤버)당 1행: 그 멤버가 남긴 이모지 집합
                  push_subs 테이블 — 웹 푸시 구독 (endpoint가 기기 식별자)
 ```
 
@@ -36,7 +41,27 @@
 - 삭제는 `deleted_at` soft delete로 전파. pull 커서는 "지금-90초" 안전 지평선까지만 전진해
   트랜잭션 커밋 지연으로 과거 시각에 나타나는 행도 놓치지 않는다 (중복은 v 비교로 무시)
 - 서버는 "기존 행이 본인 것일 때만" 갱신을 허용 (`setWhere` 가드) — 남의 기록을 덮을 수 없다
+- 댓글은 **내용 불변**(수정 없음) — 서버는 본문과 작성 시각을 절대 덮어쓰지 않고 `deleted_at`만
+  단조로 찍는다. 그래서 재전송이 그냥 멱등이고, 남의 댓글은 삭제할 수 없으며(`member_id` 가드),
+  한 번 지운 댓글은 부활하지 않는다. `comments`/`reactions`에는 `entries` 외래키를 **걸지 않는다** —
+  아직 push되지 않은 내 기록에도 바로 댓글을 달 수 있어야 하고, FK 위반 하나가 배치 전체를 죽이면 안 된다
+- 리액션은 (기록, 멤버)당 1행 = 그 멤버가 그 기록에 남긴 **이모지 집합**(👏 🔥 💪 👀 😴 5종 고정).
+  지금 상태와 같은 의미론으로 도착 순서가 아니라 **액션 시각(`acted_at`) LWW** — PK에 `member_id`가
+  있어 남의 행과는 충돌 자체가 없다. 다 떼면 행은 남기고 빈 집합으로 둔다("다 뗐다"도 전파해야 한다)
+- `acted_at`(액션 시각)과 `updated_at`(서버 시계)을 나눈 이유: 승패 판정은 사용자가 누른 시각으로 해야
+  오프라인 기기의 옛 토글이 최신을 덮지 않고, pull 커서는 서버 시계로 단조 증가해야 페이지네이션이
+  뒤로 밀리지 않는다. 댓글의 `created_at`(표시·정렬)과 `updated_at`(커서)도 같은 이유로 분리돼 있다
+- 세 스트림(기록·댓글·리액션)은 **각자 독립 커서**를 쓴다 — `(updated_at, id)` / `(updated_at, id)` /
+  `(updated_at, entry_id, member_id)` 키셋에 같은 90초 지평선 규칙(공용 `holdOrAdvance`)을 적용한다.
+  하나만 규칙이 어긋나면 그 스트림의 늦은 커밋이 영구 누락되므로 판정은 한 곳에 모아 뒀다.
+  커서의 `ts`는 서버가 준 문자열 그대로 되돌려 보낸다 — ISO로 다듬으면 Postgres 마이크로초가 잘려
+  같은 행을 영원히 다시 싣는다 (행 페이로드의 타임스탬프는 전부 ISO로 정규화된다)
+- 배포 이행기 안전장치: 보낸 스트림의 결과(`commentResults`/`reactionResults`)가 push 응답에 없으면
+  **구버전 Worker가 통째로 무시한 것**으로 보고 큐를 비우지 않고 동기화 오류로 표시한다.
+  pull 응답에 그 스트림이 없으면 없는 것으로 취급하고 커서도 전진시키지 않는다 — 조용한 유실 방지
 - IndexedDB 쓰기는 단일 트랜잭션(기록+큐, pull 행+커서) — 중단돼도 반쪽 상태가 없다.
+  스키마는 v3 — `entries`/`queue`/`meta`에 `comments`·`commentQueue`·`reactions`·`reactionQueue`가
+  더해졌다(행과 큐를 나눠 두면 큐만 지우는 정산이 행 값을 다시 쓰지 않는다).
   같은 기기의 다른 탭과는 BroadcastChannel + 재적재로 즉시 맞춘다.
   IndexedDB가 막힌 환경에서도 메모리 전용으로 동작 (첫 렌더는 무조건 된다)
 - 초대 토큰이 없으면 **데모 모드**: 시드 데이터, 동기화 없음, `?user=이름`으로 시점 변경
@@ -50,6 +75,8 @@
   공유 → 홈 화면에 추가한 뒤에만 켤 수 있다(앱 내 안내 문구가 뜬다).
   시크릿 `VAPID_PUBLIC_KEY`/`VAPID_PRIVATE_KEY`/`VAPID_SUBJECT`가 필요하다(등록 완료,
   로컬은 .dev.vars) — 키 재발급 시 기존 구독은 무효가 되니 각 기기에서 알림을 다시 켜야 한다
+- 아직 없는 것(후속 과제): 웹 푸시는 공부 시작(상태 off→on)에만 발송된다 —
+  **댓글 알림은 구현돼 있지 않다.** 댓글 수정·대댓글·읽음 표시도 없다
 
 ## 개발
 

@@ -6,6 +6,10 @@ import {
   pushEntries,
   pushEntriesLegacy,
   pullSince,
+  pushComments,
+  pullComments,
+  pushReactions,
+  pullReactions,
   setStatus,
   allStatuses,
   getStatusRow,
@@ -23,13 +27,18 @@ import {
   PLACES,
   PUSH_LIMITS,
   UUID_RE,
+  canonicalUuid,
   isFreshSince,
+  normalizeEmojis,
+  type Comment,
   type Entry,
   type MemberId,
   type PullCursor,
   type PullResponse,
   type PushRequest,
   type PushResponse,
+  type ReactionCursor,
+  type ReactionSet,
   type PushSubscribeRequest,
   type PushUnsubscribeRequest,
   type StatusSetRequest,
@@ -118,6 +127,40 @@ function invalidReason(e: Entry, me: MemberId): string | null {
   return null;
 }
 
+/** 댓글 행 검증 — 본문은 trim 후 길이를 본다(공백만 남는 댓글은 실수다). */
+function invalidCommentReason(x: Comment, me: MemberId): string | null {
+  if (!x || typeof x !== 'object') return 'not an object';
+  if (typeof x.id !== 'string' || !UUID_RE.test(x.id)) return 'bad comment id';
+  if (typeof x.entryId !== 'string' || !UUID_RE.test(x.entryId)) return 'bad comment entryId';
+  if (x.m !== me) return 'not your comment';
+  if (typeof x.body !== 'string') return 'bad comment body';
+  const len = x.body.trim().length;
+  if (len === 0 || len > PUSH_LIMITS.commentBody) return 'bad comment body';
+  if (x.deletedAt !== null && typeof x.deletedAt !== 'string') return 'bad comment deletedAt';
+  return null;
+}
+
+function invalidReactionReason(x: ReactionSet, me: MemberId): string | null {
+  if (!x || typeof x !== 'object') return 'not an object';
+  if (typeof x.entryId !== 'string' || !UUID_RE.test(x.entryId)) return 'bad reaction entryId';
+  if (x.m !== me) return 'not your reaction';
+  if (!Array.isArray(x.emojis)) return 'bad emojis';
+  return null;
+}
+
+/** 작성 시각 정규화 — 거부하지 않고 범위 밖이면 지금으로 끌어온다.
+    오프라인에서 쓴 댓글의 진짜 작성 시각은 살리되(표시·정렬이 이 값을 쓴다),
+    시계가 어긋난 기기가 목록 맨 위/맨 아래에 영원히 박히는 것은 막는다. */
+function normalizeCreatedAt(raw: unknown, now: number): string {
+  if (typeof raw === 'string') {
+    const t = Date.parse(raw);
+    if (Number.isFinite(t) && t <= now + 5 * 60_000 && t >= now - 30 * 86_400_000) {
+      return new Date(t).toISOString();
+    }
+  }
+  return new Date(now).toISOString();
+}
+
 app.post('/api/sync/push', async (c) => {
   const me = c.get('memberId');
   let req: PushRequest;
@@ -126,7 +169,17 @@ app.post('/api/sync/push', async (c) => {
   } catch {
     return c.json({ error: 'invalid json' }, 400);
   }
-  if (!Array.isArray(req.entries) || req.entries.length > PUSH_LIMITS.batch) {
+  // 세 스트림이 한 요청에 함께 온다. 구버전 클라이언트는 entries만 보내므로 나머지는 없으면 빈 배열.
+  const reqComments = req.comments ?? [];
+  const reqReactions = req.reactions ?? [];
+  if (
+    !Array.isArray(req.entries) ||
+    req.entries.length > PUSH_LIMITS.batch ||
+    !Array.isArray(reqComments) ||
+    reqComments.length > PUSH_LIMITS.batch ||
+    !Array.isArray(reqReactions) ||
+    reqReactions.length > PUSH_LIMITS.batch
+  ) {
     return c.json({ error: 'bad batch' }, 400);
   }
   const seen = new Set<string>();
@@ -136,6 +189,46 @@ app.post('/api/sync/push', async (c) => {
     if (seen.has(e.id)) return c.json({ error: 'duplicate id', id: e.id }, 400);
     seen.add(e.id);
   }
+  const now = Date.now();
+  const seenComments = new Set<string>();
+  const cRows: Comment[] = [];
+  for (const x of reqComments) {
+    const reason = invalidCommentReason(x, me);
+    if (reason) return c.json({ error: reason, id: (x as { id?: string })?.id }, 400);
+    // 중복 검사보다 먼저 소문자로 내린다 — pg가 uuid를 소문자로 돌려주므로 검사 키·저장 키·
+    // 응답 키가 전부 같은 형태여야 한다. 원문으로 비교하면 대소문자만 다른 두 id가 여기를
+    // 통과한 뒤 DB에서 같은 행이 되어 배치 전체를 죽인다.
+    const id = canonicalUuid(x.id);
+    if (seenComments.has(id)) return c.json({ error: 'duplicate id', id }, 400);
+    seenComments.add(id);
+    cRows.push({
+      ...x,
+      id,
+      entryId: canonicalUuid(x.entryId),
+      body: x.body.trim(),
+      createdAt: normalizeCreatedAt(x.createdAt, now),
+      // 파싱 안 되는 삭제 시각이 timestamptz 삽입에서 배치 전체를 죽이지 않게 — 값보다 "지워졌다"가 본질
+      deletedAt: x.deletedAt === null ? null : normalizeAt(x.deletedAt, now),
+    });
+  }
+  const seenReactions = new Set<string>();
+  const rRows: ReactionSet[] = [];
+  for (const x of reqReactions) {
+    const reason = invalidReactionReason(x, me);
+    if (reason) return c.json({ error: reason, id: (x as { entryId?: string })?.entryId }, 400);
+    // 댓글과 같은 이유 — 리액션의 상관 키는 (entryId, m)이라 entryId의 대소문자가 어긋나면
+    // 반영된 행이 applied:false로 돌아가고 클라이언트 큐가 정산되지 않는다
+    const entryId = canonicalUuid(x.entryId);
+    const key = `${entryId}|${x.m}`;
+    if (seenReactions.has(key)) return c.json({ error: 'duplicate id', id: entryId }, 400);
+    seenReactions.add(key);
+    rRows.push({
+      ...x,
+      entryId,
+      emojis: normalizeEmojis(x.emojis),
+      actedAt: normalizeAt(x.actedAt, now),
+    });
+  }
   // v가 있는 행은 CAS, 없는 행은 구버전 프로토콜(LWW) — 배포 이행기의 옛 번들도 계속 동기화된다
   const withV: Entry[] = [];
   const legacy: Omit<Entry, 'v'>[] = [];
@@ -144,9 +237,11 @@ app.post('/api/sync/push', async (c) => {
     else withV.push(e);
   }
   const db = drizzle(neon(c.env.DATABASE_URL));
-  const [outcome, legacyApplied] = await Promise.all([
+  const [outcome, legacyApplied, cOut, rOut] = await Promise.all([
     pushEntries(db, withV, me),
     pushEntriesLegacy(db, legacy, me),
+    pushComments(db, cRows, me),
+    pushReactions(db, rRows),
   ]);
   const res: PushResponse = {
     ok: true,
@@ -156,17 +251,53 @@ app.post('/api/sync/push', async (c) => {
       ...outcome.conflicts.map((row) => ({ id: row.id, applied: false, row })),
       ...legacyApplied.map((row) => ({ id: row.id, applied: true, row })),
     ],
+    // 보낸 게 없어도 항상 실어 보낸다 — 클라이언트는 "보냈는데 결과 필드가 없음"을
+    // 구버전 Worker의 무시로 읽고 큐를 지킨다(조용한 유실 방지)
+    commentResults: [
+      ...cOut.applied.map((row) => ({ id: row.id, applied: true, row })),
+      ...cOut.current.map((row) => ({ id: row.id, applied: false, row })),
+    ],
+    reactionResults: [
+      ...rOut.applied.map((row) => ({ entryId: row.entryId, m: row.m, applied: true, row })),
+      ...rOut.current.map((row) => ({ entryId: row.entryId, m: row.m, applied: false, row })),
+    ],
   };
   return c.json(res);
 });
 
 app.get('/api/sync/pull', async (c) => {
+  // 세 커서는 서로 독립이다 — 하나만 와도, 아예 없어도(그 스트림만 처음부터) 동작한다.
+  // 깨진 값은 SQL 캐스팅에서 500이 되므로 형식이 맞을 때만 커서로 삼는다.
   const since = c.req.query('since');
   const sinceId = c.req.query('sinceId');
   const cursor: PullCursor | null = since && sinceId ? { ts: since, id: sinceId } : null;
+  const csince = c.req.query('csince');
+  const csinceId = c.req.query('csinceId');
+  const cCursor: PullCursor | null =
+    csince && csinceId && UUID_RE.test(csinceId) ? { ts: csince, id: csinceId } : null;
+  const rsince = c.req.query('rsince');
+  const rsinceEntry = c.req.query('rsinceEntry');
+  const rsinceM = c.req.query('rsinceM');
+  const rCursor: ReactionCursor | null =
+    rsince && rsinceEntry && rsinceM !== undefined && UUID_RE.test(rsinceEntry)
+      // 지평선 커서의 멤버 자리는 빈 문자열이라 rsinceM은 값이 ''이어도 커서로 인정한다
+      ? { ts: rsince, entryId: rsinceEntry, m: rsinceM as MemberId | '' }
+      : null;
   const db = drizzle(neon(c.env.DATABASE_URL));
-  const [result, statuses] = await Promise.all([pullSince(db, cursor), allStatuses(db)]);
-  return c.json({ ...result, statuses } satisfies PullResponse);
+  const [result, statuses, cRes, rRes] = await Promise.all([
+    pullSince(db, cursor),
+    allStatuses(db),
+    pullComments(db, cCursor),
+    pullReactions(db, rCursor),
+  ]);
+  return c.json({
+    ...result,
+    statuses,
+    comments: cRes.rows,
+    commentCursor: cRes.cursor,
+    reactions: rRes.rows,
+    reactionCursor: rRes.cursor,
+  } satisfies PullResponse);
 });
 
 /** 오프라인에서 켠 상태가 뒤늦게 도착해도 쓸 수 있게 클라이언트 since를 받되, 범위 밖이면 지금으로. */
