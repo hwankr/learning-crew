@@ -12,6 +12,8 @@ export const entries = pgTable(
     memo: text('memo').notNull().default(''),
     body: text('body').notNull().default(''),
     todos: jsonb('todos').notNull().default([]),
+    // 서버 리비전 — push CAS의 기준. 갱신마다 +1, 클라이언트는 pull로 받은 값을 base로 되돌려 보낸다.
+    version: integer('version').notNull().default(1),
     updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
     deletedAt: timestamp('deleted_at', { withTimezone: true, mode: 'string' }),
   },

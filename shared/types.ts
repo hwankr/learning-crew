@@ -1,5 +1,8 @@
 /* 클라이언트와 Worker가 공유하는 도메인 타입 + 동기화 프로토콜. */
 
+/** Entry id 형식 — 클라이언트 저장 가드와 서버 검증이 같은 정의를 쓴다. */
+export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export const MEMBER_IDS = ['sh', 'wg', 'th', 'jj'] as const;
 export type MemberId = (typeof MEMBER_IDS)[number];
 
@@ -29,17 +32,26 @@ export interface Entry {
   memo: string;
   body: string;
   todos: Todo[];
+  /** 서버 리비전. pull로 받은 값이 곧 base — push 시 이 값으로 CAS한다. 로컬 신규 행은 0. */
+  v: number;
   updatedAt: string; // 서버 시계 기준 (클라이언트 값은 잠정치)
   deletedAt: string | null; // soft delete — 삭제도 동기화로 전파된다
 }
 
-/** 행 전체를 last-write-wins로 업서트한다. 삭제는 deletedAt이 찍힌 행. */
+/** v(base 리비전) CAS 업서트 — 충돌하면 서버가 현재 행을 돌려주고 클라이언트가 병합한다. */
 export interface PushRequest {
   entries: Entry[];
+}
+/** 행별 결과. applied=false면 row는 서버의 현재 행(충돌) — 클라이언트가 병합 후 재전송한다. */
+export interface PushRowResult {
+  id: string;
+  applied: boolean;
+  row: Entry;
 }
 export interface PushResponse {
   ok: true;
   serverTime: string;
+  results: PushRowResult[];
 }
 
 /** (updated_at, id) 키셋 커서 — 같은 타임스탬프 행도 놓치지 않는다. */
@@ -65,17 +77,21 @@ export interface MemberStatus {
   on: boolean;
   place: Place | null; // off면 null
   since: string | null; // 켠 시각(ISO), off면 null
-  updatedAt: string; // 서버 시계 기준
+  updatedAt: string; // 액션 시각(토글한 순간) — 도착 순서가 아니라 이 시각으로 LWW 판정한다
 }
 
 export interface StatusSetRequest {
   on: boolean;
   place?: Place;
   since?: string; // 오프라인에서 켠 경우를 위해 클라이언트 시각을 보낸다 (서버가 범위 검증)
+  /** 토글한 액션 시각 — 오프라인이었다가 뒤늦게 도착해도 더 새 액션을 덮지 못하게 한다. */
+  at?: string;
 }
 export interface StatusSetResponse {
   ok: true;
+  /** 처리 후 서버의 현재 상태 — 거부됐으면(다른 기기의 더 새 액션 존재) 그쪽 상태다. */
   status: MemberStatus;
+  applied: boolean;
 }
 
 /* ---------- 웹 푸시 구독 ---------- */
@@ -95,8 +111,16 @@ export interface VapidKeyResponse {
 /** 끄는 걸 잊은 상태가 다음 날까지 남지 않게 — 이 시간이 지나면 꺼진 것으로 취급. */
 export const STATUS_TTL_MS = 14 * 60 * 60 * 1000;
 
+/** TTL 신선도 규칙의 단일 정의 — 표시(isStatusActive), 알림 판단(shouldNotify),
+    서버의 늦은 ON 액션 무효화가 전부 이 함수를 쓴다. 셋이 어긋나면 안 된다. */
+export function isFreshSince(ts: string | null, now: number): boolean {
+  if (ts === null) return false;
+  const t = Date.parse(ts);
+  return Number.isFinite(t) && now - t < STATUS_TTL_MS;
+}
+
 export function isStatusActive(s: MemberStatus | undefined, now: number): s is MemberStatus {
-  return !!s && s.on && s.since !== null && now - Date.parse(s.since) < STATUS_TTL_MS;
+  return !!s && s.on && isFreshSince(s.since, now);
 }
 
 export const PUSH_LIMITS = {

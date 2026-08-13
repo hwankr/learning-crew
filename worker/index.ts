@@ -4,23 +4,26 @@ import { drizzle } from 'drizzle-orm/neon-http';
 import { makeToken, verifyToken } from './auth';
 import {
   pushEntries,
+  pushEntriesLegacy,
   pullSince,
   setStatus,
   allStatuses,
   getStatusRow,
-  stampNotified,
+  claimNotifySlot,
   upsertPushSub,
   deletePushSub,
   deleteGonePushSub,
   pushSubsExcept,
 } from './queries';
-import { sendPushToAll, shouldNotify } from './push';
+import { NOTIFY_COOLDOWN_MS, sendPushToAll, shouldNotify } from './push';
 import {
   MEMBER_IDS,
   MEMBER_NAMES,
   TAGS,
   PLACES,
   PUSH_LIMITS,
+  UUID_RE,
+  isFreshSince,
   type Entry,
   type MemberId,
   type PullCursor,
@@ -82,14 +85,22 @@ app.use('/api/push/*', requireMember);
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const TIME_RE = /^\d{2}:\d{2}$/;
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** 형식만이 아니라 실존하는 달력 날짜인지 — '2026-02-31'은 Postgres date 삽입에서
+    500을 내며 배치 전체를 죽이므로 여기서 행 단위 400으로 걸러야 한다. */
+function isRealDay(day: string): boolean {
+  if (!DAY_RE.test(day)) return false;
+  const [y, m, d] = day.split('-').map(Number);
+  const dt = new Date(Date.UTC(y!, m! - 1, d!));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m! - 1 && dt.getUTCDate() === d;
+}
 
 /** 본인 행 + 형식이 유효할 때만 통과. 실패 사유 문자열, 성공이면 null. */
 function invalidReason(e: Entry, me: MemberId): string | null {
   if (!e || typeof e !== 'object') return 'not an object';
   if (typeof e.id !== 'string' || !UUID_RE.test(e.id)) return 'bad id';
   if (e.m !== me) return 'not your entry';
-  if (typeof e.day !== 'string' || !DAY_RE.test(e.day)) return 'bad day';
+  if (typeof e.day !== 'string' || !isRealDay(e.day)) return 'bad day';
   if (typeof e.time !== 'string' || !TIME_RE.test(e.time)) return 'bad time';
   if (!(TAGS as readonly string[]).includes(e.tag)) return 'bad tag';
   if (e.stars !== null && (!Number.isInteger(e.stars) || e.stars < 1 || e.stars > 5)) return 'bad stars';
@@ -101,6 +112,8 @@ function invalidReason(e: Entry, me: MemberId): string | null {
       return 'bad todo item';
     }
   }
+  // v가 아예 없으면 구버전 클라이언트(레거시 LWW 프로토콜) — 거부하지 않고 레거시 경로로 처리
+  if (e.v !== undefined && (!Number.isInteger(e.v) || e.v < 0 || e.v > 2_000_000_000)) return 'bad v';
   if (e.deletedAt !== null && typeof e.deletedAt !== 'string') return 'bad deletedAt';
   return null;
 }
@@ -116,12 +129,34 @@ app.post('/api/sync/push', async (c) => {
   if (!Array.isArray(req.entries) || req.entries.length > PUSH_LIMITS.batch) {
     return c.json({ error: 'bad batch' }, 400);
   }
+  const seen = new Set<string>();
   for (const e of req.entries) {
     const reason = invalidReason(e, me);
     if (reason) return c.json({ error: reason, id: (e as { id?: string })?.id }, 400);
+    if (seen.has(e.id)) return c.json({ error: 'duplicate id', id: e.id }, 400);
+    seen.add(e.id);
   }
-  await pushEntries(drizzle(neon(c.env.DATABASE_URL)), req.entries, me);
-  const res: PushResponse = { ok: true, serverTime: new Date().toISOString() };
+  // v가 있는 행은 CAS, 없는 행은 구버전 프로토콜(LWW) — 배포 이행기의 옛 번들도 계속 동기화된다
+  const withV: Entry[] = [];
+  const legacy: Omit<Entry, 'v'>[] = [];
+  for (const e of req.entries) {
+    if (e.v === undefined) legacy.push(e);
+    else withV.push(e);
+  }
+  const db = drizzle(neon(c.env.DATABASE_URL));
+  const [outcome, legacyApplied] = await Promise.all([
+    pushEntries(db, withV, me),
+    pushEntriesLegacy(db, legacy, me),
+  ]);
+  const res: PushResponse = {
+    ok: true,
+    serverTime: new Date().toISOString(),
+    results: [
+      ...outcome.applied.map((row) => ({ id: row.id, applied: true, row })),
+      ...outcome.conflicts.map((row) => ({ id: row.id, applied: false, row })),
+      ...legacyApplied.map((row) => ({ id: row.id, applied: true, row })),
+    ],
+  };
   return c.json(res);
 });
 
@@ -145,6 +180,19 @@ function normalizeSince(raw: unknown, now: number): string {
   return new Date(now).toISOString();
 }
 
+/** 액션 시각(LWW 기준) 정규화 — 미래는 지금으로 캡하고 과거는 그대로 둔다.
+    · 과거를 끌어올리면 아주 오래된 오프라인 토글이 더 새 액션을 이겨 버린다 —
+      오래된 액션은 LWW에서 자연히 지는 것이 정답이다.
+    · 미래를 허용하면 시계가 빠른 기기가 그 시간만큼 다른 기기의 토글에 거부권을 갖는다 —
+      지금으로 캡하면 미래-스큐 기기는 도착 순서로 동작해 아무도 잠기지 않는다. */
+function normalizeAt(raw: unknown, now: number): string {
+  if (typeof raw === 'string') {
+    const t = Date.parse(raw);
+    if (Number.isFinite(t)) return new Date(Math.min(t, now)).toISOString();
+  }
+  return new Date(now).toISOString();
+}
+
 app.post('/api/sync/status', async (c) => {
   const me = c.get('memberId');
   let body: StatusSetRequest;
@@ -157,20 +205,32 @@ app.post('/api/sync/status', async (c) => {
   if (body.on && !(PLACES as readonly string[]).includes(body.place ?? '')) {
     return c.json({ error: 'bad place' }, 400);
   }
-  const s = body.on
-    ? { on: true, place: body.place!, since: normalizeSince(body.since, Date.now()) }
-    : { on: false, place: null, since: null };
+  const now = Date.now();
+  // at이 없는 구버전 클라이언트의 ON은 도착 시각이 아니라 본인이 주장하는 시작 시각(since)을
+  // 액션 시각으로 삼는다 — 도착 시각을 쓰면 뒤늦게 재접속한 옛 ON이 최신 OFF를 이겨 버린다
+  const at = normalizeAt(body.at ?? (body.on ? body.since : undefined), now);
+  let s = body.on
+    ? { on: true, place: body.place!, since: normalizeSince(body.since, now), at }
+    : { on: false, place: null, since: null, at };
+  // TTL(14시간)보다 오래된 ON 액션은 이미 끝난 세션 — 뒤늦게 도착해도 "지금 공부 중"으로
+  // 되살리거나 시작 알림을 쏘지 않고, 꺼짐으로 기록한다 (LWW 순서는 at이 그대로 지킨다)
+  if (s.on && !isFreshSince(at, now)) {
+    s = { on: false, place: null, since: null, at };
+  }
   const db = drizzle(neon(c.env.DATABASE_URL));
   const prev = await getStatusRow(db, me);
-  const saved = await setStatus(db, me, s);
+  const { status: saved, applied } = await setStatus(db, me, s);
 
-  // off→on 전환이면 크루에게 푸시 — 응답을 막지 않게 백그라운드로
-  if (shouldNotify(prev, s.on, Date.now())) {
+  // off→on 전환이면 크루에게 푸시 — 응답을 막지 않게 백그라운드로.
+  // 발송 슬롯은 조건부 UPDATE로 선점한다: 두 기기가 동시에 켜도 한쪽만 보낸다.
+  if (applied && shouldNotify(prev, s.on, now)) {
     c.executionCtx.waitUntil(
       (async () => {
+        // 발송 가능성 확인이 먼저 — 키가 없거나 구독자가 없는데 슬롯을 선점하면 쿨다운만 태운다
+        if (!c.env.VAPID_PUBLIC_KEY || !c.env.VAPID_PRIVATE_KEY) return;
         const targets = await pushSubsExcept(db, me);
         if (targets.length === 0) return;
-        await stampNotified(db, me);
+        if (!(await claimNotifySlot(db, me, NOTIFY_COOLDOWN_MS))) return;
         await sendPushToAll(
           c.env,
           targets,
@@ -184,7 +244,7 @@ app.post('/api/sync/status', async (c) => {
       })(),
     );
   }
-  return c.json({ ok: true, status: saved } satisfies StatusSetResponse);
+  return c.json({ ok: true, status: saved, applied } satisfies StatusSetResponse);
 });
 
 /* ---------- 웹 푸시 구독 관리 ---------- */

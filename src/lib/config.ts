@@ -18,6 +18,11 @@ export function saveToken(token: string): void {
   localStorage.setItem(TOKEN_KEY, token);
 }
 
+/** 401(토큰 만료·서명 키 교체) 시 재로그인을 위해 — 로컬 기록(IndexedDB)은 그대로 남는다. */
+export function clearToken(): void {
+  localStorage.removeItem(TOKEN_KEY);
+}
+
 function memberIdFromToken(token: string): MemberId | null {
   const head = token.split('.')[0];
   if (!head) return null;
