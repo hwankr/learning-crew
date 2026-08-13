@@ -150,7 +150,8 @@ self.addEventListener('push', (e) => {
     self.registration.showNotification(d.title || '러닝 크루 👟', {
       body: d.body || '',
       icon: '/icons/icon-192.png',
-      tag: 'crew-live', // 같은 태그는 갱신 — 알림이 쌓이지 않는다
+      // Worker가 태그를 정한다: 같은 태그는 갱신(시작 알림), 다른 태그는 각각 표시(댓글 알림)
+      tag: d.tag || 'crew-live',
       data: { url: d.url || '/' },
     }),
   );

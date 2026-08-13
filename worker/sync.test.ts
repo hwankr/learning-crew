@@ -735,12 +735,17 @@ describe('reaction queries', () => {
     expect(stale.current[0]!.actedAt).toBe(iso(t0));
   });
 
-  it('같은 액션 시각의 재전송은 멱등하게 허용된다 (잃어버린 응답 재시도)', async () => {
+  it('같은 액션 시각의 재전송은 반영 없이 현재 행으로 정산된다 (잃어버린 응답 재시도)', async () => {
+    // 엄격 >: 동일 요청 둘이 동시에 와도 applied(→알림 델타)는 한 번만 잡힌다.
+    // 재전송은 current로 돌아가고 내용이 같아 클라이언트 큐는 그대로 정산된다.
     const out = await pushReactions(db, [
       rset({ entryId: R1, m: 'wg', emojis: ['👏'], actedAt: iso(t0) }),
     ]);
-    expect(out.applied).toHaveLength(1);
-    expect(out.applied[0]!.emojis).toEqual(['👏']);
+    expect(out.applied).toHaveLength(0);
+    expect(out.deltas).toHaveLength(0);
+    expect(out.current).toHaveLength(1);
+    expect(out.current[0]!.emojis).toEqual(['👏']);
+    expect(out.current[0]!.actedAt).toBe(iso(t0));
   });
 
   it('더 새로운 액션은 집합 전체를 갈아끼운다', async () => {

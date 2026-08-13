@@ -7,6 +7,7 @@ import {
   timestamp,
   date,
   index,
+  uniqueIndex,
   boolean,
   primaryKey,
 } from 'drizzle-orm/pg-core';
@@ -83,6 +84,57 @@ export const reactions = pgTable(
     index('reactions_updated_at_idx').on(t.updatedAt, t.entryId, t.memberId),
   ],
 );
+
+/** 알림 내역 — 수신자(member_id)별 행. 댓글·리액션과 같은 이유로 entries에 FK를 걸지 않는다.
+    agg_key는 "같은 날 같은 이유"의 중복·집계를 원자적으로 처리하는 자연키다:
+    · 'start:<actor>' — 하루 1회 시작 알림의 중복 방지 (ON CONFLICT DO NOTHING)
+    · 'react'         — 응원 하루 요약 집계 행 (ON CONFLICT DO UPDATE로 count 누적)
+    · 'quiet'         — 방해 금지 다이제스트 하루 1행
+    null이면 유니크가 걸리지 않는다(Postgres 유니크는 null끼리 서로 다름) — 일반 행은 null. */
+export const notifications = pgTable(
+  'notifications',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    memberId: text('member_id').notNull(),
+    kind: text('kind').notNull(),
+    why: text('why').notNull(),
+    actor: text('actor'),
+    entryId: uuid('entry_id'),
+    quote: text('quote').notNull().default(''),
+    ctx: text('ctx').notNull().default(''),
+    actors: jsonb('actors').notNull().default([]),
+    count: integer('count').notNull().default(1),
+    // KST 기준 사건 날짜 — 표시용이 아니라 agg_key 유니크의 일부
+    day: date('day').notNull(),
+    aggKey: text('agg_key'),
+    // null = 아직 기기 푸시가 나가지 않음(방해 금지 이월분·하루 요약 대기분) — cron이 쓸어 담는 기준
+    pushedAt: timestamp('pushed_at', { withTimezone: true, mode: 'string' }),
+    readAt: timestamp('read_at', { withTimezone: true, mode: 'string' }),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('notifications_updated_at_id_idx').on(t.updatedAt, t.id),
+    index('notifications_member_created_idx').on(t.memberId, t.createdAt),
+    uniqueIndex('notifications_agg_uq').on(t.memberId, t.day, t.aggKey),
+  ],
+);
+
+/** 알림 설정 — 멤버당 1행, 없으면 DEFAULT_NOTIF_PREFS로 취급한다.
+    Worker가 생성·발송을 게이트해야 해서(푸시는 서버가 쏜다) 서버 저장이 필수다. */
+export const notifPrefs = pgTable('notif_prefs', {
+  memberId: text('member_id').primaryKey(),
+  startMode: text('start_mode').notNull().default('daily'),
+  perMember: jsonb('per_member').notNull().default({}),
+  cmMine: boolean('cm_mine').notNull().default(true),
+  cmReply: boolean('cm_reply').notNull().default(true),
+  cmAll: boolean('cm_all').notNull().default(false),
+  reactMode: text('react_mode').notNull().default('daily'),
+  quietEnabled: boolean('quiet_enabled').notNull().default(true),
+  quietFrom: text('quiet_from').notNull().default('22:00'),
+  quietTo: text('quiet_to').notNull().default('07:00'),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+});
 
 /** 웹 푸시 구독 — 기기(브라우저)당 1행. endpoint가 곧 기기 식별자다. */
 export const pushSubs = pgTable('push_subs', {

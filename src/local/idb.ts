@@ -4,6 +4,7 @@ import type {
   Entry,
   MemberId,
   MemberStatus,
+  Notification,
   PullCursor,
   ReactionCursor,
   ReactionSet,
@@ -28,6 +29,14 @@ export interface CrewDB extends DBSchema {
   reactions: { key: string; value: ReactionSet };
   /** key = entryId — 내 행만 dirty가 될 수 있다(남의 리액션은 로컬에서 못 바꾼다) */
   reactionQueue: { key: string; value: boolean };
+  /** 알림 내역 — 서버가 만든 행을 pull로 받아 저장만 한다. 행에 수신자(m)가 있어
+      같은 기기에서 멤버를 바꿔 로그인해도 서로의 행을 구분한다 */
+  notifications: { key: string; value: Notification };
+  /** key = `${memberId}|${notifId}` — 읽음 처리를 아직 서버에 못 전한 알림.
+      멤버를 키에 넣는 이유: 같은 기기에서 B로 바꿔 로그인했을 때 A의 미전송 읽음을
+      B의 토큰으로 보내 "정산된 척" 지워 버리면 A의 읽음 의도가 유실된다.
+      값은 읽은 시점에 관측한 그 행의 updatedAt — 서버·다른 탭과의 세대 판별값이다. */
+  notifReadQueue: { key: string; value: string };
   meta: { key: string; value: PullCursor | ReactionCursor | boolean | MemberStatus };
 }
 
@@ -38,7 +47,7 @@ export type CrewDatabase = IDBPDatabase<CrewDB>;
 
 export function openCrewDB(): Promise<CrewDatabase> {
   let handle: CrewDatabase | null = null;
-  const opened = openDB<CrewDB>('learning-crew', 3, {
+  const opened = openDB<CrewDB>('learning-crew', 4, {
     async upgrade(db, oldVersion, _newVersion, tx) {
       if (oldVersion < 1) {
         db.createObjectStore('entries', { keyPath: 'id' });
@@ -62,6 +71,12 @@ export function openCrewDB(): Promise<CrewDatabase> {
         // 리액션 키는 (entryId, m) 합성이라 keyPath로 표현할 수 없다 — 밖에서 준다
         db.createObjectStore('reactions');
         db.createObjectStore('reactionQueue');
+      }
+      if (oldVersion < 4) {
+        // 알림 스트림 추가 — 댓글과 같은 행/큐 분리 구조. 큐가 담는 건 "읽음 처리"뿐이다
+        // (알림 행 자체는 서버만 만든다 — 클라이언트가 만드는 알림은 없다).
+        db.createObjectStore('notifications', { keyPath: 'id' });
+        db.createObjectStore('notifReadQueue');
       }
     },
     // 다른 탭이 더 높은 버전으로 업그레이드하려 할 때 이 연결이 막고 있으면 양보한다 —

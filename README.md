@@ -60,8 +60,9 @@
   **구버전 Worker가 통째로 무시한 것**으로 보고 큐를 비우지 않고 동기화 오류로 표시한다.
   pull 응답에 그 스트림이 없으면 없는 것으로 취급하고 커서도 전진시키지 않는다 — 조용한 유실 방지
 - IndexedDB 쓰기는 단일 트랜잭션(기록+큐, pull 행+커서) — 중단돼도 반쪽 상태가 없다.
-  스키마는 v3 — `entries`/`queue`/`meta`에 `comments`·`commentQueue`·`reactions`·`reactionQueue`가
-  더해졌다(행과 큐를 나눠 두면 큐만 지우는 정산이 행 값을 다시 쓰지 않는다).
+  스키마는 v4 — `entries`/`queue`/`meta`에 `comments`·`commentQueue`·`reactions`·`reactionQueue`
+  (v3), `notifications`·`notifReadQueue`(v4)가 더해졌다(행과 큐를 나눠 두면 큐만 지우는
+  정산이 행 값을 다시 쓰지 않는다).
   같은 기기의 다른 탭과는 BroadcastChannel + 재적재로 즉시 맞춘다.
   IndexedDB가 막힌 환경에서도 메모리 전용으로 동작 (첫 렌더는 무조건 된다)
 - 초대 토큰이 없으면 **데모 모드**: 시드 데이터, 동기화 없음, `?user=이름`으로 시점 변경
@@ -70,13 +71,21 @@
   꺼진 것으로 표시 — 오프라인 토글은 dirty 플래그로 남아 다음 사이클에 재전송된다
 - 동기화 상태(대기 N개/오프라인/서버 오류/재로그인)는 왼쪽 컬럼에 항상 표시된다
 - 서비스 워커가 앱 셸을 캐시 — 오프라인에서도 앱을 완전히 다시 열 수 있다 (API는 캐시 안 함)
-- 알림은 PWA 웹 푸시([public/sw.js](public/sw.js) + [public/manifest.webmanifest](public/manifest.webmanifest)):
-  상태 바 아래 "알림 받기"를 켜면 이 기기가 구독된다. 아이폰은 iOS 16.4+에서
+- **알림** — 벨 아이콘(안읽음 배지) → 내역 페이지 + 설정 페이지.
+  서버(Worker)가 사건을 알림 행으로 팬아웃한다: 공부 시작(실시간/하루 1회/끔 — 크루별
+  오버라이드 가능), 내 기록의 댓글, 내 댓글의 답글(= 내가 댓글 단 기록의 후속 댓글),
+  크루 전체 댓글(기본 꺼짐), `@이름` 멘션(항상), 응원 반응(바로/하루 요약/끔 — 요약은
+  (수신자, 날짜)당 1행에 누적). 내역은 30일 보관, 읽음은 기기 간 동기화된다
+  (`notifications`·`notif_prefs` 테이블, sync push/pull의 네 번째 스트림).
+  방해 금지 시간엔 기기 푸시만 보류되고(내역 행은 그대로), 매시 정각 cron
+  ([worker/notify.ts](worker/notify.ts) `runHourly`)이 창이 끝나는 시각에 다이제스트를,
+  20:00 KST에 응원 하루 요약을 보낸다. 푸시는 어디서나 best-effort — 인앱 내역이 진실이다
+- 기기 푸시는 PWA 웹 푸시([public/sw.js](public/sw.js) + [public/manifest.webmanifest](public/manifest.webmanifest)):
+  알림 설정 페이지의 "이 기기로 알림 받기"를 켜면 이 기기가 구독된다. 아이폰은 iOS 16.4+에서
   공유 → 홈 화면에 추가한 뒤에만 켤 수 있다(앱 내 안내 문구가 뜬다).
   시크릿 `VAPID_PUBLIC_KEY`/`VAPID_PRIVATE_KEY`/`VAPID_SUBJECT`가 필요하다(등록 완료,
   로컬은 .dev.vars) — 키 재발급 시 기존 구독은 무효가 되니 각 기기에서 알림을 다시 켜야 한다
-- 아직 없는 것(후속 과제): 웹 푸시는 공부 시작(상태 off→on)에만 발송된다 —
-  **댓글 알림은 구현돼 있지 않다.** 댓글 수정·대댓글·읽음 표시도 없다
+- 아직 없는 것(후속 과제): 댓글 수정·대댓글(스레드), 멘션 자동완성, 알림 행 탭 시 해당 기록으로 이동
 
 ## 개발
 
@@ -126,8 +135,7 @@ WSL 참고: node는 nvm으로 설치됨 — `export PATH="$HOME/.nvm/versions/no
 | --- | --- |
 | 이름 선택 로그인 | 기본 흐름 — `/api/auth/claim`이 토큰 발급, localStorage 저장 |
 | `?invite=<토큰>` | 자동 로그인 링크 (localStorage에 저장 후 URL에서 제거) |
-| `?wit=subtle\|drip` | 카피 톤 (은은한 위트 / 낄낄 풀드립) — 저장됨 |
-| `?view=feed\|cal` | 시작 탭 |
+| `?view=feed\|cal\|noti\|notiset` | 시작 화면 (noti = 알림 내역, notiset = 알림 설정 — 푸시 클릭이 noti로 연다) |
 | `?user=이름` | 데모 모드에서만: 시점 선택 |
 
 ## 구조

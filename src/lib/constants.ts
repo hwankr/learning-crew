@@ -1,9 +1,10 @@
-import { MEMBER_NAMES, primaryTag } from '../../shared/types';
+import { MEMBER_IDS, MEMBER_NAMES, primaryTag } from '../../shared/types';
 import type {
   Comment,
   Entry,
   MemberId,
   MemberStatus,
+  Notification,
   Place,
   ReactionSet,
   Tag,
@@ -63,7 +64,6 @@ export interface CopySet {
   greeting: string;
   cta: string;
   ctaNone: string;
-  ctaSome: (n: number) => string;
   diaryPh: string;
   todoPh: string;
   submit: string;
@@ -74,7 +74,6 @@ export interface CopySet {
   delAsk: string; // 기록 삭제 확인 물음
   delNote: string; // 되돌릴 수 없다는 안내
   footer: string;
-  caps: string[];
   count: (n: number) => string;
   calEmpty: string;
   statusAsk: string; // 상태 off일 때 안내
@@ -83,41 +82,21 @@ export interface CopySet {
   statusPeer: (place: string) => string; // 보드에서 남의 상태 한 줄
 }
 
-export const COPY: Record<'subtle' | 'drip', CopySet> = {
-  subtle: {
-    greeting: '오늘도 조용히 성장 중',
-    cta: '오늘 기록 남기기', ctaNone: '아직 오늘 기록이 없어요', ctaSome: (n) => `오늘 ${n}개 남겼어요. 하나 더?`,
-    diaryPh: '오늘 있었던 일, 편하게 풀어놓아요.', todoPh: '할 일 내용',
-    submit: '기록 남기기', editSubmit: '수정 저장',
-    empty: '아직 안 옴', emptyMe: '오늘 첫 기록을 남겨보세요',
-    offNote: '쉬는 날은 별점 없이 기록돼요.',
-    delAsk: '이 기록을 지울까요?', delNote: '지운 기록은 되돌릴 수 없어요.',
-    footer: '오늘도 크루 중 누군가는 공부를 합니다.',
-    caps: ['별점을 골라주세요', '…내일이 있으니까요', '시동은 걸었어요', '무난하게 순항 중', '오늘 좀 했는데요?', '이 구역의 공부왕'],
-    count: (n) => `4명 중 ${n}명 도장 찍음`,
-    calEmpty: '이 날은 다들 조용했네요.',
-    statusAsk: '공부 시작하면 켜주세요 — 어디서 하나요?',
-    statusLive: (p) => `${p}에서 공부 중`,
-    statusEnd: '마침',
-    statusPeer: (p) => `지금 ${p}에서 공부 중`,
-  },
-  drip: {
-    greeting: '뇌 용량 증설 공사 중',
-    cta: '오늘 기록 남기기', ctaNone: '오늘 아직 0개. 크루가 지켜봅니다', ctaSome: (n) => `오늘 ${n}개째. 멈추지 마세요`,
-    diaryPh: '오늘의 서사, 마음껏 펼치세요.', todoPh: '뭘 하려고 했더라',
-    submit: '박제하기', editSubmit: '변명 수정',
-    empty: '잠수 중', emptyMe: '본인 도장부터 찍으시죠?',
-    offNote: '공식 휴무. 죄책감은 반납하세요.',
-    delAsk: '진짜 지웁니다?', delNote: '지우면 끝. 크루 기억에서도 사라집니다.',
-    footer: '공부는 원래 남이 하는 게 제일 재밌습니다.',
-    caps: ['별점을 골라주세요', '별점이 아깝다는 건 아니고', '한 듯 안 한 듯', '평타는 쳤다', '꽤 진지했잖아요?', '수석 각'],
-    count: (n) => `4명 중 ${n}명 생존 신고`,
-    calEmpty: '전원 잠수한 날이네요.',
-    statusAsk: '어디서 하는지 자수하세요',
-    statusLive: (p) => `${p} 감금 중`,
-    statusEnd: '탈출',
-    statusPeer: (p) => `지금 ${p} 감금 중`,
-  },
+export const COPY: CopySet = {
+  greeting: '오늘도 조용히 성장 중',
+  cta: '오늘 기록 남기기', ctaNone: '아직 오늘 기록이 없어요',
+  diaryPh: '오늘 하루 기록하기', todoPh: '할 일 내용',
+  submit: '기록 남기기', editSubmit: '수정 저장',
+  empty: '아직 안 옴', emptyMe: '오늘 첫 기록을 남겨보세요',
+  offNote: '쉬는 날은 별점 없이 기록돼요.',
+  delAsk: '이 기록을 지울까요?', delNote: '지운 기록은 되돌릴 수 없어요.',
+  footer: '오늘도 크루 중 누군가는 공부를 합니다.',
+  count: (n) => `4명 중 ${n}명 도장 찍음`,
+  calEmpty: '이 날은 다들 조용했네요.',
+  statusAsk: '공부 시작하면 켜주세요',
+  statusLive: (p) => `${p}에서 공부 중`,
+  statusEnd: '마침',
+  statusPeer: (p) => `지금 ${p}에서 공부 중`,
 };
 
 export const W = ['일', '월', '화', '수', '목', '금', '토'];
@@ -189,6 +168,49 @@ export function seedReactionSets(): ReactionSet[] {
     r('s1', 'jj', ['👏'], 300),
     r('s3', 'wg', ['👏', '💪'], 700), r('s3', 'th', ['👏'], 690), r('s3', 'jj', ['👏'], 680),
     r('s6', 'sh', ['😴'], 800), r('s6', 'wg', ['😴'], 790),
+  ];
+}
+
+/** 데모 모드 알림 시드 — 디자인의 내역 화면 예시를 시드 기록(s*)에 맞게 옮겼다.
+    id가 UUID가 아니라(n*) 지속·동기화되지 않는다. 보는 사람(me) 기준으로 행위자를 고른다. */
+export function seedNotifications(me: MemberId): Notification[] {
+  const now = Date.now();
+  const ago = (min: number): string => new Date(now - min * 60_000).toISOString();
+  const [a, b, c] = MEMBER_IDS.filter((m) => m !== me) as [MemberId, MemberId, MemberId];
+  const n = (
+    id: string,
+    min: number,
+    p: Partial<Notification> & Pick<Notification, 'kind' | 'why'>,
+  ): Notification => ({
+    id,
+    m: me,
+    actor: null,
+    entryId: null,
+    quote: '',
+    ctx: '',
+    actors: [],
+    count: 1,
+    createdAt: ago(min),
+    updatedAt: ago(min),
+    readAt: null,
+    ...p,
+  });
+  return [
+    n('n1', 46, { kind: 'mention', why: 'mention', actor: c,
+      quote: `@${MEMBER_NAMES[me]} 그 문제집 몇 회독 했어요? 나도 사려는데`,
+      ctx: `${MEMBER_NAMES[c]}의 기록 · 자격증` }),
+    n('n2', 118, { kind: 'comment', why: 'mine', actor: a,
+      quote: '하루에 코테 3문제라니 미쳤다', ctx: '내 기록 · 코딩테스트' }),
+    n('n3', 260, { kind: 'start', why: 'daily', actor: a, ctx: '도서관 · 오전 9:12' }),
+    n('n4', 60 * 21, { kind: 'react', why: 'react_daily', count: 5, actors: [a, b, c],
+      updatedAt: ago(60 * 20), readAt: ago(60 * 2) }),
+    n('n5', 60 * 27, { kind: 'reply', why: 'reply', actor: b,
+      quote: '그 강의 2배속으로 들으면 딱 맞아요',
+      ctx: `${MEMBER_NAMES[b]}의 기록 · 영어`, readAt: ago(60 * 3) }),
+    n('n6', 60 * 29, { kind: 'system', why: 'quiet', count: 2,
+      ctx: `오전 1:10 ${MEMBER_NAMES[b]} 시작 · 오전 2:40 ${MEMBER_NAMES[c]} 댓글`,
+      readAt: ago(60 * 3) }),
+    n('n7', 60 * 31, { kind: 'start', why: 'daily', actor: c, ctx: '카페 · 오후 1:45', readAt: ago(60 * 4) }),
   ];
 }
 

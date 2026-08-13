@@ -136,17 +136,20 @@ export class SyncClient {
       if (r.m !== this.memberId) this.store.dropReactionFromQueue(r.entryId);
       else reactions.push(r);
     }
+    const reads = this.store.pendingNotificationReads();
     const B = PUSH_LIMITS.batch;
-    // 세 스트림을 각자 배치로 쪼개 한 요청에 함께 싣는다 — 라운드 수는 가장 긴 스트림 기준
+    // 네 스트림을 각자 배치로 쪼개 한 요청에 함께 싣는다 — 라운드 수는 가장 긴 스트림 기준
     const rounds = Math.max(
       Math.ceil(rows.length / B),
       Math.ceil(comments.length / B),
       Math.ceil(reactions.length / B),
+      Math.ceil(reads.length / B),
     );
     for (let i = 0; i < rounds; i++) {
       const batch = rows.slice(i * B, i * B + B);
       const cBatch = comments.slice(i * B, i * B + B);
       const rBatch = reactions.slice(i * B, i * B + B);
+      const nBatch = reads.slice(i * B, i * B + B);
       const revById = new Map(batch.map((p) => [p.entry.id, p.rev]));
       const res = await fetch('/api/sync/push', {
         method: 'POST',
@@ -155,6 +158,7 @@ export class SyncClient {
           entries: batch.map((p) => p.entry),
           comments: cBatch,
           reactions: rBatch,
+          notificationReads: nBatch,
         } satisfies PushRequest),
         signal: timeoutSignal(),
       });
@@ -197,6 +201,14 @@ export class SyncClient {
           if (mine) this.store.ackReaction(mine, r.row);
         }
       }
+      if (nBatch.length > 0) {
+        // 같은 규약 — 보냈는데 결과 필드가 없으면 구버전 Worker의 무시다. 큐를 지키고 재시도.
+        if (!Array.isArray(data.notificationReadResults)) {
+          throw new Error('push notification read results missing');
+        }
+        const settled = new Set(data.notificationReadResults);
+        this.store.ackNotificationReads(nBatch.filter((r) => settled.has(r.id)));
+      }
     }
   }
 
@@ -227,7 +239,8 @@ export class SyncClient {
     let cursor = start.entries;
     let cCursor = start.comments;
     let rCursor = start.reactions;
-    // 500행 한도에 걸렸을 수 있으니 세 스트림이 다 비워질 때까지 반복
+    let nCursor = start.notifications;
+    // 500행 한도에 걸렸을 수 있으니 네 스트림이 다 비워질 때까지 반복
     for (;;) {
       const qs = new URLSearchParams();
       if (cursor) {
@@ -245,6 +258,10 @@ export class SyncClient {
         qs.set('rsinceEntry', rCursor.entryId);
         qs.set('rsinceM', rCursor.m);
       }
+      if (nCursor) {
+        qs.set('nsince', nCursor.ts);
+        qs.set('nsinceId', nCursor.id);
+      }
       const q = qs.toString();
       const res = await fetch(`/api/sync/pull${q ? `?${q}` : ''}`, {
         headers: authHeaders(this.token),
@@ -252,12 +269,19 @@ export class SyncClient {
       });
       ensureOk(res, 'pull');
       const data = (await res.json()) as PullResponse;
-      // 응답에 필드가 아예 없으면 구버전 Worker다 — 그 스트림은 없는 것으로 보고 커서도 안 건드린다
+      // 응답에 필드가 아예 없으면 구버전 Worker다 — 그 스트림은 없는 것으로 보고 커서도 안 건드린다.
+      // 알림은 커서 필드까지 함께 있어야 산 스트림으로 본다: 행만 있고 커서가 없는 반쪽 응답을
+      // 믿으면 커서가 영영 전진하지 못해 500행 페이지에서 같은 페이지를 무한 반복한다.
       const cRows = Array.isArray(data.comments) ? data.comments : undefined;
       const rRows = Array.isArray(data.reactions) ? data.reactions : undefined;
+      const nRows =
+        Array.isArray(data.notifications) && 'notificationCursor' in data
+          ? data.notifications
+          : undefined;
       const eFull = data.rows.length >= PAGE;
       const cFull = (cRows?.length ?? 0) >= PAGE;
       const rFull = (rRows?.length ?? 0) >= PAGE;
+      const nFull = (nRows?.length ?? 0) >= PAGE;
       // 행 반영과 커서 전진을 스토어가 한 트랜잭션으로 처리한다.
       // 중간 페이지(=500행)인 스트림은 이전 커서를 영속화한다 — 페이지 사이에서 탭이 죽으면
       // 다시 받으면 그만이지만(중복은 updatedAt으로 무시), 전진한 커서가 지평선 너머로
@@ -270,11 +294,14 @@ export class SyncClient {
         commentCursor: cRows && (cFull ? cCursor : (data.commentCursor ?? null)),
         reactions: rRows,
         reactionCursor: rRows && (rFull ? rCursor : (data.reactionCursor ?? null)),
+        notifications: nRows,
+        notificationCursor: nRows && (nFull ? nCursor : (data.notificationCursor ?? null)),
       });
       if (data.cursor) cursor = data.cursor;
       if (data.commentCursor) cCursor = data.commentCursor;
       if (data.reactionCursor) rCursor = data.reactionCursor;
-      if (!eFull && !cFull && !rFull) break;
+      if (data.notificationCursor) nCursor = data.notificationCursor;
+      if (!eFull && !cFull && !rFull && !nFull) break;
     }
   }
 }
