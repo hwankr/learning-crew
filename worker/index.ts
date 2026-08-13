@@ -10,19 +10,22 @@ import {
   pullComments,
   pushReactions,
   pullReactions,
+  pullNotifications,
+  markNotificationsRead,
+  getNotifPrefs,
+  putNotifPrefs,
   setStatus,
   allStatuses,
   getStatusRow,
   claimNotifySlot,
   upsertPushSub,
   deletePushSub,
-  deleteGonePushSub,
-  pushSubsExcept,
 } from './queries';
-import { NOTIFY_COOLDOWN_MS, sendPushToAll, shouldNotify } from './push';
+import { NOTIFY_COOLDOWN_MS, shouldNotify } from './push';
+import { notifyCommentEvents, notifyStart, runHourly } from './notify';
 import {
   MEMBER_IDS,
-  MEMBER_NAMES,
+  NOTIF_MODES,
   PLACES,
   PUSH_LIMITS,
   UUID_RE,
@@ -32,6 +35,10 @@ import {
   type Comment,
   type Entry,
   type MemberId,
+  type NotifMode,
+  type NotifPrefs,
+  type NotifPrefsResponse,
+  type NotificationRead,
   type PullCursor,
   type PullResponse,
   type PushRequest,
@@ -91,6 +98,7 @@ const requireMember: MiddlewareHandler<Env> = async (c, next) => {
 };
 app.use('/api/sync/*', requireMember);
 app.use('/api/push/*', requireMember);
+app.use('/api/notify/*', requireMember);
 
 /** 댓글 행 검증 — 본문은 trim 후 길이를 본다(공백만 남는 댓글은 실수다). */
 function invalidCommentReason(x: Comment, me: MemberId): string | null {
@@ -134,18 +142,32 @@ app.post('/api/sync/push', async (c) => {
   } catch {
     return c.json({ error: 'invalid json' }, 400);
   }
-  // 세 스트림이 한 요청에 함께 온다. 구버전 클라이언트는 entries만 보내므로 나머지는 없으면 빈 배열.
+  // 네 스트림이 한 요청에 함께 온다. 구버전 클라이언트는 entries만 보내므로 나머지는 없으면 빈 배열.
   const reqComments = req.comments ?? [];
   const reqReactions = req.reactions ?? [];
+  const reqReads = req.notificationReads ?? [];
   if (
     !Array.isArray(req.entries) ||
     req.entries.length > PUSH_LIMITS.batch ||
     !Array.isArray(reqComments) ||
     reqComments.length > PUSH_LIMITS.batch ||
     !Array.isArray(reqReactions) ||
-    reqReactions.length > PUSH_LIMITS.batch
+    reqReactions.length > PUSH_LIMITS.batch ||
+    !Array.isArray(reqReads) ||
+    reqReads.length > PUSH_LIMITS.batch
   ) {
     return c.json({ error: 'bad batch' }, 400);
+  }
+  const reads: NotificationRead[] = [];
+  for (const r of reqReads) {
+    if (!r || typeof r !== 'object' || typeof r.id !== 'string' || !UUID_RE.test(r.id)) {
+      return c.json({ error: 'bad notification read' }, 400);
+    }
+    if (typeof r.at !== 'string' || !Number.isFinite(Date.parse(r.at))) {
+      return c.json({ error: 'bad notification read', id: r.id }, 400);
+    }
+    // at은 서버가 준 updatedAt의 에코 — 미래로 조작해도 자기 알림 읽음 처리만 앞당길 뿐이다
+    reads.push({ id: canonicalUuid(r.id), at: new Date(Date.parse(r.at)).toISOString() });
   }
   const seen = new Set<string>();
   for (const e of req.entries) {
@@ -202,12 +224,22 @@ app.post('/api/sync/push', async (c) => {
     else withV.push(e);
   }
   const db = drizzle(neon(c.env.DATABASE_URL));
-  const [outcome, legacyApplied, cOut, rOut] = await Promise.all([
+  const [outcome, legacyApplied, cOut, rOut, readResults] = await Promise.all([
     pushEntries(db, withV, me),
     pushEntriesLegacy(db, legacy, me),
     pushComments(db, cRows, me),
     pushReactions(db, rRows),
+    markNotificationsRead(db, me, reads),
   ]);
+  // 방금 반영된 새 댓글(tombstone 제외)과 새로 추가된 이모지만 알림이 된다 —
+  // 재전송·삭제·제거는 applied/deltas에서 이미 걸러져 알림이 중복되지 않는다.
+  const newComments = cOut.applied.filter((r) => r.deletedAt === null);
+  const reactionDeltas = rOut.deltas.filter((d) => d.added.length > 0);
+  if (newComments.length || reactionDeltas.length) {
+    c.executionCtx.waitUntil(
+      notifyCommentEvents(db, c.env, me, newComments, reactionDeltas, now),
+    );
+  }
   const res: PushResponse = {
     ok: true,
     serverTime: new Date().toISOString(),
@@ -226,12 +258,13 @@ app.post('/api/sync/push', async (c) => {
       ...rOut.applied.map((row) => ({ entryId: row.entryId, m: row.m, applied: true, row })),
       ...rOut.current.map((row) => ({ entryId: row.entryId, m: row.m, applied: false, row })),
     ],
+    notificationReadResults: readResults,
   };
   return c.json(res);
 });
 
 app.get('/api/sync/pull', async (c) => {
-  // 세 커서는 서로 독립이다 — 하나만 와도, 아예 없어도(그 스트림만 처음부터) 동작한다.
+  // 네 커서는 서로 독립이다 — 하나만 와도, 아예 없어도(그 스트림만 처음부터) 동작한다.
   // 깨진 값은 SQL 캐스팅에서 500이 되므로 형식이 맞을 때만 커서로 삼는다.
   const since = c.req.query('since');
   const sinceId = c.req.query('sinceId');
@@ -248,12 +281,17 @@ app.get('/api/sync/pull', async (c) => {
       // 지평선 커서의 멤버 자리는 빈 문자열이라 rsinceM은 값이 ''이어도 커서로 인정한다
       ? { ts: rsince, entryId: rsinceEntry, m: rsinceM as MemberId | '' }
       : null;
+  const nsince = c.req.query('nsince');
+  const nsinceId = c.req.query('nsinceId');
+  const nCursor: PullCursor | null =
+    nsince && nsinceId && UUID_RE.test(nsinceId) ? { ts: nsince, id: nsinceId } : null;
   const db = drizzle(neon(c.env.DATABASE_URL));
-  const [result, statuses, cRes, rRes] = await Promise.all([
+  const [result, statuses, cRes, rRes, nRes] = await Promise.all([
     pullSince(db, cursor),
     allStatuses(db),
     pullComments(db, cCursor),
     pullReactions(db, rCursor),
+    pullNotifications(db, c.get('memberId'), nCursor),
   ]);
   return c.json({
     ...result,
@@ -262,6 +300,8 @@ app.get('/api/sync/pull', async (c) => {
     commentCursor: cRes.cursor,
     reactions: rRes.rows,
     reactionCursor: rRes.cursor,
+    notifications: nRes.rows,
+    notificationCursor: nRes.cursor,
   } satisfies PullResponse);
 });
 
@@ -317,30 +357,74 @@ app.post('/api/sync/status', async (c) => {
   const prev = await getStatusRow(db, me);
   const { status: saved, applied } = await setStatus(db, me, s);
 
-  // off→on 전환이면 크루에게 푸시 — 응답을 막지 않게 백그라운드로.
-  // 발송 슬롯은 조건부 UPDATE로 선점한다: 두 기기가 동시에 켜도 한쪽만 보낸다.
+  // off→on 전환이면 크루에게 알림 팬아웃 — 응답을 막지 않게 백그라운드로.
+  // 발송 슬롯은 조건부 UPDATE로 선점한다: 두 기기가 동시에 켜도 한쪽만 팬아웃한다.
+  // (예전과 달리 구독자가 없어도 선점한다 — 이제 기기 푸시가 없어도 내역 행 자체가 산출물이다)
   if (applied && shouldNotify(prev, s.on, now)) {
     c.executionCtx.waitUntil(
       (async () => {
-        // 발송 가능성 확인이 먼저 — 키가 없거나 구독자가 없는데 슬롯을 선점하면 쿨다운만 태운다
-        if (!c.env.VAPID_PUBLIC_KEY || !c.env.VAPID_PRIVATE_KEY) return;
-        const targets = await pushSubsExcept(db, me);
-        if (targets.length === 0) return;
         if (!(await claimNotifySlot(db, me, NOTIFY_COOLDOWN_MS))) return;
-        await sendPushToAll(
-          c.env,
-          targets,
-          {
-            title: `🟢 ${MEMBER_NAMES[me]} — ${s.place}에서 공부 시작!`,
-            body: '오늘도 같이 달려요 👟',
-            url: '/',
-          },
-          (endpoint) => deleteGonePushSub(db, endpoint),
-        );
+        await notifyStart(db, c.env, me, s.place!, s.since!, now);
       })(),
     );
   }
   return c.json({ ok: true, status: saved, applied } satisfies StatusSetResponse);
+});
+
+/* ---------- 알림 설정 ---------- */
+
+const HOUR_RE = /^([01]\d|2[0-3]):00$/;
+
+function isNotifMode(v: unknown): v is NotifMode {
+  return (NOTIF_MODES as readonly unknown[]).includes(v);
+}
+
+/** 설정 본문 검증 — 우리 클라이언트만 오는 자리라 느슨한 복구 대신 엄격한 400을 쓴다.
+    시각이 'HH:00'인 것은 규약이다: 다이제스트 cron이 시간 단위로만 돈다. */
+function invalidPrefsReason(x: Omit<NotifPrefs, 'm' | 'updatedAt'>): string | null {
+  if (!x || typeof x !== 'object') return 'not an object';
+  if (!isNotifMode(x.startMode)) return 'bad startMode';
+  if (!isNotifMode(x.reactMode)) return 'bad reactMode';
+  for (const k of ['cmMine', 'cmReply', 'cmAll', 'quietEnabled'] as const) {
+    if (typeof x[k] !== 'boolean') return `bad ${k}`;
+  }
+  if (typeof x.quietFrom !== 'string' || !HOUR_RE.test(x.quietFrom)) return 'bad quietFrom';
+  if (typeof x.quietTo !== 'string' || !HOUR_RE.test(x.quietTo)) return 'bad quietTo';
+  if (x.perMember === null || typeof x.perMember !== 'object' || Array.isArray(x.perMember)) {
+    return 'bad perMember';
+  }
+  for (const [k, v] of Object.entries(x.perMember)) {
+    if (!(MEMBER_IDS as readonly string[]).includes(k) || !isNotifMode(v)) return 'bad perMember';
+  }
+  return null;
+}
+
+app.get('/api/notify/prefs', async (c) => {
+  const prefs = await getNotifPrefs(drizzle(neon(c.env.DATABASE_URL)), c.get('memberId'));
+  return c.json({ ok: true, prefs } satisfies NotifPrefsResponse);
+});
+
+app.put('/api/notify/prefs', async (c) => {
+  let body: Omit<NotifPrefs, 'm' | 'updatedAt'>;
+  try {
+    body = await c.req.json<Omit<NotifPrefs, 'm' | 'updatedAt'>>();
+  } catch {
+    return c.json({ error: 'invalid json' }, 400);
+  }
+  const reason = invalidPrefsReason(body);
+  if (reason) return c.json({ error: reason }, 400);
+  const prefs = await putNotifPrefs(drizzle(neon(c.env.DATABASE_URL)), c.get('memberId'), {
+    startMode: body.startMode,
+    perMember: body.perMember,
+    cmMine: body.cmMine,
+    cmReply: body.cmReply,
+    cmAll: body.cmAll,
+    reactMode: body.reactMode,
+    quietEnabled: body.quietEnabled,
+    quietFrom: body.quietFrom,
+    quietTo: body.quietTo,
+  });
+  return c.json({ ok: true, prefs } satisfies NotifPrefsResponse);
 });
 
 /* ---------- 웹 푸시 구독 관리 ---------- */
@@ -399,4 +483,12 @@ app.post('/api/push/unsubscribe', async (c) => {
 // 혹시 Worker까지 온 비-API 요청은 SPA 자산으로 넘긴다.
 app.notFound((c) => c.env.ASSETS.fetch(c.req.raw));
 
-export default app;
+export default {
+  fetch: app.fetch,
+  // 매시 정각(wrangler triggers) — 응원 하루 요약·방해 금지 다이제스트·보관 정리.
+  // 기준 시각은 Date.now()가 아니라 예약 시각(scheduledTime)이다: 실행이 몇 분 밀려도
+  // "그 시각의 일감"(quietTo 시각 판정·다이제스트 창)이 어긋나지 않는다.
+  scheduled(event: ScheduledController, env: Env['Bindings'], ctx: ExecutionContext) {
+    ctx.waitUntil(runHourly(drizzle(neon(env.DATABASE_URL)), env, event.scheduledTime));
+  },
+};

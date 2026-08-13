@@ -17,6 +17,8 @@ import type {
   Entry,
   MemberId,
   MemberStatus,
+  Notification,
+  NotificationRead,
   Place,
   PullCursor,
   ReactionCursor,
@@ -33,7 +35,13 @@ import {
   UUID_RE,
 } from '../../shared/types';
 import { openCrewDB, reactionKey, type CrewDatabase, type CrewDB, type QueueMeta } from './idb';
-import { seedComments, seedEntries, seedReactionSets, seedStatuses } from '../lib/constants';
+import {
+  seedComments,
+  seedEntries,
+  seedNotifications,
+  seedReactionSets,
+  seedStatuses,
+} from '../lib/constants';
 
 type StoreName =
   | 'entries'
@@ -42,6 +50,8 @@ type StoreName =
   | 'commentQueue'
   | 'reactions'
   | 'reactionQueue'
+  | 'notifications'
+  | 'notifReadQueue'
   | 'meta';
 type CrewTx = IDBPTransaction<CrewDB, StoreName[], 'readwrite'>;
 
@@ -66,6 +76,10 @@ export interface StoreSnapshot {
   comments: Map<string, Comment[]>;
   /** entryId → 이모지가 하나 이상인 멤버별 리액션 집합 */
   reactions: Map<string, ReactionSet[]>;
+  /** 내 알림 내역 — (createdAt, id) 내림차순(최신 먼저). 읽은 행도 담긴다(내역 화면용) */
+  notifications: Notification[];
+  /** 안 읽은 알림 수 — 벨 배지가 이 값 하나만 본다 */
+  unreadNotifications: number;
   sync: SyncInfo;
 }
 
@@ -76,6 +90,16 @@ const STATUS_DIRTY_KEY = 'statusDirty';
 const ENTRY_CURSOR_KEY = 'cursor';
 const COMMENT_CURSOR_KEY = 'commentCursor';
 const REACTION_CURSOR_KEY = 'reactionCursor';
+/** 알림 커서만 멤버별 키다 — 이 스트림은 토큰 주인 것만 오므로, 같은 기기에서 멤버를
+    바꿔 로그인했을 때 공용 커서를 물려받으면 그 멤버의 기존 알림을 영구히 건너뛴다. */
+const notifCursorKey = (m: MemberId): string => `notifCursor:${m}`;
+
+/** 읽음 큐의 IDB 키 — `${memberId}|${notifId}`. 멤버 구분 이유는 idb.ts 참고. */
+const notifReadKey = (m: MemberId, id: string): string => `${m}|${id}`;
+
+/** 알림 보관 기간 — 서버(NOTIF_RETENTION_DAYS)와 같은 30일. 서버는 하드 삭제라 tombstone이
+    안 오므로, 클라이언트가 스스로 나이 든 행을 지워야 로컬 복제본이 무한히 자라지 않는다. */
+const NOTIF_RETENTION_MS = 30 * 86_400_000;
 
 /** 3-way 병합 대상 필드 — 이 밖의 필드(v/updatedAt)는 동기화 메타데이터다.
     tag는 tags에서 파생되는 값이라 병합 대상이 아니다 — 병합 후 다시 계산한다. */
@@ -279,6 +303,43 @@ export function isDuplicateReaction(cur: ReactionSet, row: ReactionSet): boolean
   return cur.updatedAt === row.updatedAt && cur.actedAt === row.actedAt;
 }
 
+/** pull이 실어 온 알림 행을 어떻게 반영할지 — 'skip' 또는 저장할 행.
+    queuedAt = 이 행의 읽음 처리가 아직 서버에 못 갔을 때, 읽은 시점에 관측한 updatedAt
+    (없으면 null). 그 세대(row.updatedAt <= queuedAt)의 안 읽음 행에는 로컬 읽음이 이긴다 —
+    그대로 채택하면 방금 읽은 알림이 다시 안 읽음으로 번쩍인다. 반대로 행이 그보다
+    새로우면(집계 행에 새 응원) 서버의 "다시 안 읽음"이 이긴다 — 옛 읽음은 옛 세대의 것이다. */
+export function notifPullAction(
+  cur: Notification | undefined,
+  row: Notification,
+  queuedAt: string | null,
+  nowIso: string,
+): 'skip' | Notification {
+  // 느린 응답(오래된 스냅샷)이 그 사이 채택된 더 새 행을 되돌리지 못하게 (ISO 사전순 = 시간순)
+  if (cur && row.updatedAt < cur.updatedAt) return 'skip';
+  const localReadWins = queuedAt !== null && row.readAt === null && row.updatedAt <= queuedAt;
+  const next = localReadWins ? { ...row, readAt: cur?.readAt ?? nowIso } : row;
+  // 커서 안전 윈도우의 중복 전달 — updatedAt이 같아도 집계 갱신 둘이 같은 밀리초에
+  // 몰리면(프로토콜이 ms까지만 내보낸다) count가 다를 수 있어 count까지 본다
+  if (
+    cur &&
+    cur.updatedAt === next.updatedAt &&
+    (cur.readAt === null) === (next.readAt === null) &&
+    cur.count === next.count
+  ) {
+    return 'skip';
+  }
+  return next;
+}
+
+/** 스냅샷용 알림 목록 — (createdAt, id) 내림차순. 보관 기간이 지난 행은 뺀다. */
+export function sortNotifications(list: Iterable<Notification>, now: number): Notification[] {
+  const out = [...list].filter((n) => now - Date.parse(n.createdAt) < NOTIF_RETENTION_MS);
+  out.sort((a, b) =>
+    a.createdAt === b.createdAt ? cmp(b.id, a.id) : cmp(b.createdAt, a.createdAt),
+  );
+  return out;
+}
+
 /** meta에서 읽은 값이 기록·댓글 커서인가 — 리액션 커서(entryId/m)와 모양으로 구분한다. */
 function asPullCursor(v: unknown): PullCursor | null {
   return v !== null && typeof v === 'object' && 'ts' in v && 'id' in v ? (v as PullCursor) : null;
@@ -304,6 +365,10 @@ export class CrewStore {
   // 리액션: reactionKey(entryId, m) → 행. dirty는 entryId만으로 충분하다 — 내 행만 dirty가 된다
   private reactions = new Map<string, ReactionSet>();
   private reactionDirty = new Set<string>();
+  // 알림: id → 행(전부 내 것 — pull이 토큰 주인 것만 준다). 큐가 담는 건 읽음 처리뿐이고,
+  // 값은 읽은 시점에 관측한 그 행의 updatedAt(세대 판별값)이다
+  private notifications = new Map<string, Notification>();
+  private notifReadQueue = new Map<string, string>();
   private me: MemberId = 'sh';
   private demo = false;
   private listeners = new Set<() => void>();
@@ -314,6 +379,8 @@ export class CrewStore {
     statuses: {},
     comments: new Map(),
     reactions: new Map(),
+    notifications: [],
+    unreadNotifications: 0,
     sync: { phase: 'ok', pending: 0 },
   };
   private db: CrewDatabase | null = null;
@@ -325,6 +392,7 @@ export class CrewStore {
   private lastCursor: PullCursor | null = null;
   private lastCommentCursor: PullCursor | null = null;
   private lastReactionCursor: ReactionCursor | null = null;
+  private lastNotifCursor: PullCursor | null = null;
 
   /** SyncClient가 등록 — 로컬 쓰기 직후 push를 예약한다. */
   onLocalWrite: (() => void) | null = null;
@@ -352,19 +420,25 @@ export class CrewStore {
         'commentQueue',
         'reactions',
         'reactionQueue',
+        'notifications',
+        'notifReadQueue',
         'meta',
       ]);
-      const [rows, qkeys, qvals, cRows, cQueue, rRows, rQueue, st, dirty] = await Promise.all([
-        tx.objectStore('entries').getAll(),
-        tx.objectStore('queue').getAllKeys(),
-        tx.objectStore('queue').getAll(),
-        tx.objectStore('comments').getAll(),
-        tx.objectStore('commentQueue').getAllKeys(),
-        tx.objectStore('reactions').getAll(),
-        tx.objectStore('reactionQueue').getAllKeys(),
-        tx.objectStore('meta').get(MY_STATUS_KEY),
-        tx.objectStore('meta').get(STATUS_DIRTY_KEY),
-      ]);
+      const [rows, qkeys, qvals, cRows, cQueue, rRows, rQueue, nRows, nQKeys, nQVals, st, dirty] =
+        await Promise.all([
+          tx.objectStore('entries').getAll(),
+          tx.objectStore('queue').getAllKeys(),
+          tx.objectStore('queue').getAll(),
+          tx.objectStore('comments').getAll(),
+          tx.objectStore('commentQueue').getAllKeys(),
+          tx.objectStore('reactions').getAll(),
+          tx.objectStore('reactionQueue').getAllKeys(),
+          tx.objectStore('notifications').getAll(),
+          tx.objectStore('notifReadQueue').getAllKeys(),
+          tx.objectStore('notifReadQueue').getAll(),
+          tx.objectStore('meta').get(MY_STATUS_KEY),
+          tx.objectStore('meta').get(STATUS_DIRTY_KEY),
+        ]);
       await tx.done;
       for (const e of rows) this.map.set(e.id, normalizeEntry(e));
       qkeys.forEach((k, i) => this.queue.set(String(k), qvals[i]!));
@@ -372,6 +446,31 @@ export class CrewStore {
       for (const k of cQueue) this.commentQueue.add(String(k));
       for (const r of rRows) this.reactions.set(reactionKey(r.entryId, r.m), r);
       for (const k of rQueue) this.reactionDirty.add(String(k));
+      // 알림 — 남의 행(멤버 전환 잔재)과 보관 기간 지난 행은 걸러 싣고, 후자는 IDB에서도 지운다
+      const now = Date.now();
+      const expired: string[] = [];
+      for (const n of nRows) {
+        if (n.m !== opts.memberId) continue;
+        if (now - Date.parse(n.createdAt) >= NOTIF_RETENTION_MS) expired.push(n.id);
+        else this.notifications.set(n.id, n);
+      }
+      // 읽음 큐는 내 접두사(`m|`)만 — 다른 멤버의 미전송 읽음을 내 토큰으로 정산해 버리면 안 된다
+      const myPrefix = `${opts.memberId}|`;
+      nQKeys.forEach((k, i) => {
+        const key = String(k);
+        if (key.startsWith(myPrefix)) {
+          this.notifReadQueue.set(key.slice(myPrefix.length), String(nQVals[i]));
+        }
+      });
+      if (expired.length && !opts.demo) {
+        this.txWrite(['notifications', 'notifReadQueue'], (tx2) => {
+          for (const id of expired) {
+            void tx2.objectStore('notifications').delete(id);
+            void tx2.objectStore('notifReadQueue').delete(notifReadKey(opts.memberId, id));
+          }
+        }, false);
+        for (const id of expired) this.notifReadQueue.delete(id);
+      }
       // 내 상태는 지속 — 다른 멤버 상태는 어차피 첫 pull에 실려 온다
       const mine = asMemberStatus(st);
       if (!opts.demo && mine && mine.m === opts.memberId) {
@@ -386,6 +485,7 @@ export class CrewStore {
       // 시드 댓글·리액션은 시드 기록(s*)에 달려 있어 지속·동기화 대상이 아니다 — 메모리에만 산다
       for (const c of seedComments()) this.comments.set(c.id, c);
       for (const r of seedReactionSets()) this.reactions.set(reactionKey(r.entryId, r.m), r);
+      for (const n of seedNotifications(opts.memberId)) this.notifications.set(n.id, n);
     }
     if (this.db && !opts.demo && typeof BroadcastChannel !== 'undefined') {
       this.bc = new BroadcastChannel('lc-sync');
@@ -565,6 +665,8 @@ export class CrewStore {
     commentCursor?: PullCursor | null;
     reactions?: ReactionSet[];
     reactionCursor?: ReactionCursor | null;
+    notifications?: Notification[];
+    notificationCursor?: PullCursor | null;
   }): void {
     const { rows, statuses, cursor } = p;
     let changed = false;
@@ -636,6 +738,23 @@ export class CrewStore {
       changed = true;
     }
 
+    // 알림 — 서버만 만드는 스트림. 같은 세대의 안 읽음 행에는 아직 못 보낸 로컬 "읽음"이 이긴다.
+    const nowIso = new Date().toISOString();
+    const nPuts: Notification[] = [];
+    for (const row of p.notifications ?? []) {
+      if (row.m !== this.me) continue; // 방어 — 서버가 내 것만 주지만 멤버 전환 잔재를 막는다
+      const act = notifPullAction(
+        this.notifications.get(row.id),
+        row,
+        this.notifReadQueue.get(row.id) ?? null,
+        nowIso,
+      );
+      if (act === 'skip') continue;
+      this.notifications.set(act.id, act);
+      nPuts.push(act);
+      changed = true;
+    }
+
     // 실질 변경도 커서 전진도 없는 폴링에서는 IDB에 손대지 않고,
     // 커서만 전진했으면 쓰되 다른 탭은 깨우지 않는다
     const cursorChanged =
@@ -649,26 +768,38 @@ export class CrewStore {
       (this.lastReactionCursor?.ts !== rc.ts ||
         this.lastReactionCursor?.entryId !== rc.entryId ||
         this.lastReactionCursor?.m !== rc.m);
+    const nc = p.notificationCursor;
+    const notifCursorChanged =
+      !!nc && (this.lastNotifCursor?.ts !== nc.ts || this.lastNotifCursor?.id !== nc.id);
     const notify =
       puts.length > 0 ||
       dels.length > 0 ||
       myStatus !== null ||
       cPuts.length > 0 ||
       cDels.length > 0 ||
-      rPuts.length > 0;
-    if (!notify && !cursorChanged && !commentCursorChanged && !reactionCursorChanged) {
+      rPuts.length > 0 ||
+      nPuts.length > 0;
+    if (
+      !notify &&
+      !cursorChanged &&
+      !commentCursorChanged &&
+      !reactionCursorChanged &&
+      !notifCursorChanged
+    ) {
       if (changed) this.bump();
       return;
     }
     if (cursorChanged) this.lastCursor = cursor;
     if (commentCursorChanged) this.lastCommentCursor = cc;
     if (reactionCursorChanged) this.lastReactionCursor = rc;
+    if (notifCursorChanged) this.lastNotifCursor = nc;
     // 손댈 스토어만 트랜잭션에 넣는다 — 안 쓰는 스토어까지 잠그면 다른 탭의 쓰기를 괜히 막는다.
     // 큐 스토어까지 넣는 이유: 다른 탭의 미전송 쓰기를 같은 트랜잭션 안에서 읽어 피해 가야 한다
     const stores: StoreName[] = ['meta'];
     if (puts.length > 0 || dels.length > 0) stores.push('entries');
     if (cPuts.length > 0 || cDels.length > 0) stores.push('comments', 'commentQueue');
     if (rPuts.length > 0) stores.push('reactions', 'reactionQueue');
+    if (nPuts.length > 0) stores.push('notifications', 'notifReadQueue');
     this.txWrite(
       stores,
       async (tx) => {
@@ -712,6 +843,24 @@ export class CrewStore {
           }
           if (skipped) this.scheduleRefresh();
         }
+        if (nPuts.length > 0) {
+          // 다른 탭이 남긴 미전송 읽음(IDB 큐)이 이 세대의 행을 읽은 것이면 읽음을 보존한 채
+          // 서버의 새 내용을 쓴다 — put을 통째로 건너뛰면 커서만 전진해 IDB 행이 낡은 채
+          // 남는다. 행이 큐의 세대보다 새로우면(집계에 새 응원) 서버의 안 읽음이 이긴다.
+          const qStore = tx.objectStore('notifReadQueue');
+          const store = tx.objectStore('notifications');
+          for (const n of nPuts) {
+            let next = n;
+            if (n.readAt === null && !this.notifReadQueue.has(n.id)) {
+              const at = await qStore.get(notifReadKey(this.me, n.id));
+              if (typeof at === 'string' && n.updatedAt <= at) {
+                const stored = await store.get(n.id);
+                next = { ...n, readAt: stored?.readAt ?? nowIso };
+              }
+            }
+            void store.put(next);
+          }
+        }
         const meta = tx.objectStore('meta');
         if (myStatus) void meta.put(myStatus, MY_STATUS_KEY);
         if (cursor) void meta.put(cursor, ENTRY_CURSOR_KEY);
@@ -719,6 +868,7 @@ export class CrewStore {
         // Postgres 마이크로초가 밀리초로 잘려 같은 행을 영원히 다시 싣는다
         if (cc) void meta.put(cc, COMMENT_CURSOR_KEY);
         if (rc) void meta.put(rc, REACTION_CURSOR_KEY);
+        if (nc) void meta.put(nc, notifCursorKey(this.me));
       },
       notify,
     );
@@ -831,6 +981,65 @@ export class CrewStore {
     this.reactionDirty.delete(entryId);
     this.txWrite(['reactionQueue'], (tx) => {
       void tx.objectStore('reactionQueue').delete(entryId);
+    });
+    this.bump();
+  }
+
+  /* ---------- 알림 (읽음 처리가 유일한 로컬 쓰기다) ---------- */
+
+  /** 알림 읽음 — 즉시 로컬 반영 + 큐 등록. 읽음은 단조라 취소·충돌이 없다. */
+  markNotificationRead(id: string): void {
+    if (this.markReadInternal(id)) this.bump();
+  }
+
+  /** 모두 읽음 — 지금 보이는 안 읽음 전부. 서버에 별도 상태가 없어 id 열거로 보낸다
+      (그 사이 도착한 새 알림을 실수로 읽음 처리하지 않는다). */
+  markAllNotificationsRead(): void {
+    let changed = false;
+    for (const n of this.notifications.values()) {
+      if (n.readAt === null) changed = this.markReadInternal(n.id) || changed;
+    }
+    if (changed) this.bump();
+  }
+
+  private markReadInternal(id: string): boolean {
+    const cur = this.notifications.get(id);
+    if (!cur || cur.readAt !== null) return false;
+    const next = { ...cur, readAt: new Date().toISOString() };
+    this.notifications.set(id, next);
+    if (this.syncable(id)) {
+      // 큐 값 = 지금 관측한 세대(updatedAt) — 서버는 행이 그 뒤로 갱신됐으면 도장을 거른다
+      this.notifReadQueue.set(id, cur.updatedAt);
+      this.txWrite(['notifications', 'notifReadQueue'], (tx) => {
+        void tx.objectStore('notifications').put(next);
+        void tx.objectStore('notifReadQueue').put(cur.updatedAt, notifReadKey(this.me, id));
+      });
+      this.onLocalWrite?.();
+    }
+    return true;
+  }
+
+  /** 서버로 보낼 읽음 처리들. 행이 사라졌어도(보관 만료) 보낸다 — 서버 정산이 멱등이다. */
+  pendingNotificationReads(): NotificationRead[] {
+    return [...this.notifReadQueue].map(([id, at]) => ({ id, at }));
+  }
+
+  /** 읽음 push 정산 — 보낸 세대(at)가 지금 큐의 세대와 같을 때만 지운다.
+      전송 중에 그 행이 새 세대로 바뀌어 다시 읽혔다면(큐 값이 더 새 updatedAt) 그 읽음은
+      아직 서버에 못 간 것이다 — 옛 ACK가 그것까지 지우면 유실된다. IDB 쪽도 같은 판정을
+      같은 트랜잭션 안에서 한다(다른 탭이 남긴 더 새 읽음 보호). */
+  ackNotificationReads(reads: NotificationRead[]): void {
+    if (reads.length === 0) return;
+    for (const r of reads) {
+      if (this.notifReadQueue.get(r.id) === r.at) this.notifReadQueue.delete(r.id);
+    }
+    this.txWrite(['notifReadQueue'], async (tx) => {
+      const store = tx.objectStore('notifReadQueue');
+      for (const r of reads) {
+        const key = notifReadKey(this.me, r.id);
+        const at = await store.get(key);
+        if (at === r.at) void store.delete(key);
+      }
     });
     this.bump();
   }
@@ -957,19 +1166,26 @@ export class CrewStore {
     entries: PullCursor | null;
     comments: PullCursor | null;
     reactions: ReactionCursor | null;
+    notifications: PullCursor | null;
   }> {
-    const none = { entries: null, comments: null, reactions: null };
+    const none = { entries: null, comments: null, reactions: null, notifications: null };
     const db = this.db;
     if (!db) return none;
     try {
       const tx = db.transaction('meta');
-      const [e, c, r] = await Promise.all([
+      const [e, c, r, n] = await Promise.all([
         tx.objectStore('meta').get(ENTRY_CURSOR_KEY),
         tx.objectStore('meta').get(COMMENT_CURSOR_KEY),
         tx.objectStore('meta').get(REACTION_CURSOR_KEY),
+        tx.objectStore('meta').get(notifCursorKey(this.me)),
       ]);
       await tx.done;
-      return { entries: asPullCursor(e), comments: asPullCursor(c), reactions: asReactionCursor(r) };
+      return {
+        entries: asPullCursor(e),
+        comments: asPullCursor(c),
+        reactions: asReactionCursor(r),
+        notifications: asPullCursor(n),
+      };
     } catch {
       return none; // 닫힌 DB(다른 탭 업그레이드에 양보) — 처음부터 pull해도 안전하다
     }
@@ -1053,20 +1269,37 @@ export class CrewStore {
         'commentQueue',
         'reactions',
         'reactionQueue',
+        'notifications',
+        'notifReadQueue',
         'meta',
       ]);
-      const [rows, qkeys, qvals, dbComments, dbCQueue, dbReactions, dbRQueue, dbSt, dbDirty] =
-        await Promise.all([
-          tx.objectStore('entries').getAll(),
-          tx.objectStore('queue').getAllKeys(),
-          tx.objectStore('queue').getAll(),
-          tx.objectStore('comments').getAll(),
-          tx.objectStore('commentQueue').getAllKeys(),
-          tx.objectStore('reactions').getAll(),
-          tx.objectStore('reactionQueue').getAllKeys(),
-          tx.objectStore('meta').get(MY_STATUS_KEY),
-          tx.objectStore('meta').get(STATUS_DIRTY_KEY),
-        ]);
+      const [
+        rows,
+        qkeys,
+        qvals,
+        dbComments,
+        dbCQueue,
+        dbReactions,
+        dbRQueue,
+        dbNotifs,
+        dbNQKeys,
+        dbNQVals,
+        dbSt,
+        dbDirty,
+      ] = await Promise.all([
+        tx.objectStore('entries').getAll(),
+        tx.objectStore('queue').getAllKeys(),
+        tx.objectStore('queue').getAll(),
+        tx.objectStore('comments').getAll(),
+        tx.objectStore('commentQueue').getAllKeys(),
+        tx.objectStore('reactions').getAll(),
+        tx.objectStore('reactionQueue').getAllKeys(),
+        tx.objectStore('notifications').getAll(),
+        tx.objectStore('notifReadQueue').getAllKeys(),
+        tx.objectStore('notifReadQueue').getAll(),
+        tx.objectStore('meta').get(MY_STATUS_KEY),
+        tx.objectStore('meta').get(STATUS_DIRTY_KEY),
+      ]);
       await tx.done;
       if (this.snapshot.rev !== rev0) {
         if (this.refreshTimer) clearTimeout(this.refreshTimer);
@@ -1197,6 +1430,38 @@ export class CrewStore {
         }
       }
 
+      // 알림 — 다른 탭의 미전송 읽음(내 접두사 키)을 먼저 채택한다. 값은 세대(updatedAt)라
+      // 더 새 세대의 읽음이 이긴다. 중복 push는 서버 정산이 멱등이라 안전하다.
+      const myPrefix = `${this.me}|`;
+      const refreshNowIso = new Date().toISOString();
+      dbNQKeys.forEach((k, i) => {
+        const key = String(k);
+        if (!key.startsWith(myPrefix)) return;
+        const id = key.slice(myPrefix.length);
+        const at = String(dbNQVals[i]);
+        const mem = this.notifReadQueue.get(id);
+        if (mem === undefined || mem < at) {
+          this.notifReadQueue.set(id, at);
+          tookDirty = true;
+          changed = true;
+        }
+      });
+      for (const n of dbNotifs) {
+        if (n.m !== this.me) continue;
+        // pull 반영과 같은 판정 하나로 — 같은 세대의 안 읽음엔 내 미전송 읽음이 이기고,
+        // 더 새 세대(집계 갱신)는 IDB 행이 이긴다
+        const act = notifPullAction(
+          this.notifications.get(n.id),
+          n,
+          this.notifReadQueue.get(n.id) ?? null,
+          refreshNowIso,
+        );
+        if (act !== 'skip') {
+          this.notifications.set(act.id, act);
+          changed = true;
+        }
+      }
+
       if (changed) this.bump();
       if (tookDirty) this.onLocalWrite?.();
     } catch {
@@ -1251,19 +1516,23 @@ export class CrewStore {
   }
 
   private bump(): void {
+    const notifications = sortNotifications(this.notifications.values(), Date.now());
     this.snapshot = {
       rev: this.snapshot.rev + 1,
       entries: [...this.map.values()].filter((e) => !e.deletedAt),
       statuses: Object.fromEntries(this.statuses) as Partial<Record<MemberId, MemberStatus>>,
       comments: groupComments(this.comments.values()),
       reactions: groupReactions(this.reactions.values()),
+      notifications,
+      unreadNotifications: notifications.filter((n) => n.readAt === null).length,
       sync: {
         phase: this.syncPhase,
         pending:
           this.queue.size +
           (this.statusDirty ? 1 : 0) +
           this.commentQueue.size +
-          this.reactionDirty.size,
+          this.reactionDirty.size +
+          this.notifReadQueue.size,
       },
     };
     for (const fn of this.listeners) fn();

@@ -11,7 +11,9 @@
     "not_found_handling": "single-page-application",
     "run_worker_first": ["/api/*"]
   },
-  "observability": { "enabled": true }
+  "observability": { "enabled": true },
+  // 매시 정각 — 알림 다이제스트(방해 금지 이월분)·응원 하루 요약·보관 정리 (worker/notify.ts runHourly)
+  "triggers": { "crons": ["0 * * * *"] }
   // 시크릿 (wrangler secret put 으로 등록):
   //   DATABASE_URL — Neon 연결 문자열
   //   AUTH_SECRET  — 초대 토큰 서명 키 (openssl rand -hex 32)

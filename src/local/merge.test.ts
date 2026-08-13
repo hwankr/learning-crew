@@ -2,7 +2,7 @@
    (스토어의 push 충돌 처리 경로가 이 두 함수로 수렴을 결정한다)
    + 댓글·리액션 스트림의 순수 규칙: 스냅샷 파생, 토글 정규화, ACK 정산 판단. */
 import { describe, expect, it } from 'vitest';
-import type { Comment, Entry, ReactionSet } from '../../shared/types';
+import type { Comment, Entry, Notification, ReactionSet } from '../../shared/types';
 import { primaryTag } from '../../shared/types';
 import {
   adoptCommentFromDB,
@@ -16,7 +16,9 @@ import {
   mergeEntry,
   mergeMyReactionFromDB,
   normalizeEntry,
+  notifPullAction,
   reactionAckSettles,
+  sortNotifications,
   toggledEmojis,
 } from './store';
 
@@ -378,5 +380,73 @@ describe('isDuplicateReaction (pull 중복 전달 판정 — 밀리초 동률 �
   });
   it('updatedAt이 다르면 중복이 아니다', () => {
     expect(isDuplicateReaction(r({}), r({ updatedAt: '2026-08-12T02:00:00.000Z' }))).toBe(false);
+  });
+});
+
+describe('notifPullAction (알림 pull 반영 — 같은 세대의 읽음만 로컬 우선)', () => {
+  const N = (p: Partial<Notification>): Notification => ({
+    id: 'nnnnnnnn-nnnn-4nnn-8nnn-nnnnnnnnnnnn',
+    m: 'sh', kind: 'comment', why: 'mine', actor: 'wg', entryId: null,
+    quote: '', ctx: '', actors: [], count: 1,
+    createdAt: '2026-08-12T01:00:00.000Z',
+    updatedAt: '2026-08-12T01:00:00.000Z',
+    readAt: null,
+    ...p,
+  });
+  const NOW = '2026-08-12T09:00:00.000Z';
+  const GEN1 = '2026-08-12T01:00:00.000Z';
+
+  it('처음 보는 행은 그대로 채택한다', () => {
+    const row = N({});
+    expect(notifPullAction(undefined, row, null, NOW)).toBe(row);
+  });
+  it('같은 행의 중복 전달(커서 안전 윈도우)은 건너뛴다', () => {
+    expect(notifPullAction(N({}), N({}), null, NOW)).toBe('skip');
+  });
+  it('같은 밀리초의 집계 갱신은 count가 다르면 중복이 아니다', () => {
+    expect(notifPullAction(N({}), N({ count: 2 }), null, NOW)).not.toBe('skip');
+  });
+  it('같은 세대의 미전송 읽음은 서버의 안 읽음 행을 이긴다', () => {
+    // 메모리가 이미 읽음이면 실질 변화가 없어 skip — 안 읽음으로 되돌리지만 않으면 된다
+    const cur = N({ readAt: '2026-08-12T02:00:00.000Z' });
+    expect(notifPullAction(cur, N({}), GEN1, NOW)).toBe('skip');
+    // 메모리에 행이 없어도(보관 정리 직후 등) 큐의 세대와 같으면 읽음을 살려 채택한다
+    const out = notifPullAction(undefined, N({}), GEN1, NOW);
+    expect(out).not.toBe('skip');
+    expect((out as Notification).readAt).toBe(NOW);
+  });
+  it('더 새 세대(집계에 새 응원)의 안 읽음은 옛 읽음을 이긴다 — 다시 안 읽음이 정답', () => {
+    const cur = N({ readAt: '2026-08-12T02:00:00.000Z' });
+    const row = N({ updatedAt: '2026-08-12T03:00:00.000Z', count: 4, readAt: null });
+    expect(notifPullAction(cur, row, GEN1, NOW)).toBe(row);
+  });
+  it('큐가 정산된 뒤의 서버 읽음 확정은 그대로 채택한다', () => {
+    const cur = N({ readAt: '2026-08-12T02:00:00.000Z' });
+    const row = N({ updatedAt: '2026-08-12T03:00:00.000Z', readAt: '2026-08-12T02:00:01.000Z' });
+    expect(notifPullAction(cur, row, null, NOW)).toBe(row);
+  });
+  it('느린 응답(더 오래된 updatedAt)은 되돌리지 못한다', () => {
+    const cur = N({ updatedAt: '2026-08-12T05:00:00.000Z' });
+    expect(notifPullAction(cur, N({}), null, NOW)).toBe('skip');
+  });
+});
+
+describe('sortNotifications (스냅샷 정렬 + 보관 기간)', () => {
+  const NOW = Date.parse('2026-08-12T09:00:00.000Z');
+  const N = (id: string, createdAt: string): Notification => ({
+    id, m: 'sh', kind: 'start', why: 'daily', actor: 'wg', entryId: null,
+    quote: '', ctx: '', actors: [], count: 1,
+    createdAt, updatedAt: createdAt, readAt: null,
+  });
+  it('최신이 먼저 오고, 30일 지난 행은 빠진다', () => {
+    const fresh = N('a', '2026-08-12T08:00:00.000Z');
+    const older = N('b', '2026-08-10T08:00:00.000Z');
+    const expired = N('c', '2026-07-01T08:00:00.000Z');
+    expect(sortNotifications([older, expired, fresh], NOW).map((n) => n.id)).toEqual(['a', 'b']);
+  });
+  it('같은 시각이면 id 내림차순 — 탭마다 순서가 흔들리지 않는다', () => {
+    const x = N('x', '2026-08-12T08:00:00.000Z');
+    const y = N('y', '2026-08-12T08:00:00.000Z');
+    expect(sortNotifications([x, y], NOW).map((n) => n.id)).toEqual(['y', 'x']);
   });
 });

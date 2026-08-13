@@ -5,13 +5,14 @@ import { contentEqual } from './local/store';
 import { BY_ID, COPY, MEMBERS, W, dayKey, pad2, shiftKey } from './lib/constants';
 import type { AppConfig } from './lib/config';
 import type { CrewStore } from './local/store';
-import { Avatar, Icon, PENCIL_D } from './components/icons';
+import { Avatar, BELL_D, Icon, PENCIL_D } from './components/icons';
 import { Board } from './components/Board';
 import { StatusBar } from './components/StatusBar';
-import { NotifyToggle } from './components/NotifyToggle';
 import { SyncStatus } from './components/SyncStatus';
 import { Feed } from './components/Feed';
 import { CalendarView } from './components/CalendarView';
+import { NotiPage } from './components/NotiPage';
+import { NotiSettings } from './components/NotiSettings';
 import { EMPTY_MODAL, EntryModal, type ModalState } from './components/EntryModal';
 import { ConfirmDelete } from './components/ConfirmDelete';
 
@@ -130,7 +131,9 @@ function modalFromDraft(d: Draft, editingId: string | null, fallbackDay: string)
 
 export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
   const snap = useSyncExternalStore(store.subscribe, store.getSnapshot);
-  const [view, setView] = useState<'feed' | 'cal'>(cfg.initialView);
+  const [view, setView] = useState<'feed' | 'cal' | 'noti'>(cfg.initialView);
+  // 알림 뷰의 하위 화면 — 내역에서 톱니로 들어가는 설정
+  const [notiSettings, setNotiSettings] = useState(cfg.initialNotiSettings);
   const [calOff, setCalOff] = useState(0);
   const [selDay, setSelDay] = useState<string | null>(null);
   const [modal, setModal] = useState<ModalState>(EMPTY_MODAL);
@@ -148,7 +151,7 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
     return () => clearInterval(t);
   }, []);
 
-  const wit = COPY[cfg.wit];
+  const wit = COPY;
   const me = BY_ID[cfg.memberId] ?? MEMBERS[0]!;
   const now = new Date();
   const todayKey = dayKey(now);
@@ -274,10 +277,30 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
         <div className="left">
           <div className="brand-row">
             <div className="brand">러닝 크루 👟</div>
-            <div className="stack">
-              {MEMBERS.map((m) => (
-                <Avatar key={m.id} m={m} size={34} className="stack-av" bg={m.soft} />
-              ))}
+            <div className="brand-side">
+              <button
+                className={'bell-btn' + (view === 'noti' ? ' on' : '')}
+                aria-label={
+                  snap.unreadNotifications > 0
+                    ? `알림 — 안 읽음 ${snap.unreadNotifications}개`
+                    : '알림'
+                }
+                onClick={() => {
+                  setNotiSettings(false);
+                  setView((v) => (v === 'noti' ? 'cal' : 'noti'));
+                }}>
+                <Icon d={BELL_D} size={19} sw={2} />
+                {snap.unreadNotifications > 0 && (
+                  <span className="bell-badge">
+                    {snap.unreadNotifications > 9 ? '9+' : snap.unreadNotifications}
+                  </span>
+                )}
+              </button>
+              <div className="stack">
+                {MEMBERS.map((m) => (
+                  <Avatar key={m.id} m={m} size={34} className="stack-av" bg={m.soft} />
+                ))}
+              </div>
             </div>
           </div>
           <div className="sub">
@@ -289,16 +312,17 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
             </span>
             <span>{wit.cta}</span>
           </button>
-          <div className="cta-cap">
-            <span className="cta-cap-dot" />
-            <span>{myToday > 0 ? wit.ctaSome(myToday) : wit.ctaNone}</span>
-          </div>
+          {myToday === 0 && (
+            <div className="cta-cap">
+              <span className="cta-cap-dot" />
+              <span>{wit.ctaNone}</span>
+            </div>
+          )}
           <StatusBar status={snap.statuses[me.id]} wit={wit} now={nowTick}
             onSet={(on, place) => {
               store.setMyStatus(on, place);
               setNowTick(Date.now());
             }} />
-          {cfg.token && <NotifyToggle token={cfg.token} />}
           {cfg.token && <SyncStatus sync={snap.sync} />}
           <div className="board-head">
             <div className="board-title">오늘의 크루</div>
@@ -315,24 +339,38 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
           <Board todays={todays} statuses={snap.statuses} now={nowTick} meId={me.id} wit={wit} />
         </div>
         <div className="feed-col">
-          <div className="tabs">
-            <button className={'tab' + (view === 'cal' ? ' on' : '')} onClick={() => setView('cal')}>캘린더</button>
-            <button className={'tab' + (view === 'feed' ? ' on' : '')} onClick={() => setView('feed')}>피드</button>
-          </div>
-          {view === 'feed' ? (
-            <Feed entries={entries} todayKey={todayKey} yKey={yKey} meId={me.id}
-              editingId={modal.editingId} comments={snap.comments} reactions={snap.reactions}
-              actions={actions} />
+          {view === 'noti' ? (
+            notiSettings ? (
+              <NotiSettings token={cfg.token} meId={me.id} demo={cfg.demo}
+                onBack={() => setNotiSettings(false)} />
+            ) : (
+              <NotiPage notifications={snap.notifications}
+                onRead={(id) => store.markNotificationRead(id)}
+                onReadAll={() => store.markAllNotificationsRead()}
+                onOpenSettings={() => setNotiSettings(true)} />
+            )
           ) : (
-            <CalendarView entries={entries} calOff={calOff} setCalOff={setCalOff}
-              selDay={selDay ?? todayKey} setSelDay={setSelDay} todayKey={todayKey}
-              meId={me.id} editingId={modal.editingId} comments={snap.comments}
-              reactions={snap.reactions} wit={wit} actions={actions} />
+            <>
+              <div className="tabs">
+                <button className={'tab' + (view === 'cal' ? ' on' : '')} onClick={() => setView('cal')}>캘린더</button>
+                <button className={'tab' + (view === 'feed' ? ' on' : '')} onClick={() => setView('feed')}>피드</button>
+              </div>
+              {view === 'feed' ? (
+                <Feed entries={entries} todayKey={todayKey} yKey={yKey} meId={me.id}
+                  editingId={modal.editingId} comments={snap.comments} reactions={snap.reactions}
+                  actions={actions} />
+              ) : (
+                <CalendarView entries={entries} calOff={calOff} setCalOff={setCalOff}
+                  selDay={selDay ?? todayKey} setSelDay={setSelDay} todayKey={todayKey}
+                  meId={me.id} editingId={modal.editingId} comments={snap.comments}
+                  reactions={snap.reactions} wit={wit} actions={actions} />
+              )}
+              <div className="footer">
+                {wit.footer}
+                {cfg.demo && <div className="demo-note">데모 모드 — 초대 링크로 접속하면 크루와 동기화됩니다.</div>}
+              </div>
+            </>
           )}
-          <div className="footer">
-            {wit.footer}
-            {cfg.demo && <div className="demo-note">데모 모드 — 초대 링크로 접속하면 크루와 동기화됩니다.</div>}
-          </div>
         </div>
       </div>
       {modal.open && (

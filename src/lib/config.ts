@@ -4,15 +4,15 @@ import { MEMBERS } from './constants';
 export interface AppConfig {
   token: string | null;
   memberId: MemberId;
-  wit: 'subtle' | 'drip';
-  initialView: 'feed' | 'cal';
+  initialView: 'feed' | 'cal' | 'noti';
+  /** ?view=notiset — 알림 설정 화면으로 바로 (알림 뷰의 하위 화면) */
+  initialNotiSettings: boolean;
   demo: boolean;
   /** 토큰도 없고 데모(?user=)도 아니면 이름 선택 화면을 보여준다. */
   needsLogin: boolean;
 }
 
 const TOKEN_KEY = 'lc-token';
-const WIT_KEY = 'lc-wit';
 
 export function saveToken(token: string): void {
   localStorage.setItem(TOKEN_KEY, token);
@@ -34,7 +34,7 @@ function memberIdFromToken(token: string): MemberId | null {
   }
 }
 
-/** URL 파라미터(?invite= / ?wit= / ?view= / 데모용 ?user=)와 저장된 토큰으로 앱 설정을 만든다. */
+/** URL 파라미터(?invite= / ?view= / 데모용 ?user=)와 저장된 토큰으로 앱 설정을 만든다. */
 export function loadConfig(): AppConfig {
   const params = new URLSearchParams(location.search);
 
@@ -49,22 +49,24 @@ export function loadConfig(): AppConfig {
   const token = localStorage.getItem(TOKEN_KEY);
   const tokenMember = token ? memberIdFromToken(token) : null;
 
-  const witParam = params.get('wit');
-  if (witParam === 'drip' || witParam === '낄낄 풀드립') localStorage.setItem(WIT_KEY, 'drip');
-  else if (witParam === 'subtle' || witParam === '은은한 위트') localStorage.setItem(WIT_KEY, 'subtle');
-  const wit = localStorage.getItem(WIT_KEY) === 'drip' ? 'drip' : 'subtle';
-
-  // 캘린더 중심 개편 — 기본 뷰가 캘린더다 (?view=feed로 피드 시작)
+  // 캘린더 중심 개편 — 기본 뷰가 캘린더다 (?view=feed로 피드, ?view=noti로 알림 —
+  // 알림 푸시를 누르면 이 파라미터로 알림 내역이 바로 열린다)
   const viewParam = params.get('view');
-  const initialView = viewParam === 'feed' || viewParam === '피드' ? 'feed' : 'cal';
+  const initialView =
+    viewParam === 'feed' || viewParam === '피드'
+      ? 'feed'
+      : viewParam === 'noti' || viewParam === '알림' || viewParam === 'notiset'
+        ? 'noti'
+        : 'cal';
+  const initialNotiSettings = viewParam === 'notiset';
 
   if (tokenMember && token) {
-    return { token, memberId: tokenMember, wit, initialView, demo: false, needsLogin: false };
+    return { token, memberId: tokenMember, initialView, initialNotiSettings, demo: false, needsLogin: false };
   }
   // 데모 모드 — ?user=이름 으로 명시했을 때만 (동기화 없이 시드 데이터로 동작)
   const demoMember = MEMBERS.find((m) => m.name === params.get('user'));
   if (demoMember) {
-    return { token: null, memberId: demoMember.id, wit, initialView, demo: true, needsLogin: false };
+    return { token: null, memberId: demoMember.id, initialView, initialNotiSettings, demo: true, needsLogin: false };
   }
-  return { token: null, memberId: MEMBERS[0]!.id, wit, initialView, demo: false, needsLogin: true };
+  return { token: null, memberId: MEMBERS[0]!.id, initialView, initialNotiSettings, demo: false, needsLogin: true };
 }

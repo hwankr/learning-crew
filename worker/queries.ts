@@ -1,17 +1,33 @@
 /* 동기화 쿼리 — Worker(neon-http)와 테스트(PGlite)가 같은 코드를 쓴다. */
-import { and, eq, inArray, ne, or, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, lt, ne, notInArray, or, sql } from 'drizzle-orm';
 import type { PgDatabase } from 'drizzle-orm/pg-core';
-import { comments, entries, pushSubs, reactions, status } from './schema';
-import { entryTags, isOffTags, normalizeEmojis, primaryTag } from '../shared/types';
+import { comments, entries, notifPrefs, notifications, pushSubs, reactions, status } from './schema';
+import {
+  DEFAULT_NOTIF_PREFS,
+  MEMBER_IDS,
+  NOTIF_MODES,
+  entryTags,
+  isOffTags,
+  normalizeEmojis,
+  primaryTag,
+} from '../shared/types';
 import type {
   Comment,
   Entry,
   MemberId,
   MemberStatus,
+  NotifKind,
+  NotifMode,
+  NotifPrefs,
+  NotifWhy,
+  Notification,
+  NotificationRead,
   Place,
   PullCursor,
   ReactionCursor,
+  ReactionEmoji,
   ReactionSet,
+  Tag,
   Todo,
 } from '../shared/types';
 
@@ -332,13 +348,25 @@ function toReactionSet(r: typeof reactions.$inferSelect): ReactionSet {
 export interface ReactionPushOutcome {
   applied: ReactionSet[];
   current: ReactionSet[];
+  /** 반영된 행마다 이번에 "새로 추가된" 이모지 — 알림 팬아웃용. 제거만 있었으면 빈 배열이다. */
+  deltas: { entryId: string; m: MemberId; added: ReactionEmoji[] }[];
 }
 
 /** 리액션 집합 업서트 — status와 같은 의미론으로 액션 시각(acted_at) LWW.
     도착 순서로 판정하면 오프라인이었다 재접속한 기기의 옛 토글이 최신 집합을 덮는다.
     PK에 member_id가 있어 남의 행과는 충돌 자체가 없다(= 남의 리액션은 건드릴 수 없다). */
 export async function pushReactions(db: Db, rows: ReactionSet[]): Promise<ReactionPushOutcome> {
-  if (rows.length === 0) return { applied: [], current: [] };
+  if (rows.length === 0) return { applied: [], current: [], deltas: [] };
+  // 업서트 전의 집합을 먼저 읽는다 — 반영 후에는 "무엇이 새로 왔는지"를 알 길이 없다.
+  // 트랜잭션이 아니라 이론상 그 사이 다른 요청이 끼어들 수 있지만, 밀린 쪽은 applied에서
+  // 빠지므로 알림이 중복되지는 않는다(놓칠 수는 있다 — 알림은 best-effort).
+  const prevRows = await db
+    .select()
+    .from(reactions)
+    .where(
+      or(...rows.map((r) => and(eq(reactions.entryId, r.entryId), eq(reactions.memberId, r.m)))),
+    );
+  const prev = new Map(prevRows.map((r) => [rkey(r.entryId, r.memberId), normalizeEmojis(r.emojis)]));
   const returned = await db
     .insert(reactions)
     .values(
@@ -356,8 +384,11 @@ export async function pushReactions(db: Db, rows: ReactionSet[]): Promise<Reacti
         actedAt: sql`excluded.acted_at`,
         updatedAt: sql`now()`,
       },
-      // 같은 시각(재전송)은 멱등하게 허용, 더 오래된 액션만 거부한다
-      setWhere: sql`excluded.acted_at >= ${reactions.actedAt}`,
+      // 같은 시각의 재전송은 거부한다(엄격 >) — 결과는 그래도 멱등하다: 거부된 행은
+      // current로 돌아가고 내용이 같아 클라이언트가 그대로 정산한다. >=로 허용하면
+      // 동일 요청 둘이 동시에 오는 경합에서 둘 다 applied가 되어 위의 prev 스냅샷과
+      // 비교한 델타(added)가 두 번 잡히고, 알림이 중복 발송된다.
+      setWhere: sql`excluded.acted_at > ${reactions.actedAt}`,
     })
     .returning();
   const appliedKeys = new Set(returned.map((r) => rkey(r.entryId, r.memberId)));
@@ -370,7 +401,15 @@ export async function pushReactions(db: Db, rows: ReactionSet[]): Promise<Reacti
           or(...missed.map((r) => and(eq(reactions.entryId, r.entryId), eq(reactions.memberId, r.m)))),
         )
     : [];
-  return { applied: returned.map(toReactionSet), current: current.map(toReactionSet) };
+  const applied = returned.map(toReactionSet);
+  return {
+    applied,
+    current: current.map(toReactionSet),
+    deltas: applied.map((r) => {
+      const before = prev.get(rkey(r.entryId, r.m)) ?? [];
+      return { entryId: r.entryId, m: r.m, added: r.emojis.filter((e) => !before.includes(e)) };
+    }),
+  };
 }
 
 export interface ReactionPullResult {
@@ -519,4 +558,419 @@ export async function pushSubsExcept(
     .select({ endpoint: pushSubs.endpoint, p256dh: pushSubs.p256dh, auth: pushSubs.auth })
     .from(pushSubs)
     .where(ne(pushSubs.memberId, me));
+}
+
+/** 전원 구독을 멤버별로 묶어서 — 수신자별 설정(모드·방해 금지)이 갈리는 알림 발송용. */
+export async function pushSubsByMember(
+  db: Db,
+): Promise<Map<MemberId, { endpoint: string; p256dh: string; auth: string }[]>> {
+  const rows = await db.select().from(pushSubs);
+  const map = new Map<MemberId, { endpoint: string; p256dh: string; auth: string }[]>();
+  for (const r of rows) {
+    const m = r.memberId as MemberId;
+    const list = map.get(m) ?? [];
+    list.push({ endpoint: r.endpoint, p256dh: r.p256dh, auth: r.auth });
+    map.set(m, list);
+  }
+  return map;
+}
+
+/* ---------- 알림 ---------- */
+
+/** 내역 보관 기간 — 이 너머는 pull에서 빠지고 cron이 지운다(디자인 각주의 "30일"). */
+export const NOTIF_RETENTION_DAYS = 30;
+
+function toNotification(r: typeof notifications.$inferSelect): Notification {
+  return {
+    id: r.id,
+    m: r.memberId as MemberId,
+    kind: r.kind as NotifKind,
+    why: r.why as NotifWhy,
+    actor: (r.actor as MemberId | null) ?? null,
+    entryId: r.entryId,
+    quote: r.quote,
+    ctx: r.ctx,
+    actors: Array.isArray(r.actors)
+      ? (r.actors as unknown[]).filter((a): a is MemberId =>
+          (MEMBER_IDS as readonly unknown[]).includes(a),
+        )
+      : [],
+    count: r.count,
+    createdAt: isoTs(r.createdAt),
+    updatedAt: isoTs(r.updatedAt),
+    readAt: r.readAt === null ? null : isoTs(r.readAt),
+  };
+}
+
+/** 새 알림 한 건의 입력 — id·시각은 서버(DB)가 정한다. */
+export interface NewNotification {
+  memberId: MemberId;
+  kind: NotifKind;
+  why: NotifWhy;
+  actor: MemberId | null;
+  entryId: string | null;
+  quote: string;
+  ctx: string;
+  day: string; // KST YYYY-MM-DD
+  aggKey: string | null;
+  count?: number;
+  actors?: MemberId[];
+  /** 테스트가 과거 행을 심을 때만 넘긴다 — 실서비스 경로는 DB now()를 쓴다. */
+  createdAt?: string;
+}
+
+function toNotifInsert(n: NewNotification) {
+  return {
+    memberId: n.memberId,
+    kind: n.kind,
+    why: n.why,
+    actor: n.actor,
+    entryId: n.entryId,
+    quote: n.quote,
+    ctx: n.ctx,
+    day: n.day,
+    aggKey: n.aggKey,
+    count: n.count ?? 1,
+    actors: n.actors ?? [],
+    ...(n.createdAt !== undefined ? { createdAt: n.createdAt, updatedAt: n.createdAt } : {}),
+  };
+}
+
+/** 일반 알림 삽입 — agg_key 없는 행 전용(중복 개념이 없다). */
+export async function insertNotifications(
+  db: Db,
+  rows: NewNotification[],
+): Promise<Notification[]> {
+  if (rows.length === 0) return [];
+  const returned = await db.insert(notifications).values(rows.map(toNotifInsert)).returning();
+  return returned.map(toNotification);
+}
+
+/** agg_key 중복 방지 삽입 — 이미 같은 (수신자, 날짜, agg_key) 행이 있으면 조용히 무시.
+    "하루 1회" 시작 알림과 방해 금지 다이제스트가 이걸로 하루 1건을 보장한다. */
+export async function insertNotificationDedup(
+  db: Db,
+  row: NewNotification,
+): Promise<Notification | null> {
+  const returned = await db
+    .insert(notifications)
+    .values(toNotifInsert(row))
+    .onConflictDoNothing({
+      target: [notifications.memberId, notifications.day, notifications.aggKey],
+    })
+    .returning();
+  const r = returned[0];
+  return r ? toNotification(r) : null;
+}
+
+/** 응원 하루 요약 집계 — (수신자, 날짜)당 1행에 count를 누적하고 참여자를 합친다.
+    갱신 시 읽음을 되돌린다(새 응원이 왔으니 다시 안 읽음) — updated_at이 앞으로 와서
+    모든 기기가 pull로 갱신분을 받는다. */
+export async function upsertReactionDaily(
+  db: Db,
+  me: MemberId,
+  day: string,
+  actor: MemberId,
+  add: number,
+): Promise<Notification> {
+  const [row] = await db
+    .insert(notifications)
+    .values({
+      memberId: me,
+      kind: 'react',
+      why: 'react_daily',
+      actor: null,
+      entryId: null,
+      quote: '',
+      ctx: '',
+      day,
+      aggKey: 'react',
+      count: add,
+      actors: [actor],
+    })
+    .onConflictDoUpdate({
+      target: [notifications.memberId, notifications.day, notifications.aggKey],
+      set: {
+        count: sql`${notifications.count} + excluded.count`,
+        actors: sql`(select coalesce(jsonb_agg(distinct v), '[]'::jsonb)
+                     from jsonb_array_elements_text(${notifications.actors} || excluded.actors) as t(v))`,
+        readAt: sql`null`, // 새 응원이 왔으니 다시 안 읽음
+        pushedAt: sql`null`, // 이미 요약을 보냈어도 다시 발송 대기로 — 다음 20시에 새 합계로 나간다
+        updatedAt: sql`now()`,
+      },
+    })
+    .returning();
+  return toNotification(row!);
+}
+
+/** 읽음 처리 — 내 행이면서 아직 안 읽었고, 읽은 시점 이후로 갱신되지 않은 행만 도장.
+    at(읽을 때 관측한 updatedAt)보다 행이 새로우면 그 사이 내용이 바뀐 것이다 — 특히
+    집계 행(react_daily)은 새 응원이 오면 "다시 안 읽음"이 되는데, 뒤늦게 도착한 옛 읽음이
+    그 새 세대까지 읽음 처리하면 안 된다. updated_at을 올려 다른 기기로 전파한다.
+    요청한 id 전부를 정산된 것으로 돌려준다(이미 읽음·세대 불일치·남의 행 재전송도
+    큐에서 빠져야 한다 — 클라이언트는 자기 쪽 세대 판정으로 새 읽음을 다시 보낸다). */
+export async function markNotificationsRead(
+  db: Db,
+  me: MemberId,
+  reads: NotificationRead[],
+): Promise<string[]> {
+  if (reads.length === 0) return [];
+  await db.execute(sql`
+    update notifications set read_at = now(), updated_at = now()
+    from (
+      select (e->>'id')::uuid as id, (e->>'at')::timestamptz as at
+      from jsonb_array_elements(${JSON.stringify(reads)}::jsonb) as e
+    ) as v
+    where notifications.id = v.id
+      and notifications.member_id = ${me}
+      and notifications.read_at is null
+      -- at은 프로토콜 경계(isoTs)에서 밀리초로 잘린 에코라, 원본(마이크로초)과 그대로
+      -- 비교하면 같은 세대조차 "더 새롭다"로 판정돼 읽음이 영원히 안 찍힌다
+      and date_trunc('milliseconds', notifications.updated_at) <= v.at
+  `);
+  return reads.map((r) => r.id);
+}
+
+/** 발송 도장 — 다이제스트가 같은 행을 다시 쓸어 담지 않게 한다. */
+export async function markNotificationsPushed(db: Db, ids: string[]): Promise<void> {
+  if (ids.length === 0) return;
+  await db
+    .update(notifications)
+    .set({ pushedAt: sql`now()` })
+    .where(inArray(notifications.id, ids));
+}
+
+/** 발송 소유권 선점 — pushed_at이 null인 행만 조건부로 도장 찍고, 실제로 찍힌 id를 돌려준다.
+    cron 두 인스턴스가 겹쳐 돌아도 같은 행을 두 번 푸시하지 않는다(찍은 쪽만 보낸다).
+    선점 후 발송 전에 죽으면 그 푸시는 유실된다 — 이 앱의 푸시는 어디서나 best-effort고
+    인앱 내역 행이 진실이라, 재시도 outbox 대신 이 한 줄 원자성으로 충분하다고 본다. */
+export async function claimNotificationsPushed(db: Db, ids: string[]): Promise<Set<string>> {
+  if (ids.length === 0) return new Set();
+  const rows = await db
+    .update(notifications)
+    .set({ pushedAt: sql`now()` })
+    .where(and(inArray(notifications.id, ids), isNull(notifications.pushedAt)))
+    .returning({ id: notifications.id });
+  return new Set(rows.map((r) => r.id));
+}
+
+/** 방해 금지 창 동안 쌓인 미발송·미확인 알림 — 다이제스트 재료.
+    이미 앱에서 읽었으면 뺀다(모아서 알려 줄 이유가 없다). */
+export async function unpushedQuietRows(
+  db: Db,
+  me: MemberId,
+  sinceIso: string,
+): Promise<Notification[]> {
+  const rows = await db
+    .select()
+    .from(notifications)
+    .where(
+      and(
+        eq(notifications.memberId, me),
+        isNull(notifications.pushedAt),
+        isNull(notifications.readAt),
+        ne(notifications.kind, 'system'),
+        sql`${notifications.createdAt} >= ${sinceIso}::timestamptz`,
+      ),
+    )
+    .orderBy(notifications.createdAt);
+  return rows.map(toNotification);
+}
+
+/** 발송 대기 중인 응원 하루 요약 행 전부 — 저녁 요약 푸시 대상.
+    날짜로 거르지 않는다: 20시 이후에 생기거나 방해 금지에 걸려 보류된 행은 "오늘" 필터로는
+    영영 잡히지 않는다 — 다음 20시에 밀린 요약까지 내보내는 것이 유실보다 낫다.
+    앱에서 이미 읽었으면 뺀다(요약해 줄 이유가 없다). */
+export async function unpushedReactDailyAll(
+  db: Db,
+): Promise<Notification[]> {
+  const rows = await db
+    .select()
+    .from(notifications)
+    .where(
+      and(
+        eq(notifications.aggKey, 'react'),
+        isNull(notifications.pushedAt),
+        isNull(notifications.readAt),
+      ),
+    )
+    .orderBy(notifications.memberId, notifications.day);
+  return rows.map(toNotification);
+}
+
+/** 보관 기간 지난 내역 정리 — cron 전용. */
+export async function deleteOldNotifications(db: Db): Promise<void> {
+  await db
+    .delete(notifications)
+    .where(
+      lt(notifications.createdAt, sql`now() - make_interval(days => ${NOTIF_RETENTION_DAYS})`),
+    );
+}
+
+/** 내 알림 변경분 — 다른 스트림과 같은 (updated_at, id) 키셋 + 90초 안전 지평선.
+    보관 기간(30일) 밖의 행은 처음부터 싣지 않는다. */
+export async function pullNotifications(
+  db: Db,
+  me: MemberId,
+  cursor: PullCursor | null,
+): Promise<{ rows: Notification[]; cursor: PullCursor | null }> {
+  const horizonMs = Date.now() - HORIZON_MS;
+  const rows = await db
+    .select()
+    .from(notifications)
+    .where(
+      and(
+        eq(notifications.memberId, me),
+        sql`${notifications.createdAt} > now() - make_interval(days => ${NOTIF_RETENTION_DAYS})`,
+        cursor
+          ? sql`(${notifications.updatedAt}, ${notifications.id}) > (${cursor.ts}::timestamptz, ${cursor.id}::uuid)`
+          : undefined,
+      ),
+    )
+    .orderBy(notifications.updatedAt, notifications.id)
+    .limit(PAGE);
+  const last = rows[rows.length - 1];
+  const move = holdOrAdvance(horizonMs, cursor?.ts ?? null, rows.length, last?.updatedAt);
+  return {
+    rows: rows.map(toNotification),
+    cursor:
+      move === 'horizon'
+        ? { ts: new Date(horizonMs).toISOString(), id: NIL_UUID }
+        : move === 'keep'
+          ? cursor
+          : { ts: last!.updatedAt, id: last!.id },
+  };
+}
+
+/* ---------- 알림 팬아웃 재료 조회 ---------- */
+
+/** 기록 주인·태그 — 알림의 수신자 판정(mine)과 ctx 문구에 쓴다. */
+export async function entryOwners(
+  db: Db,
+  ids: string[],
+): Promise<Map<string, { owner: MemberId; tags: Tag[] }>> {
+  if (ids.length === 0) return new Map();
+  const rows = await db
+    .select({ id: entries.id, memberId: entries.memberId, tag: entries.tag, tags: entries.tags })
+    .from(entries)
+    .where(inArray(entries.id, ids));
+  return new Map(
+    rows.map((r) => [
+      r.id,
+      { owner: r.memberId as MemberId, tags: entryTags({ tag: r.tag, tags: r.tags }) },
+    ]),
+  );
+}
+
+/** 기록별 살아 있는 댓글의 (작성자, 작성 시각) — reply(내 대화가 이어질 때) 판정 재료.
+    이번 배치에서 방금 삽입된 댓글은 제외한다(그건 '이전'이 아니다). "이전"의 시각 판정은
+    호출부가 새 댓글마다 createdAt으로 거른다 — 팬아웃이 늦는 사이 끼어든 더 나중 댓글의
+    작성자를 이전 댓글러로 오인해 reply 배지를 붙이지 않기 위해서다. */
+export async function priorCommenters(
+  db: Db,
+  entryIds: string[],
+  excludeCommentIds: string[],
+): Promise<Map<string, { m: MemberId; createdAt: string }[]>> {
+  if (entryIds.length === 0) return new Map();
+  const rows = await db
+    .select({
+      entryId: comments.entryId,
+      memberId: comments.memberId,
+      createdAt: comments.createdAt,
+    })
+    .from(comments)
+    .where(
+      and(
+        inArray(comments.entryId, entryIds),
+        isNull(comments.deletedAt),
+        excludeCommentIds.length ? notInArray(comments.id, excludeCommentIds) : undefined,
+      ),
+    );
+  const map = new Map<string, { m: MemberId; createdAt: string }[]>();
+  for (const r of rows) {
+    const list = map.get(r.entryId) ?? [];
+    list.push({ m: r.memberId as MemberId, createdAt: isoTs(r.createdAt) });
+    map.set(r.entryId, list);
+  }
+  return map;
+}
+
+/* ---------- 알림 설정 ---------- */
+
+function asMode(v: unknown): NotifMode | null {
+  return (NOTIF_MODES as readonly unknown[]).includes(v) ? (v as NotifMode) : null;
+}
+
+/** perMember jsonb 정화 — 유효한 멤버 키·모드만 남긴다(jsonb는 무엇이든 들어올 수 있는 자리). */
+function sanitizePerMember(v: unknown): Partial<Record<MemberId, NotifMode>> {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return {};
+  const out: Partial<Record<MemberId, NotifMode>> = {};
+  for (const [k, raw] of Object.entries(v)) {
+    const mode = asMode(raw);
+    if (mode && (MEMBER_IDS as readonly string[]).includes(k)) out[k as MemberId] = mode;
+  }
+  return out;
+}
+
+function toNotifPrefs(r: typeof notifPrefs.$inferSelect): NotifPrefs {
+  return {
+    m: r.memberId as MemberId,
+    startMode: asMode(r.startMode) ?? DEFAULT_NOTIF_PREFS.startMode,
+    perMember: sanitizePerMember(r.perMember),
+    cmMine: r.cmMine,
+    cmReply: r.cmReply,
+    cmAll: r.cmAll,
+    reactMode: asMode(r.reactMode) ?? DEFAULT_NOTIF_PREFS.reactMode,
+    quietEnabled: r.quietEnabled,
+    quietFrom: r.quietFrom,
+    quietTo: r.quietTo,
+    updatedAt: isoTs(r.updatedAt),
+  };
+}
+
+function defaultPrefs(m: MemberId): NotifPrefs {
+  return { m, ...DEFAULT_NOTIF_PREFS, updatedAt: new Date(0).toISOString() };
+}
+
+export async function getNotifPrefs(db: Db, me: MemberId): Promise<NotifPrefs> {
+  const [row] = await db.select().from(notifPrefs).where(eq(notifPrefs.memberId, me)).limit(1);
+  return row ? toNotifPrefs(row) : defaultPrefs(me);
+}
+
+/** 전원 설정 — 행이 없는 멤버는 기본값. 팬아웃이 수신자마다 이걸로 게이트한다. */
+export async function allNotifPrefs(db: Db): Promise<Record<MemberId, NotifPrefs>> {
+  const rows = await db.select().from(notifPrefs);
+  const byId = new Map(rows.map((r) => [r.memberId, toNotifPrefs(r)]));
+  return Object.fromEntries(
+    MEMBER_IDS.map((m) => [m, byId.get(m) ?? defaultPrefs(m)]),
+  ) as Record<MemberId, NotifPrefs>;
+}
+
+/** 설정 저장 — 마지막 저장이 이긴다(설정 화면은 항상 서버 값을 먼저 읽고 고친다). */
+export async function putNotifPrefs(
+  db: Db,
+  me: MemberId,
+  p: Omit<NotifPrefs, 'm' | 'updatedAt'>,
+): Promise<NotifPrefs> {
+  const values = {
+    memberId: me,
+    startMode: p.startMode,
+    perMember: p.perMember,
+    cmMine: p.cmMine,
+    cmReply: p.cmReply,
+    cmAll: p.cmAll,
+    reactMode: p.reactMode,
+    quietEnabled: p.quietEnabled,
+    quietFrom: p.quietFrom,
+    quietTo: p.quietTo,
+  };
+  const [row] = await db
+    .insert(notifPrefs)
+    .values(values)
+    .onConflictDoUpdate({
+      target: notifPrefs.memberId,
+      set: { ...values, updatedAt: sql`now()` },
+    })
+    .returning();
+  return toNotifPrefs(row!);
 }

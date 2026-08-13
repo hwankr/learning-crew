@@ -137,6 +137,17 @@ export interface PushRequest {
   /** 없으면 빈 배열로 취급 — 이행기의 구버전 클라이언트 호환 */
   comments?: Comment[];
   reactions?: ReactionSet[];
+  /** 읽음 처리할 알림. "모두 읽음"도 클라이언트가 아는 안읽음 id를 열거해 보낸다 —
+      서버에 별도 상태가 없어 멱등하고, 그 사이 도착한 새 알림을 실수로 읽음 처리하지 않는다.
+      at은 읽은 시점에 관측한 그 행의 updatedAt(서버 시계) — 서버는 행이 그 뒤로 갱신되지
+      않았을 때만 도장을 찍는다. 집계 행(react_daily)이 그 사이 "다시 안 읽음"이 됐는데
+      뒤늦게 도착한 옛 읽음이 새 세대까지 읽음 처리하는 것을 막는다. */
+  notificationReads?: NotificationRead[];
+}
+
+export interface NotificationRead {
+  id: string;
+  at: string; // 읽은 시점에 관측한 행의 updatedAt — 세대 판별값
 }
 /** 행별 결과. applied=false면 row는 서버의 현재 행(충돌) — 클라이언트가 병합 후 재전송한다. */
 export interface PushRowResult {
@@ -166,6 +177,9 @@ export interface PushResponse {
       없으면 "구버전 Worker가 무시했다"로 보고 큐를 비우지 않는다 — 조용한 유실 방지. */
   commentResults?: CommentPushResult[];
   reactionResults?: ReactionPushResult[];
+  /** 정산된 읽음 처리 id — 이미 읽음이던 행도 포함해 요청한 id를 그대로 돌려준다(멱등).
+      comment/reaction 결과와 같은 구버전 규약: 보냈는데 이 필드가 없으면 큐를 지킨다. */
+  notificationReadResults?: string[];
 }
 
 /** (updated_at, id) 키셋 커서 — 같은 타임스탬프 행도 놓치지 않는다. */
@@ -182,6 +196,9 @@ export interface PullResponse {
   commentCursor?: PullCursor | null;
   reactions?: ReactionSet[];
   reactionCursor?: ReactionCursor | null;
+  /** 내(토큰 주인) 알림만 — 다른 스트림과 같은 (updated_at, id) 키셋. */
+  notifications?: Notification[];
+  notificationCursor?: PullCursor | null;
 }
 
 /* ---------- 지금 상태 (라이브 체크인) ---------- */
@@ -210,6 +227,83 @@ export interface StatusSetResponse {
   /** 처리 후 서버의 현재 상태 — 거부됐으면(다른 기기의 더 새 액션 존재) 그쪽 상태다. */
   status: MemberStatus;
   applied: boolean;
+}
+
+/* ---------- 알림 ---------- */
+
+/** 알림 종류 — 내역 필터의 단위. '댓글' 필터는 comment|reply를 함께 잡는다. */
+export const NOTIF_KINDS = ['start', 'comment', 'reply', 'mention', 'react', 'system'] as const;
+export type NotifKind = (typeof NOTIF_KINDS)[number];
+
+/** 알림이 온 이유 — 내역 행의 배지 키. 문구·색 매핑은 클라이언트의 몫이다. */
+export const NOTIF_WHYS = [
+  'mention', // 나를 언급한 댓글 (설정과 무관하게 항상)
+  'mine', // 내 기록에 달린 댓글
+  'reply', // 내가 댓글 단 기록에 달린 후속 댓글 (스레드가 없는 앱이라 "답글"의 정의가 이것)
+  'all', // 크루 기록의 모든 댓글 (기본 꺼짐)
+  'react', // 응원 반응 — 바로 받기
+  'react_daily', // 응원 반응 — 하루 요약 집계
+  'daily', // 공부 시작 — 하루 1회
+  'live', // 공부 시작 — 실시간
+  'quiet', // 방해 금지 시간 다이제스트
+] as const;
+export type NotifWhy = (typeof NOTIF_WHYS)[number];
+
+/** 알림 한 건 — 수신자(m)별 행. 서버가 만들고 클라이언트는 읽음 처리만 쓴다. */
+export interface Notification {
+  id: string; // 서버 생성 UUID
+  m: MemberId; // 수신자
+  kind: NotifKind;
+  why: NotifWhy;
+  actor: MemberId | null; // 행위자 — system·집계 행은 null일 수 있다
+  entryId: string | null; // 관련 기록 (없으면 null)
+  quote: string; // 인용문(댓글 본문, 이모지 등). '' = 없음
+  ctx: string; // 부가 설명 한 줄. '' = 없음 (집계 행은 클라이언트가 count로 만든다)
+  actors: MemberId[]; // 집계 행(react_daily)의 참여자 목록
+  count: number; // 집계 개수 — 일반 행은 1
+  createdAt: string; // 사건 시각 — 표시·정렬 기준
+  updatedAt: string; // 서버 시계 — pull 커서·중복 판별 기준 (집계 행은 갱신마다 앞으로 온다)
+  readAt: string | null;
+}
+
+/* ---------- 알림 설정 ---------- */
+
+export const NOTIF_MODES = ['live', 'daily', 'off'] as const;
+/** 공부 시작·응원 반응이 공유하는 3단 모드 — 실시간 / 하루 1회(요약) / 끔. */
+export type NotifMode = (typeof NOTIF_MODES)[number];
+
+/** 멤버당 1행. 서버가 알림 생성·푸시 발송을 이 값으로 게이트한다(멘션은 예외 — 항상). */
+export interface NotifPrefs {
+  m: MemberId;
+  startMode: NotifMode; // 공부 시작 기본값
+  perMember: Partial<Record<MemberId, NotifMode>>; // 크루별 오버라이드 (없는 키는 startMode)
+  cmMine: boolean; // 내 기록에 달린 댓글
+  cmReply: boolean; // 내 댓글에 달린 답글
+  cmAll: boolean; // 크루 기록의 모든 댓글
+  reactMode: NotifMode; // 응원 반응
+  quietEnabled: boolean; // 방해 금지 시간
+  quietFrom: string; // 'HH:00' — 매시 정각만 (다이제스트가 시간 단위 cron이라)
+  quietTo: string; // 'HH:00'
+  updatedAt: string;
+}
+
+/** 설정 행이 없는 멤버의 기본값 — 디자인의 추천 조합과 같다. */
+export const DEFAULT_NOTIF_PREFS: Omit<NotifPrefs, 'm' | 'updatedAt'> = {
+  startMode: 'daily',
+  perMember: {},
+  cmMine: true,
+  cmReply: true,
+  cmAll: false,
+  reactMode: 'daily',
+  quietEnabled: true,
+  quietFrom: '22:00',
+  quietTo: '07:00',
+};
+
+/** GET/PUT /api/notify/prefs 응답. */
+export interface NotifPrefsResponse {
+  ok: true;
+  prefs: NotifPrefs;
 }
 
 /* ---------- 웹 푸시 구독 ---------- */

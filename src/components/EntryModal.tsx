@@ -304,7 +304,6 @@ export function EntryModal({
                     </svg>
                   </button>
                 ))}
-                <span className="star-cap">{wit.caps[modal.stars] ?? wit.caps[0]}</span>
               </div>
             ) : (
               <span className="off-note">{wit.offNote}</span>

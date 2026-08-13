@@ -1,9 +1,7 @@
-/* 크루 공부 시작 알림 토글 — 이 기기의 웹 푸시 구독을 켜고 끈다. */
+/* 기기 알림 토글 — 이 기기의 웹 푸시 구독을 켜고 끈다. 알림 설정 페이지에 산다. */
 import { useEffect, useState } from 'react';
 import { disablePush, enablePush, getPushState, type PushState } from '../lib/push';
-
-const BELL_D =
-  'M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0';
+import { BELL_D } from './icons';
 
 function Bell({ size }: { size: number }) {
   return (
@@ -56,7 +54,7 @@ export function NotifyToggle({ token }: { token: string }) {
     <div className="notify-row">
       <Bell size={14} />
       <span className="notify-label">
-        {state === 'on' ? '공부 시작 알림 켜짐 · 이 기기' : '친구가 공부 시작하면 알림 받기'}
+        {state === 'on' ? '이 기기로 알림 받는 중' : '이 기기로 알림 받기'}
       </span>
       <button className={'notify-btn' + (state === 'on' ? ' on' : '')} onClick={() => void toggle()}
         disabled={busy}>
