@@ -1,5 +1,13 @@
 import { MEMBER_NAMES } from '../../shared/types';
-import type { Entry, MemberId, MemberStatus, Place, Tag } from '../../shared/types';
+import type {
+  Comment,
+  Entry,
+  MemberId,
+  MemberStatus,
+  Place,
+  ReactionSet,
+  Tag,
+} from '../../shared/types';
 
 export interface Member {
   id: MemberId;
@@ -138,6 +146,43 @@ export function seedEntries(): Entry[] {
     { ...base, id: 's8', m: 'th', day: b, time: '19:02', tag: '영어', stars: 4, memo: '자막 없이 미드 완주',
       body: '한 편을 자막 없이 봤다. 절반은 뉘앙스로 때려 맞혔지만, 그것도 실력이라고 우기기로 함.' },
     { ...base, id: 's9', m: 'jj', day: b, time: '15:20', tag: '자격증', stars: 3, memo: '요약노트 정리. 손목이 아파요' },
+  ];
+}
+
+/** 시드 댓글 시각 — 기록의 날짜(로컬)와 HH:MM을 합쳐 ISO로. 오프셋 없는 문자열은
+    로컬 시각으로 파싱되므로 카드에 찍히는 시각이 기록의 시각과 같은 기준이 된다. */
+const seedAt = (day: string, hhmm: string): string => new Date(`${day}T${hhmm}:00`).toISOString();
+
+/** 데모 모드 댓글 시드 — id가 UUID가 아니고(c*) 시드 기록(s*)에 달려 있어
+    지속·동기화되지 않는다. 메모리에서는 그대로 조작할 수 있다. */
+export function seedComments(): Comment[] {
+  const t = shiftKey(0), y = shiftKey(-1);
+  const c = (id: string, entryId: string, m: MemberId, day: string, hhmm: string, body: string): Comment => {
+    const at = seedAt(day, hhmm);
+    return { id, entryId, m, body, createdAt: at, updatedAt: at, deletedAt: null };
+  };
+  return [
+    c('c1', 's2', 'sh', t, '13:40', '쉐도잉은 3일차부터 갑자기 들려요. 그때까지만 버티기'),
+    c('c2', 's2', 'wg', t, '14:02', 'at stake 오늘 문제집에서도 나왔는데'),
+    c('c3', 's1', 'th', t, '10:12', '오답노트까지 하면 오늘은 그냥 완벽인데'),
+    c('c4', 's3', 'jj', y, '22:31', '천재 인정. 저는 아직 3회분 남았어요'),
+    c('c5', 's3', 'th', y, '22:48', '기출 회차 뭐 푸는지 알려주세요'),
+    c('c6', 's6', 'wg', y, '12:04', '쉬는 것도 일정입니다'),
+  ];
+}
+
+/** 데모 모드 리액션 시드 — 기록×멤버당 1행. 시드 기록에 달려 메모리 전용이다. */
+export function seedReactionSets(): ReactionSet[] {
+  const now = Date.now();
+  const ago = (min: number) => new Date(now - min * 60_000).toISOString();
+  const r = (entryId: string, m: MemberId, emojis: ReactionSet['emojis'], min: number): ReactionSet => ({
+    entryId, m, emojis, actedAt: ago(min), updatedAt: ago(min),
+  });
+  return [
+    r('s2', 'sh', ['👏'], 180), r('s2', 'wg', ['👏'], 165), r('s2', 'th', ['🔥'], 150),
+    r('s1', 'jj', ['👏'], 300),
+    r('s3', 'wg', ['👏', '💪'], 700), r('s3', 'th', ['👏'], 690), r('s3', 'jj', ['👏'], 680),
+    r('s6', 'sh', ['😴'], 800), r('s6', 'wg', ['😴'], 790),
   ];
 }
 

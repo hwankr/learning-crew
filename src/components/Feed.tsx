@@ -1,15 +1,17 @@
-import type { Entry, MemberId } from '../../shared/types';
+import type { Comment, Entry, MemberId, ReactionSet } from '../../shared/types';
 import { W } from '../lib/constants';
 import { EntryCard, type EntryActions } from './EntryCard';
 
 export function Feed({
-  entries, todayKey, yKey, meId, editingId, actions,
+  entries, todayKey, yKey, meId, editingId, comments, reactions, actions,
 }: {
   entries: Entry[];
   todayKey: string;
   yKey: string;
   meId: MemberId;
   editingId: string | null;
+  comments: Map<string, Comment[]>;
+  reactions: Map<string, ReactionSet[]>;
   actions: EntryActions;
 }) {
   const dayLabel = (k: string): string => {
@@ -33,8 +35,9 @@ export function Feed({
               .filter((e) => e.day === k)
               .sort((a, b) => b.time.localeCompare(a.time))
               .map((e) => (
-                <EntryCard key={e.id} e={e} compact={false} mine={e.m === meId}
-                  editing={e.id === editingId} actions={actions} />
+                <EntryCard key={e.id} e={e} compact={false} mine={e.m === meId} meId={meId}
+                  editing={e.id === editingId} comments={comments.get(e.id) ?? []}
+                  reactions={reactions.get(e.id) ?? []} actions={actions} />
               ))}
           </div>
         </div>

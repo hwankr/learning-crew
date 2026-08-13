@@ -1,4 +1,4 @@
-import type { Entry, MemberId } from '../../shared/types';
+import type { Comment, Entry, MemberId, ReactionSet } from '../../shared/types';
 import { BY_ID, MEMBERS, TAGMETA, W, dayKey, pad2, shiftKey, type CopySet } from '../lib/constants';
 import { Avatar, Icon } from './icons';
 import { EntryCard, type EntryActions } from './EntryCard';
@@ -19,7 +19,8 @@ function streakOf(m: MemberId, byDay: Map<string, Entry[]>): number {
 }
 
 export function CalendarView({
-  entries, calOff, setCalOff, selDay, setSelDay, todayKey, meId, editingId, wit, actions,
+  entries, calOff, setCalOff, selDay, setSelDay, todayKey, meId, editingId, comments, reactions,
+  wit, actions,
 }: {
   entries: Entry[];
   calOff: number;
@@ -29,6 +30,8 @@ export function CalendarView({
   todayKey: string;
   meId: MemberId;
   editingId: string | null;
+  comments: Map<string, Comment[]>;
+  reactions: Map<string, ReactionSet[]>;
   wit: CopySet;
   actions: EntryActions;
 }) {
@@ -149,8 +152,9 @@ export function CalendarView({
       {selList.length === 0 && <div className="sel-empty">{wit.calEmpty}</div>}
       <div>
         {selList.map((e) => (
-          <EntryCard key={e.id} e={e} compact mine={e.m === meId} editing={e.id === editingId}
-            actions={actions} />
+          <EntryCard key={e.id} e={e} compact mine={e.m === meId} meId={meId}
+            editing={e.id === editingId} comments={comments.get(e.id) ?? []}
+            reactions={reactions.get(e.id) ?? []} actions={actions} />
         ))}
       </div>
     </div>

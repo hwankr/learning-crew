@@ -17,12 +17,23 @@ import {
   deletePushSub,
   deleteGonePushSub,
   pushSubsExcept,
+  pushComments,
+  pullComments,
+  pushReactions,
+  pullReactions,
   NIL_UUID,
   type Db,
 } from './queries';
 import { NOTIFY_COOLDOWN_MS, shouldNotify } from './push';
-import { STATUS_TTL_MS, isStatusActive } from '../shared/types';
-import type { Entry, MemberStatus, PullCursor } from '../shared/types';
+import { STATUS_TTL_MS, canonicalUuid, isStatusActive, normalizeEmojis } from '../shared/types';
+import type {
+  Comment,
+  Entry,
+  MemberStatus,
+  PullCursor,
+  ReactionCursor,
+  ReactionSet,
+} from '../shared/types';
 
 let db: Db;
 
@@ -49,6 +60,20 @@ const B = '22222222-2222-4222-8222-222222222222';
 async function ageAll(): Promise<void> {
   await db.execute(sql`update entries set updated_at = updated_at - interval '10 minutes'`);
 }
+async function ageComments(): Promise<void> {
+  await db.execute(sql`update comments set updated_at = updated_at - interval '10 minutes'`);
+}
+/** 리액션은 ms로 잘라 두고 늙힌다 — 아래 커서 테스트가 행의 ISO updatedAt으로 커서를 만드는데,
+    Postgres는 마이크로초까지 저장해서 ISO(ms)로는 그 행을 넘어서지 못한다.
+    (실제 클라이언트는 서버가 준 커서를 그대로 되돌려 보내므로 이 문제가 없다.) */
+async function ageReactions(): Promise<void> {
+  await db.execute(
+    sql`update reactions set updated_at = date_trunc('milliseconds', updated_at - interval '10 minutes')`,
+  );
+}
+
+/** 프로토콜 경계에 나가는 타임스탬프는 항상 ISO여야 한다 — pg 텍스트 형식은 iOS Safari가 못 읽는다. */
+const ISO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
 beforeAll(async () => {
   const pg = new PGlite();
@@ -384,5 +409,299 @@ describe('push subscription queries', () => {
       sql`update status set last_notified_at = now() - interval '31 minutes' where member_id = 'jj'`,
     );
     expect(await claimNotifySlot(db, 'jj', NOTIFY_COOLDOWN_MS)).toBe(true);
+  });
+});
+
+/* ---------- 댓글 ---------- */
+
+const C1 = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1';
+const C2 = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2';
+/** entries에 없는 기록 id — 외래키를 걸지 않았음을 확인하는 데도 쓴다. */
+const GHOST = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+
+function comment(p: Partial<Comment> & Pick<Comment, 'id' | 'm' | 'entryId'>): Comment {
+  const nowIso = new Date().toISOString();
+  return { body: '오늘 고생하셨어요', createdAt: nowIso, updatedAt: nowIso, deletedAt: null, ...p };
+}
+
+describe('comment queries', () => {
+  it('새 댓글이 저장되고 pull로 받는다 (아직 없는 기록에도 달 수 있다 — 외래키 없음)', async () => {
+    const out = await pushComments(
+      db,
+      [comment({ id: C1, m: 'wg', entryId: A }), comment({ id: C2, m: 'wg', entryId: GHOST })],
+      'wg',
+    );
+    expect(out.applied).toHaveLength(2);
+    expect(out.current).toHaveLength(0);
+    // 프로토콜 경계의 타임스탬프는 전부 ISO — 서버 시계(updatedAt)도 작성 기기 시각(createdAt)도
+    expect(out.applied[0]!.updatedAt).toMatch(ISO_RE);
+    expect(out.applied[0]!.createdAt).toMatch(ISO_RE);
+    const r = await pullComments(db, null);
+    expect(r.rows.map((x) => x.id).sort()).toEqual([C1, C2].sort());
+    expect(r.rows.find((x) => x.id === C1)!.body).toBe('오늘 고생하셨어요');
+  });
+
+  it('같은 id 재전송은 멱등 — 본문·작성시각을 덮지 않고 현재 행을 돌려준다', async () => {
+    const out = await pushComments(
+      db,
+      [comment({ id: C1, m: 'wg', entryId: A, body: '바꿔치기 시도', createdAt: '2020-01-01T00:00:00.000Z' })],
+      'wg',
+    );
+    expect(out.applied).toHaveLength(0);
+    expect(out.current).toHaveLength(1);
+    expect(out.current[0]!.body).toBe('오늘 고생하셨어요'); // 클라이언트는 이 행을 채택하고 큐를 비운다
+    expect(out.current[0]!.createdAt).not.toContain('2020');
+  });
+
+  it('남의 댓글은 지울 수 없다 — 거부되고 살아있는 현재 행이 돌아온다', async () => {
+    const out = await pushComments(
+      db,
+      [comment({ id: C1, m: 'sh', entryId: A, deletedAt: new Date().toISOString() })],
+      'sh',
+    );
+    expect(out.applied).toHaveLength(0);
+    expect(out.current[0]!.m).toBe('wg');
+    expect(out.current[0]!.deletedAt).toBeNull();
+  });
+
+  it('내 댓글 삭제는 tombstone으로 전파되고, 부활 시도는 실패한다 (삭제는 단조)', async () => {
+    const del = await pushComments(
+      db,
+      [comment({ id: C1, m: 'wg', entryId: A, deletedAt: new Date().toISOString() })],
+      'wg',
+    );
+    expect(del.applied).toHaveLength(1);
+    expect(del.applied[0]!.deletedAt).not.toBeNull();
+    expect(del.applied[0]!.body).toBe('오늘 고생하셨어요'); // 본문은 그대로 — 갱신되는 건 삭제뿐
+
+    // 오프라인 기기가 삭제 전 상태를 밀어 올리는 시나리오 — 되살아나면 안 된다
+    const revive = await pushComments(db, [comment({ id: C1, m: 'wg', entryId: A })], 'wg');
+    expect(revive.applied).toHaveLength(0);
+    expect(revive.current[0]!.deletedAt).not.toBeNull();
+
+    // 삭제 재전송(잃어버린 응답 재시도)도 tombstone을 그대로 에코 — 클라이언트가 큐를 정산할 수 있다
+    const again = await pushComments(
+      db,
+      [comment({ id: C1, m: 'wg', entryId: A, deletedAt: new Date().toISOString() })],
+      'wg',
+    );
+    expect(again.applied).toHaveLength(0);
+    expect(again.current[0]!.deletedAt).not.toBeNull();
+  });
+
+  it('tombstone도 pull로 전파된다 (다른 기기가 목록에서 지울 수 있게)', async () => {
+    const r = await pullComments(db, null);
+    expect(r.rows.find((x) => x.id === C1)!.deletedAt).toMatch(ISO_RE);
+  });
+});
+
+describe('comment pull 커서 안전 지평선', () => {
+  let held: PullCursor | null = null;
+
+  it('최근 행이 있으면 커서가 지평선에서 멈춘다', async () => {
+    const r = await pullComments(db, null);
+    expect(r.rows.length).toBeGreaterThan(0);
+    expect(r.cursor!.id).toBe(NIL_UUID);
+    held = r.cursor;
+  });
+
+  it('지평선 커서 재-pull은 최근 행을 다시 싣는다 (중복은 클라이언트가 updatedAt 비교로 무시)', async () => {
+    const r = await pullComments(db, held);
+    expect(r.rows.some((x) => x.id === C2)).toBe(true);
+  });
+
+  it('지평선 너머로 방치된 커서는 빈 페이지에서 끌어내려진다', async () => {
+    const beyond: PullCursor = { ts: new Date().toISOString(), id: NIL_UUID };
+    const r = await pullComments(db, beyond);
+    expect(r.rows).toHaveLength(0);
+    expect(Date.parse(r.cursor!.ts)).toBeLessThan(Date.parse(beyond.ts));
+  });
+
+  it('오래된 행만 있으면 키셋 커서로 전진하고 재-pull은 비어 있다', async () => {
+    await ageComments();
+    const r = await pullComments(db, null);
+    expect(r.cursor!.id).not.toBe(NIL_UUID);
+    const r2 = await pullComments(db, r.cursor);
+    expect(r2.rows).toHaveLength(0);
+  });
+});
+
+/* ---------- 리액션 ---------- */
+
+const R1 = 'cccccccc-cccc-4ccc-8ccc-ccccccccccc1';
+const R2 = 'cccccccc-cccc-4ccc-8ccc-ccccccccccc2';
+const R3 = 'cccccccc-cccc-4ccc-8ccc-ccccccccccc3';
+
+function rset(p: Partial<ReactionSet> & Pick<ReactionSet, 'entryId' | 'm'>): ReactionSet {
+  const nowIso = new Date().toISOString();
+  return { emojis: ['👏'], actedAt: nowIso, updatedAt: nowIso, ...p };
+}
+
+describe('normalizeEmojis (서버·클라이언트 공용 정규화)', () => {
+  it('허용 이모지만 남기고 중복을 없애 REACTIONS 순서로 정렬한다', () => {
+    expect(normalizeEmojis(['🔥', '👏', '👏', '🍕'])).toEqual(['👏', '🔥']);
+  });
+  it('배열이 아니면 빈 집합', () => {
+    expect(normalizeEmojis('👏')).toEqual([]);
+    expect(normalizeEmojis(undefined)).toEqual([]);
+  });
+});
+
+describe('reaction queries', () => {
+  const t0 = Date.now();
+  const iso = (ms: number) => new Date(ms).toISOString();
+
+  it('리액션 집합이 기록×멤버당 1행으로 저장된다', async () => {
+    const out = await pushReactions(db, [
+      rset({ entryId: R1, m: 'wg', emojis: ['👏'], actedAt: iso(t0) }),
+    ]);
+    expect(out.applied).toHaveLength(1);
+    expect(out.applied[0]!.emojis).toEqual(['👏']);
+    expect(out.applied[0]!.actedAt).toMatch(ISO_RE);
+    expect(out.applied[0]!.updatedAt).toMatch(ISO_RE);
+  });
+
+  it('더 오래된 액션 시각은 거부된다 — 뒤늦게 도착한 옛 토글이 최신 집합을 못 덮는다', async () => {
+    const stale = await pushReactions(db, [
+      rset({ entryId: R1, m: 'wg', emojis: [], actedAt: iso(t0 - 600_000) }),
+    ]);
+    expect(stale.applied).toHaveLength(0);
+    expect(stale.current[0]!.emojis).toEqual(['👏']); // 서버 현재 행 — 클라이언트가 채택한다
+    expect(stale.current[0]!.actedAt).toBe(iso(t0));
+  });
+
+  it('같은 액션 시각의 재전송은 멱등하게 허용된다 (잃어버린 응답 재시도)', async () => {
+    const out = await pushReactions(db, [
+      rset({ entryId: R1, m: 'wg', emojis: ['👏'], actedAt: iso(t0) }),
+    ]);
+    expect(out.applied).toHaveLength(1);
+    expect(out.applied[0]!.emojis).toEqual(['👏']);
+  });
+
+  it('더 새로운 액션은 집합 전체를 갈아끼운다', async () => {
+    const out = await pushReactions(db, [
+      rset({ entryId: R1, m: 'wg', emojis: ['👏', '🔥'], actedAt: iso(t0 + 1000) }),
+    ]);
+    expect(out.applied[0]!.emojis).toEqual(['👏', '🔥']);
+  });
+
+  it('저장된 집합은 읽을 때도 정규화된다 (순서가 흔들리면 헛 동기화가 돈다)', async () => {
+    // jsonb에는 무엇이든 들어갈 수 있다 — 구버전/손상된 값이 있어도 경계에서 바로잡는다
+    await db.execute(
+      sql`update reactions set emojis = '["🔥","👏","👏","🍕"]'::jsonb where entry_id = ${R1}::uuid and member_id = 'wg'`,
+    );
+    const r = await pullReactions(db, null);
+    expect(r.rows.find((x) => x.entryId === R1 && x.m === 'wg')!.emojis).toEqual(['👏', '🔥']);
+  });
+
+  it('멤버마다 행이 따로 쌓인다 — 남의 리액션은 덮을 수 없다 (PK에 member_id)', async () => {
+    await pushReactions(db, [rset({ entryId: R1, m: 'sh', emojis: ['💪'], actedAt: iso(t0) })]);
+    const r = await pullReactions(db, null);
+    const onR1 = r.rows.filter((x) => x.entryId === R1);
+    expect(onR1).toHaveLength(2);
+    expect(onR1.find((x) => x.m === 'wg')!.emojis).toEqual(['👏', '🔥']);
+    expect(onR1.find((x) => x.m === 'sh')!.emojis).toEqual(['💪']);
+  });
+});
+
+describe('reaction pull 커서 안전 지평선', () => {
+  const iso = (ms: number) => new Date(ms).toISOString();
+
+  it('최근 행이 있으면 커서가 지평선에서 멈춘다 (키 자리는 최솟값)', async () => {
+    const r = await pullReactions(db, null);
+    expect(r.rows.length).toBeGreaterThan(0);
+    expect(r.cursor!.entryId).toBe(NIL_UUID);
+    expect(r.cursor!.m).toBe('');
+    // 지평선 커서로 다시 pull하면 최근 행이 재전달된다 — 늦은 커밋을 놓치지 않는다
+    expect((await pullReactions(db, r.cursor)).rows.length).toBeGreaterThan(0);
+  });
+
+  it('지평선 너머로 방치된 커서는 빈 페이지에서 끌어내려진다', async () => {
+    const beyond: ReactionCursor = { ts: iso(Date.now()), entryId: NIL_UUID, m: '' };
+    const r = await pullReactions(db, beyond);
+    expect(r.rows).toHaveLength(0);
+    expect(Date.parse(r.cursor!.ts)).toBeLessThan(Date.parse(beyond.ts));
+  });
+
+  it('오래된 행만 있으면 키셋 커서로 전진하고 재-pull은 비어 있다', async () => {
+    // 한 statement로 들어간 세 행은 updated_at이 완전히 같다 — (ts, entry_id, member_id)
+    // 튜플 비교가 그 동률을 갈라주는지 함께 확인한다
+    const now = iso(Date.now());
+    await pushReactions(db, [
+      rset({ entryId: R2, m: 'th', emojis: ['👀'], actedAt: now }),
+      rset({ entryId: R3, m: 'th', emojis: ['😴'], actedAt: now }),
+      rset({ entryId: R3, m: 'jj', emojis: ['😴'], actedAt: now }),
+    ]);
+    await ageReactions();
+    const all = await pullReactions(db, null);
+    expect(all.cursor!.entryId).not.toBe(NIL_UUID);
+    expect(await pullReactions(db, all.cursor)).toMatchObject({ rows: [] });
+
+    // 첫 행의 키를 커서로 삼으면 그 행만 빠지고 나머지가 순서대로 이어진다
+    const first = all.rows[0]!;
+    const rest = await pullReactions(db, {
+      ts: first.updatedAt,
+      entryId: first.entryId,
+      m: first.m,
+    });
+    expect(rest.rows.map((x) => `${x.entryId}|${x.m}`)).toEqual(
+      all.rows.slice(1).map((x) => `${x.entryId}|${x.m}`),
+    );
+  });
+});
+
+/* ---------- UUID 대소문자 (pg의 소문자 정규화) ---------- */
+
+const C3 = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3';
+const C4 = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa4';
+const R4 = 'cccccccc-cccc-4ccc-8ccc-ccccccccccc4';
+
+describe('canonicalUuid (핸들러 경계의 소문자 정규화)', () => {
+  it('대문자는 내리고 소문자는 그대로 둔다', () => {
+    expect(canonicalUuid(C3.toUpperCase())).toBe(C3);
+    expect(canonicalUuid(C3)).toBe(C3);
+  });
+
+  it('pg는 uuid를 소문자로 돌려준다 — 보낸 키 그대로 상관시키면 ACK가 어긋난다', async () => {
+    const sentId = C3.toUpperCase();
+    const out = await pushComments(db, [comment({ id: sentId, m: 'wg', entryId: A })], 'wg');
+    expect(out.applied).toHaveLength(1);
+    // 응답의 id는 보낸 문자열이 아니라 소문자다 — 핸들러가 미리 내려두지 않으면
+    // 클라이언트가 자기 큐 항목과 짝지을 수 없어 그 댓글이 큐에 영원히 남는다
+    expect(out.applied[0]!.id).not.toBe(sentId);
+    expect(out.applied[0]!.id).toBe(canonicalUuid(sentId));
+  });
+
+  it('대문자 entryId도 소문자로 저장된다 — 리액션의 상관 키 (entryId, m)도 같은 성질', async () => {
+    const out = await pushReactions(db, [
+      rset({ entryId: R4.toUpperCase(), m: 'wg', emojis: ['🔥'] }),
+    ]);
+    expect(out.applied[0]!.entryId).toBe(R4);
+  });
+
+  it('대소문자만 다른 두 행을 한 배치에 넣으면 배치 전체가 죽는다 (중복 검사가 먼저 정규화해야 하는 이유)', async () => {
+    // pg에게는 같은 한 행이라 ON CONFLICT가 같은 행을 두 번 건드리게 되고,
+    // 그 statement 전체가 에러가 된다 — 행 단위 400이 아니라 push 전체가 500이 된다
+    const err = await pushComments(
+      db,
+      [
+        comment({ id: C4, m: 'wg', entryId: A }),
+        comment({ id: C4.toUpperCase(), m: 'wg', entryId: A }),
+      ],
+      'wg',
+    ).then(
+      () => null,
+      (e: unknown) => e as { message?: string; cause?: { message?: string } },
+    );
+    expect(err).not.toBeNull();
+    expect(`${err?.cause?.message ?? err?.message}`).toMatch(/second time/);
+  });
+
+  it('정규화 후 중복이 걸러지면 남는 한 행만 정상 저장된다', async () => {
+    const ids = [C4, C4.toUpperCase()].map(canonicalUuid);
+    expect(new Set(ids).size).toBe(1); // 핸들러의 seenComments가 두 번째를 400으로 막는다
+    const out = await pushComments(db, [comment({ id: ids[0]!, m: 'wg', entryId: A })], 'wg');
+    expect(out.applied).toHaveLength(1);
+    expect(out.applied[0]!.id).toBe(C4);
   });
 });

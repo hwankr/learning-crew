@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import type { Entry, Tag, Todo } from '../shared/types';
+import type { Entry, ReactionEmoji, Tag, Todo } from '../shared/types';
 import { PUSH_LIMITS, TAGS } from '../shared/types';
 import { contentEqual } from './local/store';
 import { BY_ID, COPY, MEMBERS, W, dayKey, pad2, shiftKey } from './lib/constants';
@@ -243,6 +243,10 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
         todos: e.todos.map((t, j) => (j === i ? { ...t, done: !t.done } : t)),
         updatedAt: new Date().toISOString(),
       }),
+    // 소셜 쓰기는 스토어가 곧바로 로컬에 반영하고 큐에 넣는다 — 화면은 네트워크를 기다리지 않는다
+    onAddComment: (entryId: string, body: string) => store.addComment(entryId, body),
+    onDeleteComment: (id: string) => store.removeComment(id),
+    onToggleReaction: (entryId: string, emoji: ReactionEmoji) => store.toggleReaction(entryId, emoji),
   };
 
   return (
@@ -298,11 +302,13 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
           </div>
           {view === 'feed' ? (
             <Feed entries={entries} todayKey={todayKey} yKey={yKey} meId={me.id}
-              editingId={modal.editingId} actions={actions} />
+              editingId={modal.editingId} comments={snap.comments} reactions={snap.reactions}
+              actions={actions} />
           ) : (
             <CalendarView entries={entries} calOff={calOff} setCalOff={setCalOff}
               selDay={selDay ?? todayKey} setSelDay={setSelDay} todayKey={todayKey}
-              meId={me.id} editingId={modal.editingId} wit={wit} actions={actions} />
+              meId={me.id} editingId={modal.editingId} comments={snap.comments}
+              reactions={snap.reactions} wit={wit} actions={actions} />
           )}
           <div className="footer">
             {wit.footer}
