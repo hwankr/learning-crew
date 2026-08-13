@@ -71,6 +71,8 @@ describe('sync queries', () => {
     expect(out.applied.map((e) => e.id).sort()).toEqual([A, B].sort());
     expect(out.conflicts).toHaveLength(0);
     expect(out.applied.find((e) => e.id === A)!.v).toBe(1);
+    // 프로토콜 경계의 타임스탬프는 항상 ISO — pg 텍스트 형식은 Safari가 파싱하지 못한다
+    expect(out.applied[0]!.updatedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
     await ageAll();
     const r = await pullSince(db, null);
     expect(r.rows).toHaveLength(2);
@@ -234,6 +236,9 @@ describe('status queries', () => {
     expect(r.status.m).toBe('sh');
     expect(r.status.on).toBe(true);
     expect(r.status.place).toBe('도서관');
+    // 상태 타임스탬프도 ISO로 정규화되어 나간다 (클라이언트는 사전순 비교에 의존한다)
+    expect(r.status.updatedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+    expect(r.status.since).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     const all = await allStatuses(db);
     expect(all.filter((s) => s.m === 'sh')).toHaveLength(1);
   });

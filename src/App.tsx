@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { Entry, Tag, Todo } from '../shared/types';
+import { PUSH_LIMITS, TAGS } from '../shared/types';
+import { contentEqual } from './local/store';
 import { BY_ID, COPY, MEMBERS, W, dayKey, pad2, shiftKey } from './lib/constants';
 import type { AppConfig } from './lib/config';
 import type { CrewStore } from './local/store';
@@ -13,50 +15,71 @@ import { CalendarView } from './components/CalendarView';
 import { EMPTY_MODAL, EntryModal, type ModalState } from './components/EntryModal';
 
 /* ---------- 초안 — "초안 저장됨"이 진짜가 되도록 localStorage에 실제로 저장한다 ----------
-   슬롯은 기록별(수정 중인 기록의 id, 신규는 'new')로 분리한다 — 빈 새 기록 모달을 여는
-   것만으로 보관 중인 수정 초안이 지워지는 일이 없다. 수정 초안의 신선도는 시계 비교가
-   아니라 "초안을 시작할 때의 기록 updatedAt과 지금이 같은가"(문자열 동등)로 판정한다 —
-   기기 시계 오차나 브라우저별 타임스탬프 파싱 차이에 흔들리지 않는다. */
+   슬롯은 기록별(수정 중인 기록의 id, 신규는 'new')로, 데모/실계정도 접두사로 분리한다 —
+   빈 새 기록 모달이 수정 초안을 지우거나, 데모 낙서가 실계정 초안으로 새는 일이 없다.
+   수정 초안의 신선도는 "초안을 시작할 때의 기록 내용이 지금도 그대로인가"(contentEqual)로
+   판정한다 — updatedAt은 동기화 정산이 내용 변화 없이도 재작성하므로 기준이 될 수 없고,
+   시계 비교는 기기 오차·브라우저별 파싱 차이에 흔들린다. */
 interface Draft {
   tag: Tag | null;
   stars: number;
   body: string;
   todos: Todo[];
   day: string;
-  /** 수정 초안: 초안 시작 시점의 기록 updatedAt — 기록이 그대로일 때만 복원. 신규는 null. */
-  baseUpdatedAt: string | null;
+  /** 수정 초안: 초안 시작 시점의 기록 스냅샷 — 내용이 그대로일 때만 복원. 신규는 null. */
+  base: Entry | null;
   savedAt: number; // 오래 방치된 초안 정리에만 쓴다
 }
 
 const DRAFT_PREFIX = 'lc-draft:';
 const DRAFT_TTL_MS = 14 * 86_400_000;
+const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 function draftHasContent(d: { body: string; todos: Todo[] }): boolean {
   return !!d.body.trim() || d.todos.some((t) => t.t.trim());
 }
 
+/** 읽을 때 방어적으로 정규화한다 — 깨진/구버전 초안이 크래시를 내거나,
+    서버가 거부할 값(한도 초과·이상한 날짜)이 큐에 들어가 동기화를 막으면 안 된다. */
 function loadDraft(key: string): Draft | null {
   try {
     const raw = localStorage.getItem(key);
     if (!raw) return null;
-    const d = JSON.parse(raw) as Draft;
-    if (!d || typeof d !== 'object' || typeof d.body !== 'string' || !Array.isArray(d.todos)) return null;
-    return d;
+    const d = JSON.parse(raw) as Partial<Draft>;
+    if (!d || typeof d !== 'object' || typeof d.body !== 'string' || !Array.isArray(d.todos)) {
+      return null;
+    }
+    return {
+      tag: (TAGS as readonly string[]).includes(d.tag as string) ? (d.tag as Tag) : null,
+      stars: typeof d.stars === 'number' && d.stars >= 0 && d.stars <= 5 ? d.stars : 0,
+      body: d.body.slice(0, PUSH_LIMITS.body),
+      todos: d.todos.slice(0, PUSH_LIMITS.todos).map((t) => ({
+        t: String((t as Partial<Todo> | undefined)?.t ?? '').slice(0, PUSH_LIMITS.todoText),
+        done: !!(t as Partial<Todo> | undefined)?.done,
+      })),
+      day: typeof d.day === 'string' && DAY_RE.test(d.day) ? d.day : '',
+      base: d.base && typeof d.base === 'object' ? (d.base as Entry) : null,
+      savedAt: typeof d.savedAt === 'number' ? d.savedAt : 0,
+    };
   } catch {
     return null;
   }
 }
 
-function saveDraft(key: string, m: ModalState, baseUpdatedAt: string | null): void {
+// 마지막으로 저장한 초안 내용(키 포함, savedAt 제외) — 같은 내용의 중복 쓰기를 건너뛴다
+let lastSavedDraftSig = '';
+
+function saveDraft(key: string, m: ModalState, base: Entry | null): void {
   try {
     if (draftHasContent(m)) {
-      const d: Draft = {
-        tag: m.tag, stars: m.stars, body: m.body, todos: m.todos, day: m.day,
-        baseUpdatedAt, savedAt: Date.now(),
-      };
-      localStorage.setItem(key, JSON.stringify(d));
+      const payload = { tag: m.tag, stars: m.stars, body: m.body, todos: m.todos, day: m.day, base };
+      const sig = key + '\n' + JSON.stringify(payload);
+      if (sig === lastSavedDraftSig) return; // debounce 저장 직후의 닫기 등 — 동일 내용 재직렬화 방지
+      localStorage.setItem(key, JSON.stringify({ ...payload, savedAt: Date.now() } satisfies Draft));
+      lastSavedDraftSig = sig;
     } else {
       localStorage.removeItem(key); // 내용을 다 지웠으면 초안도 지운다
+      lastSavedDraftSig = '';
     }
   } catch {
     // 저장 공간 초과 등 — 초안은 best-effort
@@ -119,11 +142,12 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
 
   // 초안: 열려 있는 동안 짧게 모아 저장하고, 닫는 순간에도 즉시 저장한다(마지막 타이핑 유실 방지)
   const draftKey = useCallback(
-    (editingId: string | null) => `${DRAFT_PREFIX}${me.id}:${editingId ?? 'new'}`,
-    [me.id],
+    (editingId: string | null) =>
+      `${DRAFT_PREFIX}${cfg.demo ? 'demo:' : ''}${me.id}:${editingId ? 'e:' + editingId : 'new'}`,
+    [me.id, cfg.demo],
   );
-  // 수정 초안의 기준 시각 — 모달을 연 시점의 기록 updatedAt (신규는 null)
-  const editBase = useRef<string | null>(null);
+  // 수정 초안의 기준 — 모달을 연 시점의 기록 스냅샷 (신규는 null)
+  const editBase = useRef<Entry | null>(null);
   useEffect(() => pruneDrafts(), []);
   useEffect(() => {
     if (!modal.open) return;
@@ -153,18 +177,23 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
     const isOff = modal.tag === 'OFF';
     if (!modal.tag || (!isOff && modal.stars <= 0)) return;
     const stamp = new Date();
+    // 서버 한도로 캡 — 초과분이 큐에 들어가면 400이 배치 전체를 막아 동기화가 멈춘다
+    // (본문 초과는 옛 한 줄 메모를 본문에 합치는 수정 경로에서만 생길 수 있다)
     const common = {
       tag: modal.tag,
       stars: isOff ? null : modal.stars,
       memo: '',
-      body: modal.body.trim(),
-      todos: modal.todos.filter((t) => t.t.trim()).map((t) => ({ t: t.t.trim(), done: t.done })),
+      body: modal.body.trim().slice(0, PUSH_LIMITS.body),
+      todos: modal.todos
+        .filter((t) => t.t.trim())
+        .slice(0, PUSH_LIMITS.todos)
+        .map((t) => ({ t: t.t.trim().slice(0, PUSH_LIMITS.todoText), done: t.done })),
       day: modal.day || dayKey(stamp),
       updatedAt: stamp.toISOString(),
       deletedAt: null,
     };
     const orig = modal.editingId ? store.getById(modal.editingId) : undefined;
-    if (orig) {
+    if (orig && !orig.deletedAt) {
       store.upsert({ ...orig, ...common });
     } else {
       // 신규 — 또는 수정하던 기록이 그 사이 다른 기기에서 삭제된 경우:
@@ -183,22 +212,23 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
 
   const actions = {
     onEdit: (e: Entry) => {
-      editBase.current = e.updatedAt;
-      // 이 기록을 고치다 만 초안이 있고 기록 자체가 그 뒤로 안 바뀌었으면 이어서 쓴다
+      editBase.current = e;
+      // 이 기록을 고치다 만 초안이 있고 기록 "내용"이 그 뒤로 안 바뀌었으면 이어서 쓴다
+      // (updatedAt 비교는 안 된다 — 동기화 정산이 내용 변화 없이도 재작성한다)
       const key = draftKey(e.id);
       const d = loadDraft(key);
-      if (d && draftHasContent(d) && d.baseUpdatedAt === e.updatedAt) {
+      if (d && draftHasContent(d) && d.base && contentEqual(d.base, e)) {
         setModal(modalFromDraft(d, e.id, e.day));
         return;
       }
-      if (d) removeDraft(key); // 기록이 그 뒤로 바뀌었다 — 낡은 초안은 버린다
+      if (d) removeDraft(key); // 기록 내용이 그 뒤로 바뀌었다 — 낡은 초안은 버린다
       setModal({
         open: true,
         editingId: e.id,
         tag: e.tag,
         stars: e.stars ?? 0,
-        // 예전 한 줄 메모는 본문 첫 줄로 승격해서 이어 쓴다
-        body: [e.memo, e.body].filter(Boolean).join('\n'),
+        // 예전 한 줄 메모는 본문 첫 줄로 승격해서 이어 쓴다 (서버 한도 내로)
+        body: [e.memo, e.body].filter(Boolean).join('\n').slice(0, PUSH_LIMITS.body),
         todos: e.todos.map((t) => ({ ...t })),
         day: e.day,
       });

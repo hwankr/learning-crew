@@ -22,7 +22,8 @@ import {
   TAGS,
   PLACES,
   PUSH_LIMITS,
-  STATUS_TTL_MS,
+  UUID_RE,
+  isFreshSince,
   type Entry,
   type MemberId,
   type PullCursor,
@@ -84,14 +85,22 @@ app.use('/api/push/*', requireMember);
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const TIME_RE = /^\d{2}:\d{2}$/;
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** 형식만이 아니라 실존하는 달력 날짜인지 — '2026-02-31'은 Postgres date 삽입에서
+    500을 내며 배치 전체를 죽이므로 여기서 행 단위 400으로 걸러야 한다. */
+function isRealDay(day: string): boolean {
+  if (!DAY_RE.test(day)) return false;
+  const [y, m, d] = day.split('-').map(Number);
+  const dt = new Date(Date.UTC(y!, m! - 1, d!));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m! - 1 && dt.getUTCDate() === d;
+}
 
 /** 본인 행 + 형식이 유효할 때만 통과. 실패 사유 문자열, 성공이면 null. */
 function invalidReason(e: Entry, me: MemberId): string | null {
   if (!e || typeof e !== 'object') return 'not an object';
   if (typeof e.id !== 'string' || !UUID_RE.test(e.id)) return 'bad id';
   if (e.m !== me) return 'not your entry';
-  if (typeof e.day !== 'string' || !DAY_RE.test(e.day)) return 'bad day';
+  if (typeof e.day !== 'string' || !isRealDay(e.day)) return 'bad day';
   if (typeof e.time !== 'string' || !TIME_RE.test(e.time)) return 'bad time';
   if (!(TAGS as readonly string[]).includes(e.tag)) return 'bad tag';
   if (e.stars !== null && (!Number.isInteger(e.stars) || e.stars < 1 || e.stars > 5)) return 'bad stars';
@@ -171,13 +180,15 @@ function normalizeSince(raw: unknown, now: number): string {
   return new Date(now).toISOString();
 }
 
-/** 액션 시각(LWW 기준) 정규화 — 미래만 5분으로 캡하고 과거는 그대로 둔다.
-    과거를 끌어올리면(클램프하면) 아주 오래된 오프라인 토글이 더 새 액션을 이겨 버린다 —
-    오래된 액션은 LWW에서 자연히 지는 것이 정답이다. */
+/** 액션 시각(LWW 기준) 정규화 — 미래는 지금으로 캡하고 과거는 그대로 둔다.
+    · 과거를 끌어올리면 아주 오래된 오프라인 토글이 더 새 액션을 이겨 버린다 —
+      오래된 액션은 LWW에서 자연히 지는 것이 정답이다.
+    · 미래를 허용하면 시계가 빠른 기기가 그 시간만큼 다른 기기의 토글에 거부권을 갖는다 —
+      지금으로 캡하면 미래-스큐 기기는 도착 순서로 동작해 아무도 잠기지 않는다. */
 function normalizeAt(raw: unknown, now: number): string {
   if (typeof raw === 'string') {
     const t = Date.parse(raw);
-    if (Number.isFinite(t)) return new Date(Math.min(t, now + 5 * 60_000)).toISOString();
+    if (Number.isFinite(t)) return new Date(Math.min(t, now)).toISOString();
   }
   return new Date(now).toISOString();
 }
@@ -195,13 +206,15 @@ app.post('/api/sync/status', async (c) => {
     return c.json({ error: 'bad place' }, 400);
   }
   const now = Date.now();
-  const at = normalizeAt(body.at, now);
+  // at이 없는 구버전 클라이언트의 ON은 도착 시각이 아니라 본인이 주장하는 시작 시각(since)을
+  // 액션 시각으로 삼는다 — 도착 시각을 쓰면 뒤늦게 재접속한 옛 ON이 최신 OFF를 이겨 버린다
+  const at = normalizeAt(body.at ?? (body.on ? body.since : undefined), now);
   let s = body.on
     ? { on: true, place: body.place!, since: normalizeSince(body.since, now), at }
     : { on: false, place: null, since: null, at };
   // TTL(14시간)보다 오래된 ON 액션은 이미 끝난 세션 — 뒤늦게 도착해도 "지금 공부 중"으로
   // 되살리거나 시작 알림을 쏘지 않고, 꺼짐으로 기록한다 (LWW 순서는 at이 그대로 지킨다)
-  if (s.on && now - Date.parse(at) >= STATUS_TTL_MS) {
+  if (s.on && !isFreshSince(at, now)) {
     s = { on: false, place: null, since: null, at };
   }
   const db = drizzle(neon(c.env.DATABASE_URL));
@@ -213,7 +226,8 @@ app.post('/api/sync/status', async (c) => {
   if (applied && shouldNotify(prev, s.on, now)) {
     c.executionCtx.waitUntil(
       (async () => {
-        // 수신자 확인이 먼저 — 구독자가 없는데 슬롯을 선점하면 쿨다운만 태운다
+        // 발송 가능성 확인이 먼저 — 키가 없거나 구독자가 없는데 슬롯을 선점하면 쿨다운만 태운다
+        if (!c.env.VAPID_PUBLIC_KEY || !c.env.VAPID_PRIVATE_KEY) return;
         const targets = await pushSubsExcept(db, me);
         if (targets.length === 0) return;
         if (!(await claimNotifySlot(db, me, NOTIFY_COOLDOWN_MS))) return;

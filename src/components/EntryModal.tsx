@@ -180,6 +180,7 @@ export function EntryModal({
                     className={'modal-todo-input' + (t.done ? ' done' : '')}
                     value={t.t}
                     placeholder={wit.todoPh}
+                    maxLength={PUSH_LIMITS.todoText}
                     autoFocus={i === modal.todos.length - 1 && !t.t}
                     onChange={(ev) =>
                       patch({ todos: modal.todos.map((x, j) => (j === i ? { ...x, t: ev.target.value } : x)) })
@@ -187,7 +188,7 @@ export function EntryModal({
                     onKeyDown={(ev) => {
                       if (ev.key !== 'Enter') return;
                       ev.preventDefault();
-                      if (i === modal.todos.length - 1 && t.t.trim()) {
+                      if (i === modal.todos.length - 1 && t.t.trim() && modal.todos.length < PUSH_LIMITS.todos) {
                         patch({ todos: [...modal.todos, { t: '', done: false }] });
                       }
                     }}
@@ -200,10 +201,12 @@ export function EntryModal({
                   </button>
                 </div>
               ))}
-              <button className="add-todo" onClick={() => patch({ todos: [...modal.todos, { t: '', done: false }] })}>
-                <Icon d={PLUS_D} size={13} sw={2.4} />
-                <span>항목 추가</span>
-              </button>
+              {modal.todos.length < PUSH_LIMITS.todos && (
+                <button className="add-todo" onClick={() => patch({ todos: [...modal.todos, { t: '', done: false }] })}>
+                  <Icon d={PLUS_D} size={13} sw={2.4} />
+                  <span>항목 추가</span>
+                </button>
+              )}
             </div>
           )}
         </div>

@@ -28,9 +28,10 @@ export function SyncStatus({ sync }: { sync: SyncInfo }) {
   } else if (sync.phase === 'error') {
     cls = 'warn';
     text = '서버 연결 오류 — 자동으로 재시도해요' + (n > 0 ? ` (대기 ${n}개)` : '');
-  } else if (sync.phase === 'syncing' || n > 0) {
+  } else if (n > 0) {
+    // '동기화 중'은 별도 국면이 아니라 대기 건수에서 파생된다
     cls = 'busy';
-    text = n > 0 ? `동기화 중 — 대기 ${n}개` : '동기화 중…';
+    text = `동기화 중 — 대기 ${n}개`;
   }
   return (
     <div className={'sync-row ' + cls}>

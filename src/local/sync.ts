@@ -1,5 +1,5 @@
 /* 백그라운드 동기화 클라이언트.
-   - push: 큐에 쌓인 내 행들을 멱등 업서트로 전송 (실패하면 큐에 남아 재시도)
+   - push: 큐에 쌓인 내 행들을 버전 CAS 업서트로 전송 (실패하면 큐에 남아 재시도)
    - pull: (updated_at, id) 키셋 커서 이후 변경분만 수신
    - 탭이 보일 때만 폴링 — Neon 무료 컴퓨트를 아끼고, 안 보이는 탭은 조용히 둔다 */
 import type {
@@ -12,9 +12,12 @@ import type {
   StatusSetResponse,
 } from '../../shared/types';
 import { PUSH_LIMITS } from '../../shared/types';
+import { authHeaders } from '../lib/push';
 import type { CrewStore } from './store';
 
 const POLL_MS = 20_000;
+// 응답 없는 요청이 busy 플래그를 영원히 잠그지 않게 — 브라우저 fetch에는 기본 타임아웃이 없다
+const FETCH_TIMEOUT_MS = 20_000;
 
 /** 401 — 토큰 만료/서명 키 교체. 재시도해도 소용없고 재로그인이 필요하다. */
 class AuthError extends Error {}
@@ -24,10 +27,26 @@ function ensureOk(res: Response, what: string): void {
   if (!res.ok) throw new Error(`${what} ${res.status}`);
 }
 
+function timeoutSignal(): AbortSignal | undefined {
+  return typeof AbortSignal !== 'undefined' && 'timeout' in AbortSignal
+    ? AbortSignal.timeout(FETCH_TIMEOUT_MS)
+    : undefined;
+}
+
 export class SyncClient {
   private pushTimer: ReturnType<typeof setTimeout> | null = null;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private busy = false;
+  // stop()에서 떼어낼 수 있게 핸들러를 보관한다
+  private onVisibility = (): void => {
+    if (document.visibilityState === 'visible') {
+      // 다른 탭이 그동안 pull한 결과가 IDB에만 있을 수 있다(공유 커서) — 먼저 재적재
+      void this.store.refreshFromDB();
+      void this.cycle();
+    }
+  };
+  private onOnline = (): void => void this.cycle();
+  private onOffline = (): void => this.store.setSyncPhase('offline');
 
   constructor(
     private store: CrewStore,
@@ -40,15 +59,9 @@ export class SyncClient {
     this.pollTimer = setInterval(() => {
       if (document.visibilityState === 'visible') void this.cycle();
     }, POLL_MS);
-    document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible') {
-        // 다른 탭이 그동안 pull한 결과가 IDB에만 있을 수 있다(공유 커서) — 먼저 재적재
-        void this.store.refreshFromDB();
-        void this.cycle();
-      }
-    });
-    window.addEventListener('online', () => void this.cycle());
-    window.addEventListener('offline', () => this.store.setSyncPhase('offline'));
+    document.addEventListener('visibilitychange', this.onVisibility);
+    window.addEventListener('online', this.onOnline);
+    window.addEventListener('offline', this.onOffline);
     if (!navigator.onLine) this.store.setSyncPhase('offline');
     void this.cycle();
   }
@@ -56,6 +69,9 @@ export class SyncClient {
   stop(): void {
     if (this.pollTimer) clearInterval(this.pollTimer);
     if (this.pushTimer) clearTimeout(this.pushTimer);
+    document.removeEventListener('visibilitychange', this.onVisibility);
+    window.removeEventListener('online', this.onOnline);
+    window.removeEventListener('offline', this.onOffline);
     this.store.onLocalWrite = null;
   }
 
@@ -73,7 +89,6 @@ export class SyncClient {
       return;
     }
     this.busy = true;
-    if (this.store.pendingIds().length > 0) this.store.setSyncPhase('syncing');
     try {
       await this.push();
       await this.pushStatus();
@@ -106,8 +121,9 @@ export class SyncClient {
       const revById = new Map(batch.map((p) => [p.entry.id, p.rev]));
       const res = await fetch('/api/sync/push', {
         method: 'POST',
-        headers: { 'content-type': 'application/json', authorization: `Bearer ${this.token}` },
+        headers: authHeaders(this.token),
         body: JSON.stringify({ entries: batch.map((p) => p.entry) } satisfies PushRequest),
+        signal: timeoutSignal(),
       });
       ensureOk(res, 'push');
       const data = (await res.json()) as PushResponse;
@@ -118,12 +134,15 @@ export class SyncClient {
           if (r.applied) this.store.ackApplied(r.id, rev, r.row);
           else this.store.resolveConflict(r.id, r.row);
         }
-      } else {
-        // 배포 이행기의 구버전 Worker(LWW) 응답 — 전량 반영됐으므로 보낸 내용을 에코로 ACK
+      } else if (data && data.ok === true && typeof data.serverTime === 'string') {
+        // 배포 이행기의 구버전 Worker(LWW) 응답 — 전량 반영됐으므로 보낸 내용을 에코로 ACK.
         // (ACK하지 않으면 큐가 안 비어 400ms 재전송 루프가 된다)
+        // ok/serverTime을 반드시 확인한다: 캐티브 포털 등 "가짜 200 JSON"에 큐를 비우면 안 된다.
         for (const p of batch) {
           this.store.ackApplied(p.entry.id, p.rev, { ...p.entry, updatedAt: data.serverTime });
         }
+      } else {
+        throw new Error('push malformed response');
       }
     }
   }
@@ -136,13 +155,14 @@ export class SyncClient {
     if (!st) return;
     const res = await fetch('/api/sync/status', {
       method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${this.token}` },
+      headers: authHeaders(this.token),
       body: JSON.stringify({
         on: st.on,
         place: st.place ?? undefined,
         since: st.since ?? undefined,
         at: st.updatedAt,
       } satisfies StatusSetRequest),
+      signal: timeoutSignal(),
     });
     ensureOk(res, 'status');
     const data = (await res.json()) as StatusSetResponse;
@@ -155,18 +175,23 @@ export class SyncClient {
     for (;;) {
       const qs = cursor ? `?since=${encodeURIComponent(cursor.ts)}&sinceId=${cursor.id}` : '';
       const res = await fetch(`/api/sync/pull${qs}`, {
-        headers: { authorization: `Bearer ${this.token}` },
+        headers: authHeaders(this.token),
+        signal: timeoutSignal(),
       });
       ensureOk(res, 'pull');
       const data = (await res.json()) as PullResponse;
-      // 행 반영과 커서 전진을 스토어가 한 트랜잭션으로 처리한다
+      const lastPage = data.rows.length < 500;
+      // 행 반영과 커서 전진을 스토어가 한 트랜잭션으로 처리한다.
+      // 중간 페이지(=500행)에서는 이전 커서를 영속화한다 — 페이지 사이에서 탭이 죽으면
+      // 다시 받으면 그만이지만(중복은 v로 무시), 전진한 커서가 지평선 너머로 영속화된 채
+      // 방치되면 늦게 커밋된 행을 영영 놓칠 수 있다.
       this.store.applyPull(
         data.rows,
         Array.isArray(data.statuses) ? data.statuses : undefined,
-        data.cursor,
+        lastPage ? data.cursor : cursor,
       );
       if (data.cursor) cursor = data.cursor;
-      if (data.rows.length < 500) break;
+      if (lastPage) break;
     }
   }
 }

@@ -7,19 +7,20 @@
    - id가 UUID가 아닌 행(데모 시드 s*)은 메모리 전용: 저장도 동기화도 하지 않는다. */
 import type { IDBPTransaction } from 'idb';
 import type { Entry, MemberId, MemberStatus, Place, PullCursor } from '../../shared/types';
+import { UUID_RE } from '../../shared/types';
 import { openCrewDB, type CrewDatabase, type CrewDB, type QueueMeta } from './idb';
 import { seedEntries, seedStatuses } from '../lib/constants';
 
 type StoreName = 'entries' | 'queue' | 'meta';
 type CrewTx = IDBPTransaction<CrewDB, StoreName[], 'readwrite'>;
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 // 구 프로토타입이 쓰던 localStorage 키 — 이관용이므로 이 이름 그대로 둬야 한다
 const LEGACY_KEY = 'running-crew-entries-v2';
 const MIGRATED_FLAG = 'migrated-legacy-v2';
 
-/** 동기화 국면 — SyncClient가 갱신하고 UI가 그대로 표시한다. */
-export type SyncPhase = 'ok' | 'syncing' | 'offline' | 'error' | 'auth';
+/** 동기화 국면 — SyncClient가 갱신하고 UI가 그대로 표시한다.
+    ('동기화 중' 표시는 pending>0에서 파생되므로 별도 국면이 필요 없다) */
+export type SyncPhase = 'ok' | 'offline' | 'error' | 'auth';
 export interface SyncInfo {
   phase: SyncPhase;
   /** 아직 서버에 안 간 변경 수 (기록 큐 + 지금 상태 dirty) */
@@ -45,12 +46,15 @@ function fieldEq(a: Entry, b: Entry, f: (typeof MERGE_FIELDS)[number] | 'todos')
   return a[f] === b[f];
 }
 
+/** 삭제 "상태"가 같은가 — tombstone 시각 문자열이 아니라 살았는지/지워졌는지만 본다. */
+function sameLiveness(a: Entry, b: Entry): boolean {
+  return (a.deletedAt === null) === (b.deletedAt === null);
+}
+
 /** 내용(동기화 메타 제외)이 같은가 — 충돌 응답이 사실상 내 쓰기의 에코일 때를 판별한다. */
 export function contentEqual(a: Entry, b: Entry): boolean {
   return (
-    MERGE_FIELDS.every((f) => fieldEq(a, b, f)) &&
-    fieldEq(a, b, 'todos') &&
-    (a.deletedAt === null) === (b.deletedAt === null)
+    MERGE_FIELDS.every((f) => fieldEq(a, b, f)) && fieldEq(a, b, 'todos') && sameLiveness(a, b)
   );
 }
 
@@ -100,6 +104,8 @@ export class CrewStore {
   private bc: BroadcastChannel | null = null;
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
   private refreshing = false;
+  // 마지막으로 IDB에 쓴 커서 — 값이 같으면 폴링마다 무의미한 readwrite 트랜잭션을 만들지 않는다
+  private lastCursor: PullCursor | null = null;
 
   /** SyncClient가 등록 — 로컬 쓰기 직후 push를 예약한다. */
   onLocalWrite: (() => void) | null = null;
@@ -118,18 +124,23 @@ export class CrewStore {
       this.db = null;
     }
     if (this.db) {
-      const [rows, qkeys, qvals] = await Promise.all([
-        this.db.getAll('entries'),
-        this.db.getAllKeys('queue'),
-        this.db.getAll('queue'),
+      // 전부 한 읽기 트랜잭션으로 — 특히 큐의 키·값을 따로 읽으면 다른 탭의 커밋이
+      // 사이에 끼어들어 키와 값이 어긋난 채(엉뚱한 base로) 짝지어질 수 있다
+      const tx = this.db.transaction(['entries', 'queue', 'meta']);
+      const [rows, qkeys, qvals, st, dirty] = await Promise.all([
+        tx.objectStore('entries').getAll(),
+        tx.objectStore('queue').getAllKeys(),
+        tx.objectStore('queue').getAll(),
+        tx.objectStore('meta').get(MY_STATUS_KEY),
+        tx.objectStore('meta').get(STATUS_DIRTY_KEY),
       ]);
+      await tx.done;
       for (const e of rows) this.map.set(e.id, normalizeEntry(e));
       qkeys.forEach((k, i) => this.queue.set(String(k), qvals[i]!));
       // 내 상태는 지속 — 다른 멤버 상태는 어차피 첫 pull에 실려 온다
-      const st = await this.db.get('meta', MY_STATUS_KEY);
       if (!opts.demo && st && typeof st === 'object' && 'm' in st && st.m === opts.memberId) {
         this.statuses.set(st.m, st);
-        this.statusDirty = !!(await this.db.get('meta', STATUS_DIRTY_KEY));
+        this.statusDirty = !!dirty;
       }
     }
     if (!opts.demo) await this.migrateLegacy(opts.memberId);
@@ -237,10 +248,15 @@ export class CrewStore {
     let changed = false;
     const puts: Entry[] = [];
     const dels: string[] = [];
-    for (const row of rows) {
+    for (const raw of rows) {
+      // 이행기의 구버전 Worker 응답에는 v가 없을 수 있다 — 그대로 저장하면 이 행의
+      // 다음 push가 v 없는 JSON이 되어 조용히 레거시 LWW로 강등된다
+      const row = normalizeEntry(raw);
       if (this.queue.has(row.id)) continue; // 아직 push 안 된 로컬 수정이 이긴다
       const cur = this.map.get(row.id);
-      if (cur && cur.v === row.v) continue; // 커서 안전 윈도우의 중복 전달 — 조용히 무시
+      // 커서 안전 윈도우의 중복 전달 — 조용히 무시. updatedAt까지 봐야 비정상적으로
+      // 로컬만 바뀐(v 동일) 행이 서버 내용으로 복구될 수 있다
+      if (cur && cur.v === row.v && cur.updatedAt === row.updatedAt) continue;
       if (row.deletedAt) {
         if (this.map.delete(row.id)) changed = true;
         dels.push(row.id);
@@ -256,13 +272,24 @@ export class CrewStore {
         if (r.m === this.me && this.statusDirty) continue; // 아직 push 안 된 내 상태가 이긴다
         const cur = this.statuses.get(r.m);
         if (cur && cur.updatedAt === r.updatedAt) continue;
+        // 느린 pull 응답(오래된 스냅샷)이 그 사이 채택된 더 새 상태를 되돌리지 못하게 —
+        // 서버 타임스탬프는 전부 ISO라 사전순 비교가 곧 시간 비교다
+        if (cur && r.updatedAt < cur.updatedAt) continue;
         this.statuses.set(r.m, r);
         if (r.m === this.me) myStatus = r;
         changed = true;
       }
     }
-    // 실질 변경이 없는(커서만 전진하는) 정상 폴링에서는 다른 탭을 깨우지 않는다
+    // 실질 변경도 커서 전진도 없는 폴링에서는 IDB에 손대지 않고,
+    // 커서만 전진했으면 쓰되 다른 탭은 깨우지 않는다
+    const cursorChanged =
+      !!cursor && (this.lastCursor?.ts !== cursor.ts || this.lastCursor?.id !== cursor.id);
     const notify = puts.length > 0 || dels.length > 0 || myStatus !== null;
+    if (!notify && !cursorChanged) {
+      if (changed) this.bump();
+      return;
+    }
+    if (cursorChanged) this.lastCursor = cursor;
     this.txWrite(
       ['entries', 'meta'],
       (tx) => {
@@ -290,7 +317,13 @@ export class CrewStore {
         const next = { ...cur, v: server.v };
         this.map.set(id, next);
         this.persistEntry(next, meta);
+      } else {
+        // 행이 없어도 큐 meta는 영속화 — 메모리와 IDB의 base가 어긋나면 안 된다
+        this.txWrite(['queue'], (tx) => {
+          void tx.objectStore('queue').put(meta, id);
+        });
       }
+      this.bump();
       return;
     }
     this.settle(id, server);
@@ -303,7 +336,7 @@ export class CrewStore {
     const q = this.queue.get(id);
     const local = this.map.get(id);
     if (!q || !local) {
-      this.applyPull([server], undefined, null);
+      this.settle(id, server); // 큐/행이 없는 비정상 상태 — 서버를 그대로 채택
       return;
     }
     // ① 서버가 삭제 — 로컬 수정을 버리고 삭제를 따른다 (삭제된 기록 부활 방지)
@@ -355,6 +388,8 @@ export class CrewStore {
     this.txWrite(['queue'], (tx) => {
       void tx.objectStore('queue').delete(id);
     });
+    // bump해야 pending 표시가 갱신되고, 진행 중인 refreshFromDB의 rev 가드도 이 변이를 본다
+    this.bump();
   }
 
   /** 서버에 아직 안 보낸 내 상태. 없으면 null. */
@@ -382,8 +417,12 @@ export class CrewStore {
   }
 
   async getCursor(): Promise<PullCursor | null> {
-    const v = await this.db?.get('meta', 'cursor');
-    return v && typeof v === 'object' && 'ts' in v ? v : null;
+    try {
+      const v = await this.db?.get('meta', 'cursor');
+      return v && typeof v === 'object' && 'ts' in v ? v : null;
+    } catch {
+      return null; // 닫힌 DB(다른 탭 업그레이드에 양보) — 처음부터 pull해도 안전하다
+    }
   }
 
   /* ---------- IndexedDB 쓰기 (원자 단위) ---------- */
@@ -457,7 +496,7 @@ export class CrewStore {
       }
 
       // 행 병합 — 큐에 없는(clean) 행과 방금 채택한 dirty 행은 IDB 내용을 따른다.
-      // 변경 감지는 (v, updatedAt, deletedAt)로 충분하다: 서버 변경은 v를, 로컬 수정은
+      // 변경 감지는 (v, updatedAt, 삭제 상태)로 충분하다: 서버 변경은 v를, 로컬 수정은
       // updatedAt을 반드시 바꾼다 — 본문 전체를 직렬화해 비교할 필요가 없다.
       const dbIds = new Set<string>();
       for (const e of rows) {
@@ -465,12 +504,7 @@ export class CrewStore {
         if (this.queue.has(e.id) && !adopted.has(e.id)) continue;
         const norm = normalizeEntry(e);
         const cur = this.map.get(e.id);
-        if (
-          !cur ||
-          cur.v !== norm.v ||
-          cur.updatedAt !== norm.updatedAt ||
-          (cur.deletedAt === null) !== (norm.deletedAt === null)
-        ) {
+        if (!cur || cur.v !== norm.v || cur.updatedAt !== norm.updatedAt || !sameLiveness(cur, norm)) {
           this.map.set(e.id, norm);
           changed = true;
         }
@@ -483,16 +517,16 @@ export class CrewStore {
         }
       }
 
-      // 내 지금 상태 — 더 새 액션 시각이면 채택, 같은 액션을 다른 탭이 push했으면 dirty 해제
+      // 내 지금 상태 — 더 새 액션 시각이면 채택, 같은 액션을 다른 탭이 push했으면 dirty 해제.
+      // 타임스탬프는 전부 ISO(로컬 생성 + 서버 정규화)라 사전순 비교가 곧 시간 비교다 —
+      // Date.parse는 브라우저별 파싱 차이(특히 Safari)가 있어 쓰지 않는다
       if (dbSt && typeof dbSt === 'object' && 'm' in dbSt && dbSt.m === this.me) {
         const mem = this.statuses.get(this.me);
-        const dbT = Date.parse(dbSt.updatedAt);
-        const memT = mem ? Date.parse(mem.updatedAt) : Number.NEGATIVE_INFINITY;
-        if (Number.isFinite(dbT) && dbT >= memT && dbSt.updatedAt !== mem?.updatedAt) {
+        if (!mem || dbSt.updatedAt > mem.updatedAt) {
           this.statuses.set(this.me, dbSt);
           this.statusDirty = !!dbDirty;
           changed = true;
-        } else if (mem && dbSt.updatedAt === mem.updatedAt && this.statusDirty && !dbDirty) {
+        } else if (dbSt.updatedAt === mem.updatedAt && this.statusDirty && !dbDirty) {
           this.statusDirty = false;
           changed = true;
         }

@@ -1,5 +1,8 @@
 /* 클라이언트와 Worker가 공유하는 도메인 타입 + 동기화 프로토콜. */
 
+/** Entry id 형식 — 클라이언트 저장 가드와 서버 검증이 같은 정의를 쓴다. */
+export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export const MEMBER_IDS = ['sh', 'wg', 'th', 'jj'] as const;
 export type MemberId = (typeof MEMBER_IDS)[number];
 
@@ -108,8 +111,16 @@ export interface VapidKeyResponse {
 /** 끄는 걸 잊은 상태가 다음 날까지 남지 않게 — 이 시간이 지나면 꺼진 것으로 취급. */
 export const STATUS_TTL_MS = 14 * 60 * 60 * 1000;
 
+/** TTL 신선도 규칙의 단일 정의 — 표시(isStatusActive), 알림 판단(shouldNotify),
+    서버의 늦은 ON 액션 무효화가 전부 이 함수를 쓴다. 셋이 어긋나면 안 된다. */
+export function isFreshSince(ts: string | null, now: number): boolean {
+  if (ts === null) return false;
+  const t = Date.parse(ts);
+  return Number.isFinite(t) && now - t < STATUS_TTL_MS;
+}
+
 export function isStatusActive(s: MemberStatus | undefined, now: number): s is MemberStatus {
-  return !!s && s.on && s.since !== null && now - Date.parse(s.since) < STATUS_TTL_MS;
+  return !!s && s.on && isFreshSince(s.since, now);
 }
 
 export const PUSH_LIMITS = {

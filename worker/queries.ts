@@ -8,6 +8,14 @@ import type { Entry, MemberId, MemberStatus, Place, PullCursor, Tag, Todo } from
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type Db = PgDatabase<any, any, any>;
 
+/** DB가 돌려주는 타임스탬프(Postgres 텍스트 '2026-08-13 05:04:23.1+00')를 ISO로 정규화.
+    클라이언트(특히 iOS Safari)는 pg 텍스트 형식을 Date.parse하지 못할 수 있다 —
+    프로토콜 경계에서 항상 ISO만 내보내면 클라이언트는 파싱·사전순 비교 모두 안전하다. */
+function isoTs(ts: string): string {
+  const t = Date.parse(ts);
+  return Number.isFinite(t) ? new Date(t).toISOString() : ts;
+}
+
 function toEntry(r: typeof entries.$inferSelect): Entry {
   return {
     id: r.id,
@@ -20,10 +28,39 @@ function toEntry(r: typeof entries.$inferSelect): Entry {
     body: r.body,
     todos: r.todos as Todo[],
     v: r.version,
-    updatedAt: r.updatedAt,
-    deletedAt: r.deletedAt,
+    updatedAt: isoTs(r.updatedAt),
+    deletedAt: r.deletedAt === null ? null : isoTs(r.deletedAt),
   };
 }
+
+/** push 계열이 공유하는 행 매핑 — 필드 추가 시 여기 한 곳만 고친다. */
+function toInsertRow(e: Omit<Entry, 'v'>, version: number) {
+  return {
+    id: e.id,
+    memberId: e.m,
+    day: e.day,
+    time: e.time,
+    tag: e.tag,
+    stars: e.tag === 'OFF' ? null : e.stars,
+    memo: e.memo,
+    body: e.body,
+    todos: e.todos,
+    version,
+    deletedAt: e.deletedAt,
+  };
+}
+
+/** onConflictDoUpdate가 공유하는 내용 필드 갱신 — version/updated_at은 호출부가 정한다. */
+const CONTENT_SET = {
+  day: sql`excluded.day`,
+  time: sql`excluded.time`,
+  tag: sql`excluded.tag`,
+  stars: sql`excluded.stars`,
+  memo: sql`excluded.memo`,
+  body: sql`excluded.body`,
+  todos: sql`excluded.todos`,
+  deletedAt: sql`excluded.deleted_at`,
+} as const;
 
 export interface PushOutcome {
   /** 반영된 행 — 서버가 부여한 새 version/updated_at을 담아 돌려준다. */
@@ -40,33 +77,12 @@ export async function pushEntries(db: Db, rows: Entry[], me: MemberId): Promise<
   if (rows.length === 0) return { applied: [], conflicts: [] };
   const returned = await db
     .insert(entries)
-    .values(
-      rows.map((e) => ({
-        id: e.id,
-        memberId: e.m,
-        day: e.day,
-        time: e.time,
-        tag: e.tag,
-        stars: e.tag === 'OFF' ? null : e.stars,
-        memo: e.memo,
-        body: e.body,
-        todos: e.todos,
-        version: e.v + 1,
-        deletedAt: e.deletedAt,
-      })),
-    )
+    .values(rows.map((e) => toInsertRow(e, e.v + 1)))
     .onConflictDoUpdate({
       target: entries.id,
       set: {
-        day: sql`excluded.day`,
-        time: sql`excluded.time`,
-        tag: sql`excluded.tag`,
-        stars: sql`excluded.stars`,
-        memo: sql`excluded.memo`,
-        body: sql`excluded.body`,
-        todos: sql`excluded.todos`,
+        ...CONTENT_SET,
         version: sql`excluded.version`,
-        deletedAt: sql`excluded.deleted_at`,
         updatedAt: sql`now()`,
       },
       // excluded.version = base+1 이므로 "현재 version = base"가 CAS 조건이 된다
@@ -92,33 +108,12 @@ export async function pushEntriesLegacy(
   if (rows.length === 0) return [];
   const returned = await db
     .insert(entries)
-    .values(
-      rows.map((e) => ({
-        id: e.id,
-        memberId: e.m,
-        day: e.day,
-        time: e.time,
-        tag: e.tag,
-        stars: e.tag === 'OFF' ? null : e.stars,
-        memo: e.memo,
-        body: e.body,
-        todos: e.todos,
-        version: 1,
-        deletedAt: e.deletedAt,
-      })),
-    )
+    .values(rows.map((e) => toInsertRow(e, 1)))
     .onConflictDoUpdate({
       target: entries.id,
       set: {
-        day: sql`excluded.day`,
-        time: sql`excluded.time`,
-        tag: sql`excluded.tag`,
-        stars: sql`excluded.stars`,
-        memo: sql`excluded.memo`,
-        body: sql`excluded.body`,
-        todos: sql`excluded.todos`,
+        ...CONTENT_SET,
         version: sql`${entries.version} + 1`,
-        deletedAt: sql`excluded.deleted_at`,
         updatedAt: sql`now()`,
       },
       setWhere: sql`${entries.memberId} = ${me}`,
@@ -185,8 +180,8 @@ function toMemberStatus(r: typeof status.$inferSelect): MemberStatus {
     m: r.memberId as MemberId,
     on: r.on,
     place: r.place as Place | null,
-    since: r.since,
-    updatedAt: r.updatedAt,
+    since: r.since === null ? null : isoTs(r.since),
+    updatedAt: isoTs(r.updatedAt),
   };
 }
 

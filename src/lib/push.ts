@@ -42,7 +42,8 @@ function b64urlToBytes(s: string): Uint8Array {
   return Uint8Array.from(b, (ch) => ch.charCodeAt(0));
 }
 
-function authHeaders(token: string): Record<string, string> {
+/** 인증 API 호출 공용 헤더 — SyncClient도 같은 것을 쓴다. */
+export function authHeaders(token: string): Record<string, string> {
   return { 'content-type': 'application/json', authorization: `Bearer ${token}` };
 }
 

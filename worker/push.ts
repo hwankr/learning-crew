@@ -1,7 +1,7 @@
 /* 웹 푸시 발송 — VAPID 서명 + RFC 8291 암호화는 @block65/webcrypto-web-push가 처리한다.
    발송은 응답을 막지 않게 waitUntil로 백그라운드에서 돈다. */
 import { buildPushPayload, type PushMessage, type VapidKeys } from '@block65/webcrypto-web-push';
-import { STATUS_TTL_MS } from '../shared/types';
+import { isFreshSince } from '../shared/types';
 
 /** 같은 사람이 껐켰다 반복해도 이 시간 안에는 다시 알리지 않는다. */
 export const NOTIFY_COOLDOWN_MS = 30 * 60 * 1000;
@@ -14,10 +14,8 @@ export function shouldNotify(
 ): boolean {
   if (!turnOn) return false;
   // 켜진 채 장소만 바꾼 경우는 조용히 — 단, TTL이 지난 행은 "끄는 걸 잊은" 상태라
-  // 클라이언트 표시 규칙(isStatusActive)과 똑같이 꺼진 것으로 보고 다시 알린다.
-  const prevActive =
-    !!prev?.on && prev.since !== null && now - Date.parse(prev.since) < STATUS_TTL_MS;
-  if (prevActive) return false;
+  // 클라이언트 표시 규칙(isStatusActive)과 같은 신선도 함수로 꺼진 것으로 보고 다시 알린다.
+  if (!!prev?.on && isFreshSince(prev.since, now)) return false;
   if (prev?.lastNotifiedAt && now - Date.parse(prev.lastNotifiedAt) < NOTIFY_COOLDOWN_MS) {
     return false;
   }
