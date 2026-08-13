@@ -23,7 +23,6 @@ import { NOTIFY_COOLDOWN_MS, sendPushToAll, shouldNotify } from './push';
 import {
   MEMBER_IDS,
   MEMBER_NAMES,
-  TAGS,
   PLACES,
   PUSH_LIMITS,
   UUID_RE,
@@ -45,6 +44,7 @@ import {
   type StatusSetResponse,
   type VapidKeyResponse,
 } from '../shared/types';
+import { invalidReason } from './validation';
 
 type Env = {
   Bindings: {
@@ -91,41 +91,6 @@ const requireMember: MiddlewareHandler<Env> = async (c, next) => {
 };
 app.use('/api/sync/*', requireMember);
 app.use('/api/push/*', requireMember);
-
-const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
-const TIME_RE = /^\d{2}:\d{2}$/;
-
-/** 형식만이 아니라 실존하는 달력 날짜인지 — '2026-02-31'은 Postgres date 삽입에서
-    500을 내며 배치 전체를 죽이므로 여기서 행 단위 400으로 걸러야 한다. */
-function isRealDay(day: string): boolean {
-  if (!DAY_RE.test(day)) return false;
-  const [y, m, d] = day.split('-').map(Number);
-  const dt = new Date(Date.UTC(y!, m! - 1, d!));
-  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m! - 1 && dt.getUTCDate() === d;
-}
-
-/** 본인 행 + 형식이 유효할 때만 통과. 실패 사유 문자열, 성공이면 null. */
-function invalidReason(e: Entry, me: MemberId): string | null {
-  if (!e || typeof e !== 'object') return 'not an object';
-  if (typeof e.id !== 'string' || !UUID_RE.test(e.id)) return 'bad id';
-  if (e.m !== me) return 'not your entry';
-  if (typeof e.day !== 'string' || !isRealDay(e.day)) return 'bad day';
-  if (typeof e.time !== 'string' || !TIME_RE.test(e.time)) return 'bad time';
-  if (!(TAGS as readonly string[]).includes(e.tag)) return 'bad tag';
-  if (e.stars !== null && (!Number.isInteger(e.stars) || e.stars < 1 || e.stars > 5)) return 'bad stars';
-  if (typeof e.memo !== 'string' || e.memo.length > PUSH_LIMITS.memo) return 'bad memo';
-  if (typeof e.body !== 'string' || e.body.length > PUSH_LIMITS.body) return 'bad body';
-  if (!Array.isArray(e.todos) || e.todos.length > PUSH_LIMITS.todos) return 'bad todos';
-  for (const t of e.todos) {
-    if (!t || typeof t.t !== 'string' || t.t.length > PUSH_LIMITS.todoText || typeof t.done !== 'boolean') {
-      return 'bad todo item';
-    }
-  }
-  // v가 아예 없으면 구버전 클라이언트(레거시 LWW 프로토콜) — 거부하지 않고 레거시 경로로 처리
-  if (e.v !== undefined && (!Number.isInteger(e.v) || e.v < 0 || e.v > 2_000_000_000)) return 'bad v';
-  if (e.deletedAt !== null && typeof e.deletedAt !== 'string') return 'bad deletedAt';
-  return null;
-}
 
 /** 댓글 행 검증 — 본문은 trim 후 길이를 본다(공백만 남는 댓글은 실수다). */
 function invalidCommentReason(x: Comment, me: MemberId): string | null {

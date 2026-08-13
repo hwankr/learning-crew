@@ -179,6 +179,12 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 .chip-xs .chip-label { overflow: hidden; text-overflow: ellipsis; }
 .chip-sm { gap: 4px; font-size: 11px; padding: 3px 9px; }
 .chip-md { gap: 4px; font-size: 11.5px; padding: 3.5px 10px; }
+/* 자리가 좁아 접은 태그 수 — 태그 색을 쓰지 않는 중립 칩(없는 태그의 색을 주장하지 않는다) */
+.chip-more { flex: none; background: #F1F3F6; color: #9AA1AD; }
+/* 태그 칩 묶음 — 칩 자체는 nowrap이라, 좁아지면 이 줄 안에서 라벨이 말줄임된다 */
+.board-tags { display: flex; align-items: center; gap: 3px; min-width: 0; max-width: 100%; }
+.board-tags .chip { min-width: 0; overflow: hidden; }
+.board-tags .chip-label { overflow: hidden; text-overflow: ellipsis; }
 
 /* ---------- 오른쪽(피드/캘린더) 컬럼 ---------- */
 .feed-col { min-width: 0; padding-left: 0; border-left: none; margin-top: 32px; }
@@ -205,6 +211,8 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 .entry.editing { background: #FFF9E6; }
 .entry-main { flex: 1; min-width: 0; }
 .entry-head { display: flex; align-items: center; gap: 7px; }
+/* 별점은 줄지 않는다 — 좁아질 때 줄어드는 쪽은 태그 라벨이어야 한다 */
+.entry-head > svg { flex: none; }
 .entry-name { font-size: 14px; font-weight: 800; color: #16181D; }
 .entry-time { font-size: 11.5px; color: #9AA1AD; }
 .spacer { flex: 1; }
@@ -215,6 +223,10 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 .entry-act.del { color: #D3352A; }
 .entry-act.del:hover { background: #FEECEB; }
 .entry-tags { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; margin-top: 6px; }
+/* 컴팩트 카드의 머리 한 줄 — 이름·시각·별점과 폭을 나눠 쓰므로 태그가 밀어내지 않게 줄어든다 */
+.entry-head-tags { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.entry-head-tags .chip { min-width: 0; overflow: hidden; }
+.entry-head-tags .chip-label { overflow: hidden; text-overflow: ellipsis; }
 .todo-count { font-size: 11px; font-weight: 700; color: #B37F00; background: #FFF9E6; border-radius: 999px; padding: 3.5px 9px; }
 .entry-memo { font-size: 14px; color: #23262E; margin-top: 6px; line-height: 1.55; overflow-wrap: break-word; }
 .entry-body { font-size: 13.5px; color: #4E555F; margin-top: 5px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: break-word; }
@@ -367,7 +379,9 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 .cal-wd.sun { color: #D3352A; }
 .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; }
 .cal-cell {
-  height: 54px; background: transparent; border: 1.5px solid transparent; border-radius: 12px;
+  /* min-width: 0 — 그리드 항목의 기본 최소 크기는 내용 크기라, 태그를 여러 개 이어 붙인
+     긴 알약 라벨이 셀을 밀어 넓혀 달력 격자 전체를 넘치게 한다 (라벨은 말줄임으로 처리) */
+  height: 54px; min-width: 0; background: transparent; border: 1.5px solid transparent; border-radius: 12px;
   cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 4px; padding: 0;
   transition: background 140ms, border-color 140ms;
@@ -541,6 +555,7 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 }
 .meta-label { display: flex; align-items: center; gap: 6px; font-size: 13px; color: #9AA1AD; }
 .meta-label.tags { margin: 18px 0 10px; }
+.meta-hint { font-size: 11.5px; color: #B6BCC6; font-weight: 600; }
 .meta-label.stars { margin: 22px 0 6px; }
 .tag-chips { display: flex; flex-wrap: wrap; gap: 8px; }
 .tag-chip {

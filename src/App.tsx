@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { Entry, ReactionEmoji, Tag, Todo } from '../shared/types';
-import { PUSH_LIMITS, TAGS } from '../shared/types';
+import { PUSH_LIMITS, entryTags, isOffTags, normalizeTags, primaryTag } from '../shared/types';
 import { contentEqual } from './local/store';
 import { BY_ID, COPY, MEMBERS, W, dayKey, pad2, shiftKey } from './lib/constants';
 import type { AppConfig } from './lib/config';
@@ -21,7 +21,7 @@ import { EMPTY_MODAL, EntryModal, type ModalState } from './components/EntryModa
    판정한다 — updatedAt은 동기화 정산이 내용 변화 없이도 재작성하므로 기준이 될 수 없고,
    시계 비교는 기기 오차·브라우저별 파싱 차이에 흔들린다. */
 interface Draft {
-  tag: Tag | null;
+  tags: Tag[];
   stars: number;
   body: string;
   todos: Todo[];
@@ -39,6 +39,12 @@ function draftHasContent(d: { body: string; todos: Todo[] }): boolean {
   return !!d.body.trim() || d.todos.some((t) => t.t.trim());
 }
 
+/** 저장된 기록 스냅샷의 태그 파생 보정 — 구버전(단일 태그) 초안 base용. */
+function withTags(e: Entry): Entry {
+  const tags = entryTags(e);
+  return { ...e, tags, tag: primaryTag(tags) };
+}
+
 /** 읽을 때 방어적으로 정규화한다 — 깨진/구버전 초안이 크래시를 내거나,
     서버가 거부할 값(한도 초과·이상한 날짜)이 큐에 들어가 동기화를 막으면 안 된다. */
 function loadDraft(key: string): Draft | null {
@@ -49,8 +55,12 @@ function loadDraft(key: string): Draft | null {
     if (!d || typeof d !== 'object' || typeof d.body !== 'string' || !Array.isArray(d.todos)) {
       return null;
     }
+    // 구버전 초안(단일 tag)도 이어 쓸 수 있게 — 새 tags가 없으면 옛 tag에서 되살린다.
+    // 잘못된 값은 빈 배열(= 아직 안 고름)이지 '기타'가 아니다: entryTags의 되살림은
+    // 저장된 기록용 규칙이고, 초안은 사용자가 고르지 않았다는 사실을 그대로 남겨야 한다.
+    const legacyTag = (d as { tag?: unknown }).tag;
     return {
-      tag: (TAGS as readonly string[]).includes(d.tag as string) ? (d.tag as Tag) : null,
+      tags: d.tags === undefined ? normalizeTags([legacyTag]) : normalizeTags(d.tags),
       stars: typeof d.stars === 'number' && d.stars >= 0 && d.stars <= 5 ? d.stars : 0,
       body: d.body.slice(0, PUSH_LIMITS.body),
       todos: d.todos.slice(0, PUSH_LIMITS.todos).map((t) => ({
@@ -58,7 +68,9 @@ function loadDraft(key: string): Draft | null {
         done: !!(t as Partial<Todo> | undefined)?.done,
       })),
       day: typeof d.day === 'string' && DAY_RE.test(d.day) ? d.day : '',
-      base: d.base && typeof d.base === 'object' ? (d.base as Entry) : null,
+      // 초안 기준 스냅샷도 파생을 채워 둔다 — 다중 태그 이전에 저장된 base는 tags가 없어
+      // contentEqual이 무조건 불일치가 되고, 멀쩡한 수정 초안이 통째로 버려진다
+      base: d.base && typeof d.base === 'object' ? withTags(d.base as Entry) : null,
       savedAt: typeof d.savedAt === 'number' ? d.savedAt : 0,
     };
   } catch {
@@ -72,7 +84,7 @@ let lastSavedDraftSig = '';
 function saveDraft(key: string, m: ModalState, base: Entry | null): void {
   try {
     if (draftHasContent(m)) {
-      const payload = { tag: m.tag, stars: m.stars, body: m.body, todos: m.todos, day: m.day, base };
+      const payload = { tags: m.tags, stars: m.stars, body: m.body, todos: m.todos, day: m.day, base };
       const sig = key + '\n' + JSON.stringify(payload);
       if (sig === lastSavedDraftSig) return; // debounce 저장 직후의 닫기 등 — 동일 내용 재직렬화 방지
       localStorage.setItem(key, JSON.stringify({ ...payload, savedAt: Date.now() } satisfies Draft));
@@ -110,7 +122,7 @@ function pruneDrafts(): void {
 
 function modalFromDraft(d: Draft, editingId: string | null, fallbackDay: string): ModalState {
   return {
-    open: true, editingId, tag: d.tag, stars: d.stars,
+    open: true, editingId, tags: d.tags, stars: d.stars,
     body: d.body, todos: d.todos, day: d.day || fallbackDay,
   };
 }
@@ -174,13 +186,14 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
   };
 
   const submit = () => {
-    const isOff = modal.tag === 'OFF';
-    if (!modal.tag || (!isOff && modal.stars <= 0)) return;
+    const isOff = isOffTags(modal.tags);
+    if (modal.tags.length === 0 || (!isOff && modal.stars <= 0)) return;
     const stamp = new Date();
     // 서버 한도로 캡 — 초과분이 큐에 들어가면 400이 배치 전체를 막아 동기화가 멈춘다
     // (본문 초과는 옛 한 줄 메모를 본문에 합치는 수정 경로에서만 생길 수 있다)
     const common = {
-      tag: modal.tag,
+      tags: modal.tags,
+      tag: primaryTag(modal.tags), // 파생 필드 — 직접 고르는 값이 아니다
       stars: isOff ? null : modal.stars,
       memo: '',
       body: modal.body.trim().slice(0, PUSH_LIMITS.body),
@@ -225,7 +238,7 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
       setModal({
         open: true,
         editingId: e.id,
-        tag: e.tag,
+        tags: entryTags(e), // 구버전 IDB 행(tags 없음)도 대표 태그에서 되살린다
         stars: e.stars ?? 0,
         // 예전 한 줄 메모는 본문 첫 줄로 승격해서 이어 쓴다 (서버 한도 내로)
         body: [e.memo, e.body].filter(Boolean).join('\n').slice(0, PUSH_LIMITS.body),

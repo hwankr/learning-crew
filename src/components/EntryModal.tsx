@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Tag, Todo } from '../../shared/types';
-import { PUSH_LIMITS, TAGS } from '../../shared/types';
+import { PUSH_LIMITS, TAGS, isOffTags, normalizeTags } from '../../shared/types';
 import { TAGMETA, W, dayKey, pad2, type CopySet } from '../lib/constants';
 import { CheckMark, Icon, PLUS_D, STAR_D, X_D } from './icons';
 
 export interface ModalState {
   open: boolean;
   editingId: string | null;
-  tag: Tag | null;
+  /** 고른 공부 종류 — 다중 선택. 항상 normalizeTags를 지난 값(TAGS 순서, 'OFF'면 단독). */
+  tags: Tag[];
   stars: number;
   body: string;
   todos: Todo[];
@@ -15,8 +16,17 @@ export interface ModalState {
 }
 
 export const EMPTY_MODAL: ModalState = {
-  open: false, editingId: null, tag: null, stars: 0, body: '', todos: [], day: '',
+  open: false, editingId: null, tags: [], stars: 0, body: '', todos: [], day: '',
 };
+
+/** 태그 칩 토글 결과 — 'OFF'(쉬는 날)는 배타적이다.
+    OFF를 켜면 나머지는 전부 빠지고, OFF가 켜진 채 다른 태그를 켜면 OFF가 빠진다.
+    결과는 항상 normalizeTags를 지나 TAGS 순서로 고정된다 — 순서가 흔들리면 내용이 같은
+    기록이 서로를 "변경"으로 보고 헛 동기화가 돈다. */
+export function toggledTags(cur: readonly Tag[], t: Tag): Tag[] {
+  if (cur.includes(t)) return normalizeTags(cur.filter((x) => x !== t));
+  return normalizeTags(t === 'OFF' ? ['OFF'] : [...cur.filter((x) => x !== 'OFF'), t]);
+}
 
 const CHEVRON_D = 'M6 9l6 6 6-6';
 const PREV_D = 'M15 18l-6-6 6-6';
@@ -109,8 +119,8 @@ export function EntryModal({
   const isToday = modal.day === dayKey(new Date());
   const dateSuffix = modal.editingId ? '· 수정 중' : isToday ? '· 오늘' : '· 지난 기록';
 
-  const isOff = modal.tag === 'OFF';
-  const ready = !!modal.tag && (isOff || modal.stars > 0);
+  const isOff = isOffTags(modal.tags);
+  const ready = modal.tags.length > 0 && (isOff || modal.stars > 0);
   const hasContent = !!modal.body.trim() || modal.todos.some((t) => t.t.trim());
   const canNext = hasContent || !!modal.editingId;
   const firstLine = modal.body.trim().split('\n')[0] || '';
@@ -235,17 +245,18 @@ export function EntryModal({
             <div className="meta-label tags">
               <Icon d={TAGSEC_D} size={13} sw={2} />
               <span>오늘은 어떤 공부였나요?</span>
+              <span className="meta-hint">여러 개 고를 수 있어요</span>
             </div>
             <div className="tag-chips">
               {TAGS.map((t) => {
-                const on = modal.tag === t;
+                const on = modal.tags.includes(t);
                 const tm = TAGMETA[t];
                 return (
                   <button
                     key={t}
                     className="tag-chip"
                     style={on ? { background: tm.bg, color: tm.fg, borderColor: tm.fg } : undefined}
-                    onClick={() => patch({ tag: on ? null : t })}
+                    onClick={() => patch({ tags: toggledTags(modal.tags, t) })}
                   >
                     <Icon d={tm.icon} size={15} sw={2} />
                     <span>{t}</span>

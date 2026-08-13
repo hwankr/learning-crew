@@ -18,7 +18,10 @@ export const entries = pgTable(
     memberId: text('member_id').notNull(),
     day: date('day').notNull(),
     time: text('time').notNull(),
+    // 구버전 호환 대표 태그 — 서버가 tags에서 다시 계산해 넣는다(클라이언트 값은 신뢰하지 않는다)
     tag: text('tag').notNull(),
+    // 다중 선택된 공부 종류. 기존 행은 마이그레이션이 [tag]로 백필한다
+    tags: jsonb('tags').notNull().default([]),
     stars: integer('stars'),
     memo: text('memo').notNull().default(''),
     body: text('body').notNull().default(''),

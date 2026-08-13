@@ -2,7 +2,7 @@
 import { and, eq, inArray, ne, or, sql } from 'drizzle-orm';
 import type { PgDatabase } from 'drizzle-orm/pg-core';
 import { comments, entries, pushSubs, reactions, status } from './schema';
-import { normalizeEmojis } from '../shared/types';
+import { entryTags, isOffTags, normalizeEmojis, primaryTag } from '../shared/types';
 import type {
   Comment,
   Entry,
@@ -12,7 +12,6 @@ import type {
   PullCursor,
   ReactionCursor,
   ReactionSet,
-  Tag,
   Todo,
 } from '../shared/types';
 
@@ -29,12 +28,16 @@ function isoTs(ts: string): string {
 }
 
 function toEntry(r: typeof entries.$inferSelect): Entry {
+  // jsonb는 무엇이든 들어올 수 있는 자리 + 백필 전의 구버전 행에는 tags가 비어 있다 —
+  // 읽을 때도 파생을 다시 계산해 클라이언트가 받는 tag/tags가 절대 어긋나지 않게 한다
+  const tags = entryTags({ tag: r.tag, tags: r.tags });
   return {
     id: r.id,
     m: r.memberId as MemberId,
     day: r.day,
     time: r.time,
-    tag: r.tag as Tag,
+    tag: primaryTag(tags),
+    tags,
     stars: r.stars,
     memo: r.memo,
     body: r.body,
@@ -45,15 +48,20 @@ function toEntry(r: typeof entries.$inferSelect): Entry {
   };
 }
 
-/** push 계열이 공유하는 행 매핑 — 필드 추가 시 여기 한 곳만 고친다. */
+/** push 계열이 공유하는 행 매핑 — 필드 추가 시 여기 한 곳만 고친다.
+    tag는 클라이언트가 보낸 값을 믿지 않는다: 항상 tags에서 다시 계산해 저장한다
+    (구버전 클라이언트는 tags 없이 tag만 보내므로 entryTags가 양쪽을 하나로 만든다). */
 function toInsertRow(e: Omit<Entry, 'v'>, version: number) {
+  const tags = entryTags(e);
   return {
     id: e.id,
     memberId: e.m,
     day: e.day,
     time: e.time,
-    tag: e.tag,
-    stars: e.tag === 'OFF' ? null : e.stars,
+    tag: primaryTag(tags),
+    tags,
+    // 비-OFF+null은 레거시 "평가 없음"으로 보존하고, OFF만 DB 경계에서 null로 강제한다.
+    stars: isOffTags(tags) ? null : e.stars,
     memo: e.memo,
     body: e.body,
     todos: e.todos,
@@ -67,6 +75,7 @@ const CONTENT_SET = {
   day: sql`excluded.day`,
   time: sql`excluded.time`,
   tag: sql`excluded.tag`,
+  tags: sql`excluded.tags`,
   stars: sql`excluded.stars`,
   memo: sql`excluded.memo`,
   body: sql`excluded.body`,

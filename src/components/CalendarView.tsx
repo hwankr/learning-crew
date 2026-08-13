@@ -1,4 +1,5 @@
 import type { Comment, Entry, MemberId, ReactionSet } from '../../shared/types';
+import { entryTags, primaryTag } from '../../shared/types';
 import { BY_ID, MEMBERS, TAGMETA, W, dayKey, pad2, shiftKey, type CopySet } from '../lib/constants';
 import { Avatar, Icon } from './icons';
 import { EntryCard, type EntryActions } from './EntryCard';
@@ -76,11 +77,15 @@ export function CalendarView({
         <span className="cal-pills">
           {dayEntries.slice(0, MAX_PILLS).map((e) => {
             const mm = BY_ID[e.m] ?? MEMBERS[0]!;
-            const tm = TAGMETA[e.tag];
+            // 알약은 한 줄이라 색은 대표 태그 하나로 정하고, 나머지는 라벨에만 이어 붙인다
+            const tags = entryTags(e);
+            const tm = TAGMETA[primaryTag(tags)];
             return (
               <span key={e.id} className="cal-pill" style={{ background: tm.bg }}>
                 <span className="cal-pill-dot" style={{ background: mm.color }} />
-                <span className="cal-pill-label" style={{ color: tm.fg }}>{mm.name} {e.tag}</span>
+                <span className="cal-pill-label" style={{ color: tm.fg }}>
+                  {mm.name} {tags.join('·')}
+                </span>
               </span>
             );
           })}

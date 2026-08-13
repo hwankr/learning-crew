@@ -1,8 +1,13 @@
 import type { Comment, Entry, MemberId, ReactionEmoji, ReactionSet } from '../../shared/types';
+import { entryTags, isOffTags } from '../../shared/types';
 import { BY_ID, MEMBERS } from '../lib/constants';
 import { Avatar, CheckMark, StarsRow } from './icons';
-import { Chip } from './Chip';
+import { Chip, MoreChip } from './Chip';
 import { EntrySocial } from './EntrySocial';
+
+/** 컴팩트 카드의 한 줄 머리에 들어갈 칩 개수 — 나머지는 +N으로 접는다.
+    이름·시각·별점과 한 줄을 나눠 써야 해서 태그가 자리를 다 먹으면 안 된다. */
+const COMPACT_CHIPS = 2;
 
 export interface EntryActions {
   onEdit: (e: Entry) => void;
@@ -26,7 +31,9 @@ export function EntryCard({
   actions: EntryActions;
 }) {
   const mm = BY_ID[e.m] ?? MEMBERS[0]!;
-  const hasStars = e.tag !== 'OFF' && (e.stars ?? 0) > 0;
+  // 구버전 IDB 행(tags 없음)도 대표 태그에서 되살아난다 — 항상 1개 이상이다
+  const tags = entryTags(e);
+  const hasStars = !isOffTags(tags) && (e.stars ?? 0) > 0;
   const doneN = e.todos.filter((t) => t.done).length;
   const memoBold = e.body || e.todos.length > 0;
 
@@ -40,7 +47,15 @@ export function EntryCard({
           <span className="spacer" />
           {compact ? (
             <>
-              <Chip tag={e.tag} variant="sm2" />
+              {/* 좁은 한 줄 — 앞의 두 개만 보여 주고 나머지는 +N으로 접는다 */}
+              <span className="entry-head-tags">
+                {tags.slice(0, COMPACT_CHIPS).map((t) => (
+                  <Chip key={t} tag={t} variant="sm2" />
+                ))}
+                {tags.length > COMPACT_CHIPS && (
+                  <MoreChip n={tags.length - COMPACT_CHIPS} variant="sm2" />
+                )}
+              </span>
               {hasStars && <StarsRow n={e.stars ?? 0} w={55} h={11} />}
             </>
           ) : (
@@ -54,7 +69,10 @@ export function EntryCard({
         </div>
         {!compact && (
           <div className="entry-tags">
-            <Chip tag={e.tag} variant="md" />
+            {/* 넓은 모드는 전부 보여 준다 — .entry-tags가 flex-wrap이라 줄바꿈이 자연스럽다 */}
+            {tags.map((t) => (
+              <Chip key={t} tag={t} variant="md" />
+            ))}
             {hasStars && <StarsRow n={e.stars ?? 0} w={70} h={14} />}
             {e.todos.length > 0 && <span className="todo-count">{doneN}/{e.todos.length}</span>}
           </div>
