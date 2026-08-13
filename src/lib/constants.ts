@@ -1,4 +1,4 @@
-import { MEMBER_NAMES } from '../../shared/types';
+import { MEMBER_NAMES, primaryTag } from '../../shared/types';
 import type {
   Comment,
   Entry,
@@ -136,20 +136,22 @@ export function seedEntries(): Entry[] {
   const base: Pick<Entry, 'body' | 'todos' | 'v' | 'updatedAt' | 'deletedAt'> = {
     body: '', todos: [], v: 0, updatedAt: now, deletedAt: null,
   };
+  // tag는 tags의 파생값(대표 태그)이라 직접 쓰지 않고 여기서 한 번에 맞춘다
+  const seed = (e: Omit<Entry, 'tag'>): Entry => ({ ...e, tag: primaryTag(e.tags) });
   return [
-    { ...base, id: 's1', m: 'wg', day: t, time: '09:40', tag: '코딩테스트', stars: 4, memo: '오전 스퍼트 완료',
-      todos: [{ t: '그리디 3문제', done: true }, { t: 'DP 복습 1문제', done: true }, { t: '오답노트 정리', done: false }] },
-    { ...base, id: 's2', m: 'jj', day: t, time: '13:12', tag: '영어', stars: 3, memo: '쉐도잉 20분',
-      body: '혀가 먼저 퇴근했다.\n내일은 발음 교정 영상 보고 재도전. 그래도 오늘 표현 3개는 건짐 — at stake, for good, hold up.' },
-    { ...base, id: 's3', m: 'sh', day: y, time: '22:05', tag: '자격증', stars: 5, memo: '기출 1회분 클리어. 오늘만큼은 천재' },
-    { ...base, id: 's4', m: 'jj', day: y, time: '21:47', tag: '코딩테스트', stars: 4, memo: 'DFS가 드디어 손에 붙음' },
-    { ...base, id: 's5', m: 'wg', day: y, time: '20:11', tag: '영어', stars: 2, memo: '단어 데이',
-      todos: [{ t: '단어 30개 암기', done: true }, { t: '복습 테스트', done: false }] },
-    { ...base, id: 's6', m: 'th', day: y, time: '11:30', tag: 'OFF', stars: null, memo: '재충전의 날. 침대와 물아일체' },
-    { ...base, id: 's7', m: 'sh', day: b, time: '23:59', tag: '코딩테스트', stars: 2, memo: 'DP는 대체 누가 만들었을까' },
-    { ...base, id: 's8', m: 'th', day: b, time: '19:02', tag: '영어', stars: 4, memo: '자막 없이 미드 완주',
-      body: '한 편을 자막 없이 봤다. 절반은 뉘앙스로 때려 맞혔지만, 그것도 실력이라고 우기기로 함.' },
-    { ...base, id: 's9', m: 'jj', day: b, time: '15:20', tag: '자격증', stars: 3, memo: '요약노트 정리. 손목이 아파요' },
+    seed({ ...base, id: 's1', m: 'wg', day: t, time: '09:40', tags: ['코딩테스트'], stars: 4, memo: '오전 스퍼트 완료',
+      todos: [{ t: '그리디 3문제', done: true }, { t: 'DP 복습 1문제', done: true }, { t: '오답노트 정리', done: false }] }),
+    seed({ ...base, id: 's2', m: 'jj', day: t, time: '13:12', tags: ['영어', '기타'], stars: 3, memo: '쉐도잉 20분',
+      body: '혀가 먼저 퇴근했다.\n내일은 발음 교정 영상 보고 재도전. 그래도 오늘 표현 3개는 건짐 — at stake, for good, hold up.' }),
+    seed({ ...base, id: 's3', m: 'sh', day: y, time: '22:05', tags: ['자격증'], stars: 5, memo: '기출 1회분 클리어. 오늘만큼은 천재' }),
+    seed({ ...base, id: 's4', m: 'jj', day: y, time: '21:47', tags: ['자격증', '코딩테스트'], stars: 4, memo: 'DFS가 드디어 손에 붙음' }),
+    seed({ ...base, id: 's5', m: 'wg', day: y, time: '20:11', tags: ['영어'], stars: 2, memo: '단어 데이',
+      todos: [{ t: '단어 30개 암기', done: true }, { t: '복습 테스트', done: false }] }),
+    seed({ ...base, id: 's6', m: 'th', day: y, time: '11:30', tags: ['OFF'], stars: null, memo: '재충전의 날. 침대와 물아일체' }),
+    seed({ ...base, id: 's7', m: 'sh', day: b, time: '23:59', tags: ['코딩테스트'], stars: 2, memo: 'DP는 대체 누가 만들었을까' }),
+    seed({ ...base, id: 's8', m: 'th', day: b, time: '19:02', tags: ['자격증', '영어', '기타'], stars: 4, memo: '자막 없이 미드 완주',
+      body: '한 편을 자막 없이 봤다. 절반은 뉘앙스로 때려 맞혔지만, 그것도 실력이라고 우기기로 함.' }),
+    seed({ ...base, id: 's9', m: 'jj', day: b, time: '15:20', tags: ['자격증'], stars: 3, memo: '요약노트 정리. 손목이 아파요' }),
   ];
 }
 

@@ -1,7 +1,15 @@
-import { isStatusActive, type Entry, type MemberId, type MemberStatus } from '../../shared/types';
+import {
+  entryTags,
+  isOffTags,
+  isStatusActive,
+  primaryTag,
+  type Entry,
+  type MemberId,
+  type MemberStatus,
+} from '../../shared/types';
 import { MEMBERS, fmtElapsed, type CopySet, type Member } from '../lib/constants';
 import { Avatar, StarsRow } from './icons';
-import { Chip } from './Chip';
+import { Chip, MoreChip } from './Chip';
 
 function MeBadge({ sm }: { sm?: boolean }) {
   return <span className={'me-badge' + (sm ? ' sm' : '')}>나</span>;
@@ -33,14 +41,17 @@ function BoardCell({
   const ring = latest ? m.color : '#CDD2DB';
   const dash = latest ? '0' : '5 4';
   const opacity = latest ? undefined : 0.55;
-  const hasStars = !!latest && latest.tag !== 'OFF' && (latest.stars ?? 0) > 0;
+  // 보드는 4열이라 폭이 아주 좁다 — 첫 칩 하나만 놓고 나머지는 +N으로 접는다
+  const tags = latest ? entryTags(latest) : [];
+  const isOff = isOffTags(tags);
+  const hasStars = !!latest && !isOff && (latest.stars ?? 0) > 0;
   const firstTodo = latest && latest.todos.length > 0 ? latest.todos[0]!.t : '';
   const live = isStatusActive(status, now);
   const liveLine = live
     ? `${wit.statusPeer(status.place ?? '기타')}${status.since ? ` · ${fmtElapsed(status.since, now)}` : ''}`
     : '';
   const subLine = latest
-    ? latest.memo || firstTodo || (latest.body || '').split('\n')[0] || (latest.tag === 'OFF' ? '오늘은 휴식' : '')
+    ? latest.memo || firstTodo || (latest.body || '').split('\n')[0] || (isOff ? '오늘은 휴식' : '')
     : isMe
       ? wit.emptyMe
       : wit.empty;
@@ -57,9 +68,12 @@ function BoardCell({
         {live && <span className="board-strip-live">{status.place ?? '기타'} 공부 중</span>}
         {latest ? (
           <div className="board-strip-entry">
-            <Chip tag={latest.tag} variant="xs" />
+            <span className="board-tags">
+              <Chip tag={primaryTag(tags)} variant="xs" />
+              {tags.length > 1 && <MoreChip n={tags.length - 1} variant="xs" />}
+            </span>
             {hasStars && <StarsRow n={latest.stars ?? 0} w={55} h={11} />}
-            {latest.tag === 'OFF' && <span className="board-strip-off">오늘은 휴식</span>}
+            {isOff && <span className="board-strip-off">오늘은 휴식</span>}
           </div>
         ) : (
           !live && <span className="board-strip-empty">{wit.empty}</span>
@@ -77,7 +91,10 @@ function BoardCell({
         </div>
         {latest && (
           <div className="board-row-right">
-            <Chip tag={latest.tag} variant="sm" />
+            <span className="board-tags">
+              <Chip tag={primaryTag(tags)} variant="sm" />
+              {tags.length > 1 && <MoreChip n={tags.length - 1} variant="sm" />}
+            </span>
             {hasStars && <StarsRow n={latest.stars ?? 0} w={60} h={12} />}
           </div>
         )}

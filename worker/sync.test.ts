@@ -24,8 +24,15 @@ import {
   NIL_UUID,
   type Db,
 } from './queries';
+import { invalidReason } from './validation';
 import { NOTIFY_COOLDOWN_MS, shouldNotify } from './push';
-import { STATUS_TTL_MS, canonicalUuid, isStatusActive, normalizeEmojis } from '../shared/types';
+import {
+  STATUS_TTL_MS,
+  canonicalUuid,
+  isStatusActive,
+  normalizeEmojis,
+  primaryTag,
+} from '../shared/types';
 import type {
   Comment,
   Entry,
@@ -37,11 +44,14 @@ import type {
 
 let db: Db;
 
+/** tag는 tags의 파생값이라 픽스처가 직접 정하지 않는다 — 항상 primaryTag(tags)다.
+    (구버전 클라이언트를 흉내 내려면 tags를 뺀 행을 직접 만들어야 한다 — 아래 레거시 테스트) */
 function entry(partial: Partial<Entry> & Pick<Entry, 'id' | 'm'>): Entry {
-  return {
+  const row: Entry = {
     day: '2026-08-12',
     time: '10:00',
     tag: '영어',
+    tags: ['영어'],
     stars: 3,
     memo: '',
     body: '',
@@ -51,10 +61,37 @@ function entry(partial: Partial<Entry> & Pick<Entry, 'id' | 'm'>): Entry {
     deletedAt: null,
     ...partial,
   };
+  return { ...row, tag: primaryTag(row.tags) };
 }
 
 const A = '11111111-1111-4111-8111-111111111111';
 const B = '22222222-2222-4222-8222-222222222222';
+
+describe('entry push validation', () => {
+  it('비-OFF의 null 별점과 OFF의 숫자 별점을 모두 허용해 저장 경계에서 보정한다', () => {
+    expect(invalidReason(entry({ id: A, m: 'sh', tags: ['영어'], stars: null }), 'sh')).toBeNull();
+    expect(invalidReason(entry({ id: A, m: 'sh', tags: ['OFF'], stars: 4 }), 'sh')).toBeNull();
+    expect(invalidReason(entry({ id: A, m: 'sh', tags: ['영어'], stars: 0 }), 'sh')).toBe(
+      'bad stars',
+    );
+  });
+
+  it('tags의 빈 배열·중복·유효하지 않은 원소를 배치 SQL 전에 거부한다', () => {
+    expect(invalidReason(entry({ id: A, m: 'sh', tags: [] }), 'sh')).toBe('bad tags');
+    expect(invalidReason(entry({ id: A, m: 'sh', tags: ['영어', '영어'] }), 'sh')).toBe(
+      'bad tags',
+    );
+    expect(
+      invalidReason(entry({ id: A, m: 'sh', tags: ['영어', '수학'] as Entry['tags'] }), 'sh'),
+    ).toBe('bad tags');
+  });
+
+  it('tags가 없는 구버전 행은 tag를 검사하고, tags가 있으면 어긋난 tag를 신뢰하지 않는다', () => {
+    const { tags: _omit, ...legacy } = entry({ id: A, m: 'sh', tags: ['영어'] });
+    expect(invalidReason(legacy as Entry, 'sh')).toBeNull();
+    expect(invalidReason({ ...entry({ id: A, m: 'sh', tags: ['영어'] }), tag: 'OFF' }, 'sh')).toBeNull();
+  });
+});
 
 /** 모든 행을 10분 과거로 — 커서가 안전 지평선에 안 걸리고 키셋으로 전진하게 한다. */
 async function ageAll(): Promise<void> {
@@ -82,6 +119,35 @@ beforeAll(async () => {
     for (const stmt of ddl.split('--> statement-breakpoint')) await pg.exec(stmt);
   }
   db = drizzle(pg) as unknown as Db;
+});
+
+describe('다중 태그 DB 마이그레이션', () => {
+  it('0005가 마이그레이션 전 기존 행을 대표 태그 한 개짜리 배열로 백필한다', async () => {
+    const pg = new PGlite();
+    try {
+      const migrations = readdirSync('migrations').filter((f) => f.endsWith('.sql')).sort();
+      const multiTagMigration = migrations.find((f) => f.startsWith('0005_'));
+      expect(multiTagMigration).toBeDefined();
+
+      for (const migration of migrations.filter((f) => f < multiTagMigration!)) {
+        const ddl = readFileSync(`migrations/${migration}`, 'utf8');
+        for (const stmt of ddl.split('--> statement-breakpoint')) await pg.exec(stmt);
+      }
+      await pg.exec(`
+        insert into entries (id, member_id, day, time, tag, stars)
+        values ('eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', 'sh', '2026-08-12', '10:00', '영어', 3)
+      `);
+
+      const ddl = readFileSync(`migrations/${multiTagMigration!}`, 'utf8');
+      for (const stmt of ddl.split('--> statement-breakpoint')) await pg.exec(stmt);
+      const result = await pg.query<{ tag: string; tags: unknown }>(
+        `select tag, tags from entries where id = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'`,
+      );
+      expect(result.rows).toEqual([{ tag: '영어', tags: ['영어'] }]);
+    } finally {
+      await pg.close();
+    }
+  });
 });
 
 describe('sync queries', () => {
@@ -168,11 +234,110 @@ describe('sync queries', () => {
     expect(out.conflicts[0]!.deletedAt).not.toBeNull(); // 클라이언트는 삭제 승리로 처리한다
   });
 
+  it('비-OFF+null 행이 섞인 배치도 검증과 저장을 정상 통과한다', async () => {
+    const noRatingId = '33333333-3333-4333-8333-333333333334';
+    const ratedId = '33333333-3333-4333-8333-333333333335';
+    const batch = [
+      entry({ id: noRatingId, m: 'th', tags: ['기타'], stars: null }),
+      entry({ id: ratedId, m: 'th', tags: ['영어'], stars: 4 }),
+    ];
+    expect(batch.map((row) => invalidReason(row, 'th'))).toEqual([null, null]);
+
+    const out = await pushEntries(db, batch, 'th');
+    expect(out.conflicts).toHaveLength(0);
+    expect(out.applied.map((row) => row.id).sort()).toEqual([noRatingId, ratedId].sort());
+    expect(out.applied.find((row) => row.id === noRatingId)!.stars).toBeNull();
+  });
+
+  it('기존 비-OFF+null 행을 pull해 할 일을 수정한 뒤 재push해도 막히지 않는다', async () => {
+    const noRatingId = '33333333-3333-4333-8333-333333333334';
+    const pulled = (await pullSince(db, null)).rows.find((row) => row.id === noRatingId)!;
+    expect(pulled.tags).toEqual(['기타']);
+    expect(pulled.stars).toBeNull();
+
+    const edited: Entry = {
+      ...pulled,
+      todos: [{ t: '레거시 기록도 체크', done: true }],
+    };
+    expect(invalidReason(edited, 'th')).toBeNull();
+    const out = await pushEntries(db, [edited], 'th');
+    expect(out.conflicts).toHaveLength(0);
+    expect(out.applied[0]!.v).toBe(pulled.v + 1);
+    expect(out.applied[0]!.stars).toBeNull();
+    expect(out.applied[0]!.todos).toEqual([{ t: '레거시 기록도 체크', done: true }]);
+
+    const roundTrip = (await pullSince(db, null)).rows.find((row) => row.id === noRatingId)!;
+    expect(roundTrip.stars).toBeNull();
+    expect(roundTrip.todos[0]!.done).toBe(true);
+  });
+
   it('OFF 태그는 별점이 null로 강제된다', async () => {
     const C = '33333333-3333-4333-8333-333333333333';
-    await pushEntries(db, [entry({ id: C, m: 'th', tag: 'OFF', stars: 4 })], 'th');
+    await pushEntries(db, [entry({ id: C, m: 'th', tags: ['OFF'], stars: 4 })], 'th');
     const r = await pullSince(db, null);
     expect(r.rows.find((x) => x.id === C)!.stars).toBeNull();
+  });
+});
+
+describe('다중 태그', () => {
+  const M1 = 'dddddddd-dddd-4ddd-8ddd-ddddddddddd1';
+  const M2 = 'dddddddd-dddd-4ddd-8ddd-ddddddddddd2';
+  const M3 = 'dddddddd-dddd-4ddd-8ddd-ddddddddddd3';
+
+  it('여러 태그가 그대로 왕복하고 tag는 대표 태그로 저장된다', async () => {
+    const out = await pushEntries(
+      db,
+      [entry({ id: M1, m: 'sh', tags: ['기타', '자격증'] })], // 입력 순서가 뒤섞여 있어도
+      'sh',
+    );
+    // 정규화가 TAGS 순서로 고정한다 — 순서가 흔들리면 헛 동기화가 돈다
+    expect(out.applied[0]!.tags).toEqual(['자격증', '기타']);
+    expect(out.applied[0]!.tag).toBe('자격증');
+    const r = await pullSince(db, null);
+    const row = r.rows.find((x) => x.id === M1)!;
+    expect(row.tags).toEqual(['자격증', '기타']);
+    expect(row.tag).toBe('자격증');
+  });
+
+  it('수정으로 태그를 바꾸면 반영된다 (CONTENT_SET에 tags가 빠지면 여기서 걸린다)', async () => {
+    const out = await pushEntries(
+      db,
+      [entry({ id: M1, m: 'sh', tags: ['영어', '코딩테스트'], v: 1 })],
+      'sh',
+    );
+    expect(out.applied[0]!.tags).toEqual(['영어', '코딩테스트']);
+    expect(out.applied[0]!.tag).toBe('영어');
+    const r = await pullSince(db, null);
+    expect(r.rows.find((x) => x.id === M1)!.tags).toEqual(['영어', '코딩테스트']);
+  });
+
+  it('tags 없이 tag만 보내는 구버전 클라이언트도 tags가 파생된다', async () => {
+    // 구버전 번들은 tags라는 필드를 아예 모른다 — 그 행을 그대로 흉내 낸다
+    const { tags: _omit, ...legacyRow } = entry({ id: M2, m: 'sh', tags: ['코딩테스트'] });
+    const out = await pushEntries(db, [legacyRow as Entry], 'sh');
+    expect(out.applied[0]!.tags).toEqual(['코딩테스트']);
+    expect(out.applied[0]!.tag).toBe('코딩테스트');
+    // 레거시(v 없는) push 경로도 같은 파생을 지난다
+    const { v: _v, tags: _omit2, ...legacyNoV } = entry({ id: M3, m: 'sh', tags: ['OFF'] });
+    const applied = await pushEntriesLegacy(db, [legacyNoV as Omit<Entry, 'v'>], 'sh');
+    expect(applied[0]!.tags).toEqual(['OFF']);
+    expect(applied[0]!.stars).toBeNull(); // OFF 판정도 tags 기준이다
+  });
+
+  it('클라이언트가 tag/tags를 어긋나게 보내도 서버가 tags 기준으로 고친다', async () => {
+    const bad: Entry = { ...entry({ id: M2, m: 'sh', tags: ['영어', '기타'], v: 1 }), tag: 'OFF' };
+    const out = await pushEntries(db, [bad], 'sh');
+    expect(out.applied[0]!.tag).toBe('영어'); // 보낸 tag를 믿지 않는다
+    expect(out.applied[0]!.tags).toEqual(['영어', '기타']);
+    expect(out.applied[0]!.stars).not.toBeNull(); // OFF가 아니므로 별점이 살아 있다
+  });
+
+  it('tags가 비어 저장된 구버전 행도 읽을 때 tag에서 되살아난다 (백필 전 행)', async () => {
+    await db.execute(sql`update entries set tags = '[]'::jsonb where id = ${M1}::uuid`);
+    const r = await pullSince(db, null);
+    const row = r.rows.find((x) => x.id === M1)!;
+    expect(row.tags).toEqual([row.tag]);
+    expect(row.tags.length).toBe(1);
   });
 });
 

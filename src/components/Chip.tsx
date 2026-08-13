@@ -21,3 +21,9 @@ export function Chip({ tag, variant }: { tag: Tag; variant: keyof typeof VARIANT
     </span>
   );
 }
+
+/** 자리가 좁아 못 보여준 태그 수 — 칩과 같은 크기 체계를 쓰되 색은 중립(무채색)이다.
+    태그 색을 쓰면 없는 태그의 색을 주장하게 되고, 여러 개일 때 어느 색을 쓸지도 정할 수 없다. */
+export function MoreChip({ n, variant }: { n: number; variant: keyof typeof VARIANTS }) {
+  return <span className={VARIANTS[variant].cls + ' chip-more'}>+{n}</span>;
+}

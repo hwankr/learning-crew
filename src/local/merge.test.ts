@@ -3,6 +3,7 @@
    + 댓글·리액션 스트림의 순수 규칙: 스냅샷 파생, 토글 정규화, ACK 정산 판단. */
 import { describe, expect, it } from 'vitest';
 import type { Comment, Entry, ReactionSet } from '../../shared/types';
+import { primaryTag } from '../../shared/types';
 import {
   adoptCommentFromDB,
   commentAckOutcome,
@@ -14,17 +15,20 @@ import {
   isDuplicateReaction,
   mergeEntry,
   mergeMyReactionFromDB,
+  normalizeEntry,
   reactionAckSettles,
   toggledEmojis,
 } from './store';
 
+/** tag는 tags의 파생값이라 픽스처가 직접 정하지 않는다 — 항상 primaryTag(tags)다. */
 function e(partial: Partial<Entry>): Entry {
-  return {
+  const row: Entry = {
     id: '11111111-1111-4111-8111-111111111111',
     m: 'sh',
     day: '2026-08-12',
     time: '10:00',
     tag: '영어',
+    tags: ['영어'],
     stars: 3,
     memo: '',
     body: '원래 본문',
@@ -34,6 +38,7 @@ function e(partial: Partial<Entry>): Entry {
     deletedAt: null,
     ...partial,
   };
+  return { ...row, tag: primaryTag(row.tags) };
 }
 
 describe('mergeEntry (필드 단위 3-way 병합)', () => {
@@ -62,13 +67,98 @@ describe('mergeEntry (필드 단위 3-way 병합)', () => {
     expect(merged.stars).toBe(5);
   });
 
+  it('로컬 경계에서 태그 순서와 어긋난 대표 태그를 함께 정규화한다', () => {
+    const raw = {
+      ...e({}),
+      tags: ['기타', '영어'] as Entry['tags'],
+      tag: 'OFF' as const,
+    };
+    const merged = mergeEntry(null, raw, e({ v: 1 }));
+    expect(merged.tags).toEqual(['영어', '기타']);
+    expect(merged.tag).toBe('영어');
+  });
+
+  it('레거시 이관의 비-OFF+null은 보존하고 OFF의 숫자 별점만 null로 강제한다', () => {
+    const legacyNoRating = normalizeEntry(e({ tags: ['기타'], stars: null }));
+    expect(legacyNoRating.tag).toBe('기타');
+    expect(legacyNoRating.tags).toEqual(['기타']);
+    expect(legacyNoRating.stars).toBeNull();
+
+    const off = normalizeEntry(e({ tags: ['OFF'], stars: 4 }));
+    expect(off.tag).toBe('OFF');
+    expect(off.stars).toBeNull();
+  });
+
   it('로컬이 안 고친 필드는 서버를 따른다', () => {
     const base = e({});
     const local = e({}); // 아무것도 안 고침
-    const server = e({ stars: 5, tag: '자격증', v: 2 });
+    const server = e({ stars: 5, tags: ['자격증'], v: 2 });
     const merged = mergeEntry(base, local, server);
     expect(merged.stars).toBe(5);
+    expect(merged.tags).toEqual(['자격증']);
+    expect(merged.tag).toBe('자격증'); // 파생 필드가 tags를 따라온다
+  });
+
+  it('휴대폰이 태그를 늘리고 노트북이 본문을 고쳐도 서로를 덮지 않는다', () => {
+    const base = e({});
+    const local = e({ tags: ['영어', '기타'] }); // 휴대폰: 태그만 추가
+    const server = e({ body: '노트북 본문', v: 2 }); // 노트북: 본문만 수정
+    const merged = mergeEntry(base, local, server);
+    expect(merged.tags).toEqual(['영어', '기타']);
+    expect(merged.tag).toBe('영어');
+    expect(merged.body).toBe('노트북 본문');
+  });
+
+  it('양쪽이 태그를 고치면 로컬이 이기고 tag는 로컬 tags에서 다시 계산된다', () => {
+    const base = e({});
+    const local = e({ tags: ['자격증', '코딩테스트'] });
+    const server = e({ tags: ['기타'], v: 2 });
+    const merged = mergeEntry(base, local, server);
+    expect(merged.tags).toEqual(['자격증', '코딩테스트']);
     expect(merged.tag).toBe('자격증');
+  });
+
+  it('로컬이 태그를 안 고쳤으면 서버가 늘린 태그를 그대로 따른다', () => {
+    const base = e({});
+    const local = e({ body: '내 본문' }); // 태그는 그대로
+    const server = e({ tags: ['영어', '코딩테스트'], v: 2 });
+    const merged = mergeEntry(base, local, server);
+    expect(merged.tags).toEqual(['영어', '코딩테스트']);
+    expect(merged.tag).toBe('영어');
+    expect(merged.body).toBe('내 본문');
+  });
+
+  it('구버전 큐 base에 tags가 없어도 태그를 로컬 변경으로 오판하지 않는다', () => {
+    const legacyBase = e({}) as Omit<Entry, 'tags'> & { tags?: Entry['tags'] };
+    delete legacyBase.tags; // 다중 태그 배포 전에 IDB queue.base에 저장된 실제 모양
+    const local = e({ body: '내 본문' });
+    const server = e({ tags: ['자격증'], v: 2 });
+    const merged = mergeEntry(legacyBase as Entry, local, server);
+    expect(merged.tags).toEqual(['자격증']);
+    expect(merged.tag).toBe('자격증');
+    expect(merged.body).toBe('내 본문');
+  });
+
+  it('태그와 별점을 따로 병합해도 OFF/null 불변식은 깨지지 않는다', () => {
+    const base = e({ tags: ['영어'], stars: 3 });
+    // 로컬은 태그만 비-OFF로 변경, 서버는 OFF로 변경: 로컬 tags와 서버 null을 섞으면 안 된다.
+    const localTagsWin = mergeEntry(
+      base,
+      e({ tags: ['자격증'], stars: 3 }),
+      e({ tags: ['OFF'], stars: null, v: 2 }),
+    );
+    expect(localTagsWin.tags).toEqual(['자격증']);
+    expect(localTagsWin.stars).toBe(3);
+
+    // 로컬은 별점만 변경, 서버는 OFF로 변경: OFF가 이기면 별점은 반드시 null이다.
+    const serverOffWins = mergeEntry(
+      base,
+      e({ stars: 5 }),
+      e({ tags: ['OFF'], stars: null, v: 2 }),
+    );
+    expect(serverOffWins.tags).toEqual(['OFF']);
+    expect(serverOffWins.tag).toBe('OFF');
+    expect(serverOffWins.stars).toBeNull();
   });
 });
 
@@ -81,6 +171,12 @@ describe('contentEqual (동기화 메타 제외 내용 비교)', () => {
   });
   it('삭제 여부가 다르면 다른 내용이다', () => {
     expect(contentEqual(e({}), e({ deletedAt: '2026-08-12T02:00:00.000Z' }))).toBe(false);
+  });
+  it('태그를 하나 더 골랐으면 다른 내용이다', () => {
+    expect(contentEqual(e({}), e({ tags: ['영어', '기타'] }))).toBe(false);
+  });
+  it('같은 태그 집합은 같은 내용이다 — 정규화가 순서를 고정하므로 JSON 비교가 안전하다', () => {
+    expect(contentEqual(e({ tags: ['영어', '기타'] }), e({ tags: ['영어', '기타'], v: 9 }))).toBe(true);
   });
 });
 

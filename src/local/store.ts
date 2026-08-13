@@ -23,7 +23,15 @@ import type {
   ReactionEmoji,
   ReactionSet,
 } from '../../shared/types';
-import { MEMBER_IDS, normalizeEmojis, PUSH_LIMITS, UUID_RE } from '../../shared/types';
+import {
+  MEMBER_IDS,
+  entryTags,
+  isOffTags,
+  normalizeEmojis,
+  primaryTag,
+  PUSH_LIMITS,
+  UUID_RE,
+} from '../../shared/types';
 import { openCrewDB, reactionKey, type CrewDatabase, type CrewDB, type QueueMeta } from './idb';
 import { seedComments, seedEntries, seedReactionSets, seedStatuses } from '../lib/constants';
 
@@ -69,11 +77,13 @@ const ENTRY_CURSOR_KEY = 'cursor';
 const COMMENT_CURSOR_KEY = 'commentCursor';
 const REACTION_CURSOR_KEY = 'reactionCursor';
 
-/** 3-way 병합 대상 필드 — 이 밖의 필드(v/updatedAt)는 동기화 메타데이터다. */
-const MERGE_FIELDS = ['day', 'time', 'tag', 'stars', 'memo', 'body'] as const;
+/** 3-way 병합 대상 필드 — 이 밖의 필드(v/updatedAt)는 동기화 메타데이터다.
+    tag는 tags에서 파생되는 값이라 병합 대상이 아니다 — 병합 후 다시 계산한다. */
+const MERGE_FIELDS = ['day', 'time', 'tags', 'stars', 'memo', 'body'] as const;
 
 function fieldEq(a: Entry, b: Entry, f: (typeof MERGE_FIELDS)[number] | 'todos'): boolean {
-  if (f === 'todos') return JSON.stringify(a.todos) === JSON.stringify(b.todos);
+  // 배열 필드는 JSON 비교 — 정규화가 순서를 고정하므로(TAGS 순서) 안전하다
+  if (f === 'todos' || f === 'tags') return JSON.stringify(a[f]) === JSON.stringify(b[f]);
   return a[f] === b[f];
 }
 
@@ -90,24 +100,56 @@ export function contentEqual(a: Entry, b: Entry): boolean {
 }
 
 /** IDB에서 읽은 행 정규화 — 구버전 데이터에 v가 없으면 0(서버 리비전 모름)으로.
-    첫 push가 CAS 충돌을 내면 병합 경로가 base를 되찾아 준다. */
-function normalizeEntry(e: Entry): Entry {
-  return typeof e.v === 'number' ? e : { ...e, v: 0 };
+    첫 push가 CAS 충돌을 내면 병합 경로가 base를 되찾아 준다.
+    tags도 같은 이유로 여기서 채운다: 다중 태그 이전에 저장된 IDB 행과 구버전 Worker 응답에는
+    tags가 없다 — 그대로 두면 병합 비교와 push가 빈 배열을 진짜 값으로 본다. */
+export function normalizeEntry(e: Entry): Entry {
+  const tags = entryTags(e);
+  const v = typeof e.v === 'number' ? e.v : 0;
+  // OFF의 별점도 같은 경계에서 맞춘다. 구버전/깨진 IDB 행이 OFF+숫자를 들고 있으면
+  // 서버 ACK 전까지 로컬 불변식이 깨지고, 병합에서 그 숫자를 "로컬 별점 수정"으로 오판한다.
+  // 비-OFF+null은 레거시 "평가 없음"이므로 값을 지어내지 않고 그대로 보존한다.
+  const stars = isOffTags(tags) ? null : e.stars;
+  if (
+    v === e.v &&
+    e.tag === primaryTag(tags) &&
+    e.stars === stars &&
+    JSON.stringify(e.tags) === JSON.stringify(tags)
+  ) {
+    return e;
+  }
+  return { ...e, v, tags, tag: primaryTag(tags), stars };
 }
 
 /** 필드 단위 3-way 병합 — base에서 로컬이 고친 필드만 로컬을 취하고 나머지는 서버를 따른다.
     양쪽이 같은 필드를 고쳤으면 로컬이 이긴다. base가 없으면(신규 행 에코 등) 전부 로컬. */
-export function mergeEntry(base: Entry | null, local: Entry, server: Entry): Entry {
+export function mergeEntry(baseRaw: Entry | null, localRaw: Entry, serverRaw: Entry): Entry {
+  // 큐의 base도 IDB에 함께 저장된다. 다중 태그 배포 전에 만들어진 dirty 큐는 base에
+  // tags가 없으므로, 여기서까지 정규화하지 않으면 local.tags와 undefined를 비교해
+  // 사용자가 태그를 고친 것으로 오판하고 서버의 실제 태그 변경을 덮는다.
+  const base = baseRaw ? normalizeEntry(baseRaw) : null;
+  const local = normalizeEntry(localRaw);
+  const server = normalizeEntry(serverRaw);
   const pick = <K extends (typeof MERGE_FIELDS)[number] | 'todos'>(f: K): Entry[K] => {
     if (!base || !fieldEq(local, base, f)) return local[f];
     return server[f];
   };
+  const tagsFromLocal = !base || !fieldEq(local, base, 'tags');
+  const tags = tagsFromLocal ? local.tags : server.tags;
+  const pickedStars = pick('stars');
+  // tags와 stars는 대부분 독립 병합하되 OFF 경계를 넘을 때 함께 보정한다.
+  // 비-OFF+null 자체는 레거시 "평가 없음"으로 허용하지만, 다른 쪽에 숫자 별점이 있으면
+  // 태그 승자 쪽의 기존 별점을 보존한다. OFF가 최종 태그면 어떤 경우에도 null이다.
+  const stars = isOffTags(tags)
+    ? null
+    : (pickedStars ?? (tagsFromLocal ? local.stars : server.stars));
   return {
     ...server, // id/m/v/updatedAt은 서버 기준
     day: pick('day'),
     time: pick('time'),
-    tag: pick('tag'),
-    stars: pick('stars'),
+    tags,
+    tag: primaryTag(tags), // 파생 필드 — 병합 결과의 tags에 다시 맞춘다
+    stars,
     memo: pick('memo'),
     body: pick('body'),
     todos: pick('todos'),
@@ -384,7 +426,10 @@ export class CrewStore {
   }
 
   /* ---------- 쓰기 (UI 경로 — 항상 즉시 반영) ---------- */
-  upsert(entry: Entry): void {
+  upsert(raw: Entry): void {
+    // UI/레거시 이관을 포함한 모든 로컬 쓰기의 마지막 경계. 호출자가 실수로 tag를 직접
+    // 대입하거나 tags 순서를 뒤섞어도 IDB와 push 큐에는 정규형만 들어가게 한다.
+    const entry = normalizeEntry(raw);
     const prev = this.map.get(entry.id);
     this.map.set(entry.id, entry);
     if (UUID_RE.test(entry.id)) {
@@ -791,7 +836,10 @@ export class CrewStore {
   }
 
   /** push 반영 성공. rev가 다르면 전송 중 또 수정된 것 — 큐에 남기되 서버 행을 새 base로 삼는다. */
-  ackApplied(id: string, rev: number, server: Entry): void {
+  ackApplied(id: string, rev: number, serverRaw: Entry): void {
+    // 이행기의 구버전 Worker 응답에는 v도 tags도 없다 — 그대로 채택하면 이 행이
+    // 다음 push부터 빈 tags를 진짜 값으로 들고 다닌다
+    const server = normalizeEntry(serverRaw);
     const q = this.queue.get(id);
     if (!q) return;
     if (q.rev !== rev) {
@@ -818,7 +866,8 @@ export class CrewStore {
   /** push CAS 충돌 — 서버 현재 행과 병합한다.
       규칙: ① 어느 쪽이든 삭제면 삭제 승리(부활 방지) ② 남의 행이면 서버 채택
             ③ 그 외 base 기준 필드 단위 병합 → 서버와 같아지면 종료, 다르면 재전송 대기. */
-  resolveConflict(id: string, server: Entry): void {
+  resolveConflict(id: string, serverRaw: Entry): void {
+    const server = normalizeEntry(serverRaw); // ackApplied와 같은 이유(구버전 Worker 응답)
     const q = this.queue.get(id);
     const local = this.map.get(id);
     if (!q || !local) {
@@ -1170,12 +1219,15 @@ export class CrewStore {
             const e = item as Record<string, unknown>;
             // 사용자가 만든 행(e*)이고 이 기기의 멤버 본인 것만 — 남의 행은 push가 거부된다
             if (typeof e.id !== 'string' || e.id.charAt(0) !== 'e' || e.m !== me) continue;
+            // 구 프로토타입은 단일 태그만 남겼다 — entryTags가 그것을 1개짜리 tags로 되살린다
+            const tags = entryTags(e);
             this.upsert({
               id: crypto.randomUUID(),
               m: me,
               day: String(e.day ?? ''),
               time: String(e.time ?? ''),
-              tag: (e.tag ?? '기타') as Entry['tag'],
+              tag: primaryTag(tags),
+              tags,
               stars: typeof e.stars === 'number' ? e.stars : null,
               memo: String(e.memo ?? ''),
               body: String(e.body ?? ''),

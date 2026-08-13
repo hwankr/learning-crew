@@ -27,6 +27,36 @@ export const MEMBER_NAMES: Record<MemberId, string> = {
 export const TAGS = ['자격증', '영어', '코딩테스트', '기타', 'OFF'] as const;
 export type Tag = (typeof TAGS)[number];
 
+/** 다중 태그 정규화 — 유효한 값만, 중복 없이, TAGS 순서로.
+    순서를 고정하는 이유는 normalizeEmojis와 같다: 순서가 흔들리면 내용이 같은데도
+    서로를 "변경"으로 보고 무의미한 동기화가 돈다.
+    'OFF'(쉬는 날)는 배타적이라 함께 오면 ['OFF']만 남는다. 유효한 값이 없으면 빈 배열. */
+export function normalizeTags(list: unknown): Tag[] {
+  if (!Array.isArray(list)) return [];
+  const picked = TAGS.filter((t) => list.includes(t));
+  return picked.includes('OFF') ? ['OFF'] : picked;
+}
+
+/** 대표 태그 — tags[0]. 빈 배열이면 '기타'. DB/구버전 클라이언트가 읽는 tag 컬럼의 값. */
+export function primaryTag(tags: readonly Tag[]): Tag {
+  return tags[0] ?? '기타';
+}
+
+/** 구/신 표현을 하나로 — tags가 비었으면 대표 태그 tag로 되살린다.
+    IDB의 구버전 행, 구버전 클라이언트가 push한 행, 초안 복원이 모두 이 함수를 지난다.
+    tag까지 유효하지 않으면 '기타'로 되살린다 — 빈 배열은 절대 돌려주지 않는다. */
+export function entryTags(e: { tag?: unknown; tags?: unknown }): Tag[] {
+  const tags = normalizeTags(e.tags);
+  if (tags.length > 0) return tags;
+  const fallback = normalizeTags([e.tag]);
+  return fallback.length > 0 ? fallback : ['기타'];
+}
+
+/** 쉬는 날인가 — tags가 정확히 ['OFF']일 때. stars === null 조건과 같은 정의여야 한다. */
+export function isOffTags(tags: readonly Tag[]): boolean {
+  return tags.length === 1 && tags[0] === 'OFF';
+}
+
 export interface Todo {
   t: string;
   done: boolean;
@@ -37,8 +67,13 @@ export interface Entry {
   m: MemberId;
   day: string; // YYYY-MM-DD
   time: string; // HH:MM
+  /** @deprecated 구버전 호환 대표 태그 — 항상 primaryTag(tags). 새 코드는 tags를 쓴다.
+      (DB의 tag 컬럼은 text NOT NULL이고, 서비스워커 캐시에 남은 구버전 번들·구버전 Worker가
+       여전히 이 필드만 읽고 쓴다. 직접 대입하지 말고 경계마다 primaryTag로 다시 계산할 것) */
   tag: Tag;
-  stars: number | null; // OFF는 null
+  /** 다중 선택된 공부 종류 — 최소 1개, TAGS 순서, 'OFF'면 단독. */
+  tags: Tag[];
+  stars: number | null; // OFF(tags === ['OFF'])는 null
   memo: string;
   body: string;
   todos: Todo[];
