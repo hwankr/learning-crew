@@ -13,6 +13,7 @@ import { SyncStatus } from './components/SyncStatus';
 import { Feed } from './components/Feed';
 import { CalendarView } from './components/CalendarView';
 import { EMPTY_MODAL, EntryModal, type ModalState } from './components/EntryModal';
+import { ConfirmDelete } from './components/ConfirmDelete';
 
 /* ---------- 초안 — "초안 저장됨"이 진짜가 되도록 localStorage에 실제로 저장한다 ----------
    슬롯은 기록별(수정 중인 기록의 id, 신규는 'new')로, 데모/실계정도 접두사로 분리한다 —
@@ -121,6 +122,11 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
   const [calOff, setCalOff] = useState(0);
   const [selDay, setSelDay] = useState<string | null>(null);
   const [modal, setModal] = useState<ModalState>(EMPTY_MODAL);
+  // 삭제 확인 대기 중인 기록 — 스냅샷에서 다시 찾으므로, 그 사이 다른 기기에서
+  // 지워졌다면 물음도 함께 사라진다(이미 없는 걸 두고 물을 이유가 없다)
+  const [delId, setDelId] = useState<string | null>(null);
+  // 삭제를 확정하면 눌렀던 카드가 사라진다 — 초점이 문서 맨 앞으로 떨어지지 않게 여기로 되돌린다
+  const ctaRef = useRef<HTMLButtonElement>(null);
   const patch = useCallback((p: Partial<ModalState>) => setModal((m) => ({ ...m, ...p })), []);
 
   // "n분째" 경과 표시를 위한 분 단위 재렌더
@@ -233,10 +239,8 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
         day: e.day,
       });
     },
-    onDelete: (e: Entry) => {
-      store.remove(e.id);
-      removeDraft(draftKey(e.id)); // 지운 기록의 수정 초안도 함께
-    },
+    // 삭제는 되돌릴 수 없다 — 바로 지우지 않고 한 번 묻는다 (댓글은 그대로 즉시 삭제)
+    onDelete: (e: Entry) => setDelId(e.id),
     onToggleTodo: (e: Entry, i: number) =>
       store.upsert({
         ...e,
@@ -248,6 +252,8 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
     onDeleteComment: (id: string) => store.removeComment(id),
     onToggleReaction: (entryId: string, emoji: ReactionEmoji) => store.toggleReaction(entryId, emoji),
   };
+
+  const pendingDel = delId ? entries.find((e) => e.id === delId) ?? null : null;
 
   return (
     <div className="screen">
@@ -264,7 +270,7 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
           <div className="sub">
             {now.getMonth() + 1}월 {now.getDate()}일 {W[now.getDay()]}요일 · {wit.greeting}
           </div>
-          <button className="cta" onClick={openNew}>
+          <button className="cta" ref={ctaRef} onClick={openNew}>
             <span className="cta-ico">
               <Icon d={PENCIL_D} size={16} sw={2.2} />
             </span>
@@ -317,7 +323,21 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
         </div>
       </div>
       {modal.open && (
-        <EntryModal modal={modal} patch={patch} close={closeModal} submit={submit} wit={wit} />
+        <EntryModal modal={modal} patch={patch} close={closeModal} submit={submit} wit={wit}
+          fallbackRef={ctaRef} />
+      )}
+      {pendingDel && (
+        <ConfirmDelete
+          entry={pendingDel}
+          wit={wit}
+          fallbackRef={ctaRef}
+          onCancel={() => setDelId(null)}
+          onConfirm={() => {
+            store.remove(pendingDel.id);
+            removeDraft(draftKey(pendingDel.id)); // 지운 기록의 수정 초안도 함께
+            setDelId(null);
+          }}
+        />
       )}
     </div>
   );

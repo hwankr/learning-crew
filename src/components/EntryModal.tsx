@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type RefObject } from 'react';
 import type { Tag, Todo } from '../../shared/types';
 import { PUSH_LIMITS, TAGS } from '../../shared/types';
 import { TAGMETA, W, dayKey, pad2, type CopySet } from '../lib/constants';
+import { useFocusTrap } from '../lib/useFocusTrap';
 import { CheckMark, Icon, PLUS_D, STAR_D, X_D } from './icons';
 
 export interface ModalState {
@@ -89,13 +90,16 @@ function DatePicker({
 }
 
 export function EntryModal({
-  modal, patch, close, submit, wit,
+  modal, patch, close, submit, wit, fallbackRef,
 }: {
   modal: ModalState;
   patch: (p: Partial<ModalState>) => void;
   close: () => void;
   submit: () => void;
   wit: CopySet;
+  /** 열었던 수정 버튼이 닫는 사이 사라질 수 있다 — 날짜를 바꿔 저장하면 카드가 다른 날 묶음으로
+      옮겨가고, 다른 기기에서 그 기록이 지워질 수도 있다. 그때 초점이 갈 자리. */
+  fallbackRef: RefObject<HTMLElement | null>;
 }) {
   const [step, setStep] = useState<'write' | 'meta'>('write');
   const [todoOpen, setTodoOpen] = useState(modal.todos.length > 0);
@@ -103,6 +107,23 @@ export function EntryModal({
   const [typing, setTyping] = useState(false);
   const typeTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => () => clearTimeout(typeTimer.current), []);
+
+  const sheetRef = useRef<HTMLDivElement>(null);
+  const backRef = useRef<HTMLButtonElement>(null);
+  const bodyRef = useRef<HTMLTextAreaElement>(null);
+  useFocusTrap(sheetRef, fallbackRef);
+
+  /* 단계를 넘나들 때 초점도 같이 옮긴다 — 지금까지 초점이 있던 쪽(다음 버튼 / 다시 쓰기 버튼)이
+     곧바로 inert가 되므로, 두고 가면 초점이 body로 떨어져 키보드 사용자가 자리를 잃는다.
+     "단계가 실제로 바뀌었는지"를 직전 값과 비교해서 본다 — 플래그 한 개로 첫 실행만 걸러내면
+     effect가 다시 붙는 상황(StrictMode 등)에서 마운트가 단계 전환으로 둔갑해
+     본문 autoFocus를 가로챈다. */
+  const shownStep = useRef(step);
+  useEffect(() => {
+    if (shownStep.current === step) return;
+    shownStep.current = step;
+    (step === 'meta' ? backRef.current : bodyRef.current)?.focus();
+  }, [step]);
 
   const sel = parseDay(modal.day || dayKey(new Date()));
   const selDow = new Date(sel.y, sel.m, sel.d).getDay();
@@ -119,8 +140,13 @@ export function EntryModal({
 
   return (
     <div className="overlay" onClick={close}>
-      <div className="sheet" onClick={(ev) => ev.stopPropagation()}>
-        <div className="sheet-head">
+      {/* 트랩은 Tab만 가둔다 — 화면 낭독기에 "여기가 모달"이라고 알리는 건 dialog 의미다 */}
+      <div className="sheet" ref={sheetRef} role="dialog" aria-modal="true"
+        aria-label={modal.editingId ? '기록 수정' : '새 기록'}
+        onClick={(ev) => ev.stopPropagation()}>
+        {/* 메타 패널은 시트를 통째로 덮는다 — 가려진 쪽은 inert로 탭 순서·스크린 리더에서 뺀다.
+            (transform으로 밀어 둔 것만으로는 Tab이 그대로 들어간다) */}
+        <div className="sheet-head" inert={step === 'meta'}>
           <div className="sheet-head-row">
             <button className="sheet-date-btn" onClick={() => setCalOpen(!calOpen)}>
               <span className="sheet-date-main">{sel.m + 1}월 {sel.d}일 {W[selDow]}요일</span>
@@ -138,8 +164,9 @@ export function EntryModal({
             />
           )}
         </div>
-        <div className="sheet-scroll">
+        <div className="sheet-scroll" inert={step === 'meta'}>
           <textarea
+            ref={bodyRef}
             className="modal-diary"
             value={modal.body}
             placeholder={wit.diaryPh}
@@ -210,7 +237,7 @@ export function EntryModal({
             </div>
           )}
         </div>
-        <div className="sheet-foot">
+        <div className="sheet-foot" inert={step === 'meta'}>
           <span className="draft-note" style={{ opacity: hasContent ? 1 : 0 }}>
             {hasContent ? (typing ? '쓰는 중…' : '초안 저장됨') : ''}
           </span>
@@ -222,9 +249,9 @@ export function EntryModal({
             <Icon d={FWD_D} size={15} sw={2.4} />
           </button>
         </div>
-        <div className={'meta-panel' + (step === 'meta' ? ' on' : '')}>
+        <div className={'meta-panel' + (step === 'meta' ? ' on' : '')} inert={step !== 'meta'}>
           <div className="meta-head">
-            <button className="back-btn" onClick={() => setStep('write')}>
+            <button className="back-btn" ref={backRef} onClick={() => setStep('write')}>
               <Icon d={BACK_D} size={15} sw={2.4} />
               <span>다시 쓰기</span>
             </button>

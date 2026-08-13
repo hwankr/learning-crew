@@ -38,18 +38,19 @@ export function EntryCard({
           <span className="entry-name">{mm.name}</span>
           <span className="entry-time">{e.time}</span>
           <span className="spacer" />
-          {compact ? (
+          {/* 컴팩트(캘린더)는 태그·별점 줄이 따로 없어 머리에 붙인다 */}
+          {compact && (
             <>
               <Chip tag={e.tag} variant="sm2" />
               {hasStars && <StarsRow n={e.stars ?? 0} w={55} h={11} />}
             </>
-          ) : (
-            mine && (
-              <div className="entry-actions">
-                <button className="entry-act edit" onClick={() => actions.onEdit(e)}>수정</button>
-                <button className="entry-act del" onClick={() => actions.onDelete(e)}>삭제</button>
-              </div>
-            )
+          )}
+          {/* 내 기록이면 어디서 보든(피드·캘린더) 고치고 지울 수 있다 */}
+          {mine && (
+            <div className="entry-actions">
+              <button className="entry-act edit" onClick={() => actions.onEdit(e)}>수정</button>
+              <button className="entry-act del" onClick={() => actions.onDelete(e)}>삭제</button>
+            </div>
           )}
         </div>
         {!compact && (
