@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { Entry, Tag, Todo } from '../shared/types';
 import { BY_ID, COPY, MEMBERS, W, dayKey, pad2, shiftKey } from './lib/constants';
 import type { AppConfig } from './lib/config';
@@ -12,16 +12,24 @@ import { Feed } from './components/Feed';
 import { CalendarView } from './components/CalendarView';
 import { EMPTY_MODAL, EntryModal, type ModalState } from './components/EntryModal';
 
-/* ---------- 초안 — "초안 저장됨"이 진짜가 되도록 localStorage에 실제로 저장한다 ---------- */
+/* ---------- 초안 — "초안 저장됨"이 진짜가 되도록 localStorage에 실제로 저장한다 ----------
+   슬롯은 기록별(수정 중인 기록의 id, 신규는 'new')로 분리한다 — 빈 새 기록 모달을 여는
+   것만으로 보관 중인 수정 초안이 지워지는 일이 없다. 수정 초안의 신선도는 시계 비교가
+   아니라 "초안을 시작할 때의 기록 updatedAt과 지금이 같은가"(문자열 동등)로 판정한다 —
+   기기 시계 오차나 브라우저별 타임스탬프 파싱 차이에 흔들리지 않는다. */
 interface Draft {
-  editingId: string | null;
   tag: Tag | null;
   stars: number;
   body: string;
   todos: Todo[];
   day: string;
-  savedAt: number;
+  /** 수정 초안: 초안 시작 시점의 기록 updatedAt — 기록이 그대로일 때만 복원. 신규는 null. */
+  baseUpdatedAt: string | null;
+  savedAt: number; // 오래 방치된 초안 정리에만 쓴다
 }
+
+const DRAFT_PREFIX = 'lc-draft:';
+const DRAFT_TTL_MS = 14 * 86_400_000;
 
 function draftHasContent(d: { body: string; todos: Todo[] }): boolean {
   return !!d.body.trim() || d.todos.some((t) => t.t.trim());
@@ -39,12 +47,12 @@ function loadDraft(key: string): Draft | null {
   }
 }
 
-function saveDraft(key: string, m: ModalState): void {
+function saveDraft(key: string, m: ModalState, baseUpdatedAt: string | null): void {
   try {
     if (draftHasContent(m)) {
       const d: Draft = {
-        editingId: m.editingId, tag: m.tag, stars: m.stars,
-        body: m.body, todos: m.todos, day: m.day, savedAt: Date.now(),
+        tag: m.tag, stars: m.stars, body: m.body, todos: m.todos, day: m.day,
+        baseUpdatedAt, savedAt: Date.now(),
       };
       localStorage.setItem(key, JSON.stringify(d));
     } else {
@@ -53,6 +61,35 @@ function saveDraft(key: string, m: ModalState): void {
   } catch {
     // 저장 공간 초과 등 — 초안은 best-effort
   }
+}
+
+function removeDraft(key: string): void {
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    // 접근 불가 환경 — 무시
+  }
+}
+
+/** 오래 방치되거나 형식이 깨진 초안 정리 — 슬롯이 기록별이라 쌓일 수 있다. */
+function pruneDrafts(): void {
+  try {
+    const cutoff = Date.now() - DRAFT_TTL_MS;
+    for (const k of Object.keys(localStorage)) {
+      if (!k.startsWith(DRAFT_PREFIX)) continue;
+      const d = loadDraft(k);
+      if (!d || typeof d.savedAt !== 'number' || d.savedAt < cutoff) localStorage.removeItem(k);
+    }
+  } catch {
+    // 접근 불가 환경 — 무시
+  }
+}
+
+function modalFromDraft(d: Draft, editingId: string | null, fallbackDay: string): ModalState {
+  return {
+    open: true, editingId, tag: d.tag, stars: d.stars,
+    body: d.body, todos: d.todos, day: d.day || fallbackDay,
+  };
 }
 
 export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
@@ -81,28 +118,32 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
   const myToday = todays.filter((e) => e.m === me.id).length;
 
   // 초안: 열려 있는 동안 짧게 모아 저장하고, 닫는 순간에도 즉시 저장한다(마지막 타이핑 유실 방지)
-  const draftKey = `lc-draft:${me.id}`;
+  const draftKey = useCallback(
+    (editingId: string | null) => `${DRAFT_PREFIX}${me.id}:${editingId ?? 'new'}`,
+    [me.id],
+  );
+  // 수정 초안의 기준 시각 — 모달을 연 시점의 기록 updatedAt (신규는 null)
+  const editBase = useRef<string | null>(null);
+  useEffect(() => pruneDrafts(), []);
   useEffect(() => {
     if (!modal.open) return;
-    const t = setTimeout(() => saveDraft(draftKey, modal), 350);
+    const t = setTimeout(() => saveDraft(draftKey(modal.editingId), modal, editBase.current), 350);
     return () => clearTimeout(t);
   }, [modal, draftKey]);
 
   const closeModal = useCallback(() => {
     setModal((m) => {
-      if (m.open) saveDraft(draftKey, m);
+      if (m.open) saveDraft(draftKey(m.editingId), m, editBase.current);
       return EMPTY_MODAL;
     });
   }, [draftKey]);
 
   const openNew = () => {
-    const d = loadDraft(draftKey);
-    if (d && d.editingId === null && draftHasContent(d)) {
+    editBase.current = null;
+    const d = loadDraft(draftKey(null));
+    if (d && draftHasContent(d)) {
       // 마무리하지 못한 초안이 있으면 이어서 쓴다
-      setModal({
-        open: true, editingId: null, tag: d.tag, stars: d.stars,
-        body: d.body, todos: d.todos, day: d.day || todayKey,
-      });
+      setModal(modalFromDraft(d, null, todayKey));
       return;
     }
     setModal({ ...EMPTY_MODAL, open: true, day: todayKey });
@@ -122,10 +163,12 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
       updatedAt: stamp.toISOString(),
       deletedAt: null,
     };
-    if (modal.editingId) {
-      const orig = store.getById(modal.editingId);
-      if (orig) store.upsert({ ...orig, ...common });
+    const orig = modal.editingId ? store.getById(modal.editingId) : undefined;
+    if (orig) {
+      store.upsert({ ...orig, ...common });
     } else {
+      // 신규 — 또는 수정하던 기록이 그 사이 다른 기기에서 삭제된 경우:
+      // 쓰던 내용을 조용히 버리는 대신 새 기록으로 살린다
       store.upsert({
         id: crypto.randomUUID(),
         m: me.id,
@@ -134,26 +177,21 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
         ...common,
       });
     }
-    try {
-      localStorage.removeItem(draftKey); // 제출됐으니 초안은 소임을 다했다
-    } catch {
-      // 접근 불가 환경 — 무시
-    }
+    removeDraft(draftKey(modal.editingId)); // 제출됐으니 초안은 소임을 다했다
     setModal(EMPTY_MODAL);
   };
 
   const actions = {
     onEdit: (e: Entry) => {
+      editBase.current = e.updatedAt;
       // 이 기록을 고치다 만 초안이 있고 기록 자체가 그 뒤로 안 바뀌었으면 이어서 쓴다
-      const d = loadDraft(draftKey);
-      const entryAt = Date.parse(e.updatedAt);
-      if (d && d.editingId === e.id && d.savedAt > (Number.isFinite(entryAt) ? entryAt : 0)) {
-        setModal({
-          open: true, editingId: e.id, tag: d.tag, stars: d.stars,
-          body: d.body, todos: d.todos, day: d.day || e.day,
-        });
+      const key = draftKey(e.id);
+      const d = loadDraft(key);
+      if (d && draftHasContent(d) && d.baseUpdatedAt === e.updatedAt) {
+        setModal(modalFromDraft(d, e.id, e.day));
         return;
       }
+      if (d) removeDraft(key); // 기록이 그 뒤로 바뀌었다 — 낡은 초안은 버린다
       setModal({
         open: true,
         editingId: e.id,
@@ -165,7 +203,10 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
         day: e.day,
       });
     },
-    onDelete: (e: Entry) => store.remove(e.id),
+    onDelete: (e: Entry) => {
+      store.remove(e.id);
+      removeDraft(draftKey(e.id)); // 지운 기록의 수정 초안도 함께
+    },
     onToggleTodo: (e: Entry, i: number) =>
       store.upsert({
         ...e,

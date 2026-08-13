@@ -54,6 +54,12 @@ export function contentEqual(a: Entry, b: Entry): boolean {
   );
 }
 
+/** IDB에서 읽은 행 정규화 — 구버전 데이터에 v가 없으면 0(서버 리비전 모름)으로.
+    첫 push가 CAS 충돌을 내면 병합 경로가 base를 되찾아 준다. */
+function normalizeEntry(e: Entry): Entry {
+  return typeof e.v === 'number' ? e : { ...e, v: 0 };
+}
+
 /** 필드 단위 3-way 병합 — base에서 로컬이 고친 필드만 로컬을 취하고 나머지는 서버를 따른다.
     양쪽이 같은 필드를 고쳤으면 로컬이 이긴다. base가 없으면(신규 행 에코 등) 전부 로컬. */
 export function mergeEntry(base: Entry | null, local: Entry, server: Entry): Entry {
@@ -112,17 +118,13 @@ export class CrewStore {
       this.db = null;
     }
     if (this.db) {
-      // 구버전(IDB v1 이전 데이터)에 v가 없을 수 있다 — 0(=서버 리비전 모름)으로 정규화.
-      // 첫 push가 CAS 충돌을 내면 병합 경로가 base를 되찾아 준다.
-      for (const e of await this.db.getAll('entries')) {
-        this.map.set(e.id, { ...e, v: typeof e.v === 'number' ? e.v : 0 });
-      }
-      const tx = this.db.transaction('queue');
-      let cur = await tx.store.openCursor();
-      while (cur) {
-        this.queue.set(String(cur.key), cur.value);
-        cur = await cur.continue();
-      }
+      const [rows, qkeys, qvals] = await Promise.all([
+        this.db.getAll('entries'),
+        this.db.getAllKeys('queue'),
+        this.db.getAll('queue'),
+      ]);
+      for (const e of rows) this.map.set(e.id, normalizeEntry(e));
+      qkeys.forEach((k, i) => this.queue.set(String(k), qvals[i]!));
       // 내 상태는 지속 — 다른 멤버 상태는 어차피 첫 pull에 실려 온다
       const st = await this.db.get('meta', MY_STATUS_KEY);
       if (!opts.demo && st && typeof st === 'object' && 'm' in st && st.m === opts.memberId) {
@@ -160,12 +162,18 @@ export class CrewStore {
     return [...this.queue.keys()];
   }
 
-  /** push용 스냅샷 — 각 행의 현재 rev를 함께 찍는다. ACK는 이 rev와 일치할 때만 큐를 비운다. */
+  /** push용 스냅샷 — 각 행의 현재 rev를 함께 찍는다. ACK는 이 rev와 일치할 때만 큐를 비운다.
+      행이 없는 고아 큐 키(구버전 반쪽 상태의 잔재)는 여기서 정리한다 — 두면 pending이
+      영원히 0이 되지 않아 재동기화가 쉬지 않고 돈다. */
   pendingSnapshot(): { entry: Entry; rev: number }[] {
     const out: { entry: Entry; rev: number }[] = [];
     for (const [id, meta] of this.queue) {
       const entry = this.map.get(id);
-      if (entry) out.push({ entry, rev: meta.rev });
+      if (!entry) {
+        this.dropFromQueue(id);
+        continue;
+      }
+      out.push({ entry, rev: meta.rev });
     }
     return out;
   }
@@ -253,13 +261,19 @@ export class CrewStore {
         changed = true;
       }
     }
-    this.txWrite(['entries', 'meta'], (tx) => {
-      const store = tx.objectStore('entries');
-      for (const e of puts) void store.put(e);
-      for (const id of dels) void store.delete(id);
-      if (myStatus) void tx.objectStore('meta').put(myStatus, MY_STATUS_KEY);
-      if (cursor) void tx.objectStore('meta').put(cursor, 'cursor');
-    });
+    // 실질 변경이 없는(커서만 전진하는) 정상 폴링에서는 다른 탭을 깨우지 않는다
+    const notify = puts.length > 0 || dels.length > 0 || myStatus !== null;
+    this.txWrite(
+      ['entries', 'meta'],
+      (tx) => {
+        const store = tx.objectStore('entries');
+        for (const e of puts) void store.put(e);
+        for (const id of dels) void store.delete(id);
+        if (myStatus) void tx.objectStore('meta').put(myStatus, MY_STATUS_KEY);
+        if (cursor) void tx.objectStore('meta').put(cursor, 'cursor');
+      },
+      notify,
+    );
     if (changed) this.bump();
   }
 
@@ -267,9 +281,9 @@ export class CrewStore {
   ackApplied(id: string, rev: number, server: Entry): void {
     const q = this.queue.get(id);
     if (!q) return;
-    const cur = this.map.get(id);
     if (q.rev !== rev) {
       // 방금 서버에 반영된 내용이 이 행의 새 base — 다음 push가 그 위에 CAS한다
+      const cur = this.map.get(id);
       const meta: QueueMeta = { rev: q.rev, base: server };
       this.queue.set(id, meta);
       if (cur) {
@@ -279,21 +293,7 @@ export class CrewStore {
       }
       return;
     }
-    this.queue.delete(id);
-    if (server.deletedAt) {
-      this.map.delete(id);
-      this.txWrite(['entries', 'queue'], (tx) => {
-        void tx.objectStore('entries').delete(id);
-        void tx.objectStore('queue').delete(id);
-      });
-    } else {
-      this.map.set(id, server);
-      this.txWrite(['entries', 'queue'], (tx) => {
-        void tx.objectStore('entries').put(server);
-        void tx.objectStore('queue').delete(id);
-      });
-    }
-    this.bump();
+    this.settle(id, server);
   }
 
   /** push CAS 충돌 — 서버 현재 행과 병합한다.
@@ -307,51 +307,42 @@ export class CrewStore {
       return;
     }
     // ① 서버가 삭제 — 로컬 수정을 버리고 삭제를 따른다 (삭제된 기록 부활 방지)
-    if (server.deletedAt) {
-      this.queue.delete(id);
-      this.map.delete(id);
-      this.txWrite(['entries', 'queue'], (tx) => {
-        void tx.objectStore('entries').delete(id);
-        void tx.objectStore('queue').delete(id);
-      });
-      this.bump();
-      return;
-    }
     // ② 내 행이 아니면 이길 수 없다 — 서버를 채택하고 큐에서 뺀다
-    if (server.m !== this.me) {
-      this.queue.delete(id);
-      this.map.set(id, server);
-      this.txWrite(['entries', 'queue'], (tx) => {
-        void tx.objectStore('entries').put(server);
-        void tx.objectStore('queue').delete(id);
-      });
-      this.bump();
+    if (server.deletedAt || server.m !== this.me) {
+      this.settle(id, server);
       return;
     }
     // ① 로컬이 삭제 — 서버 리비전 위에 tombstone을 다시 얹어 재전송한다 (삭제 승리)
     if (local.deletedAt) {
-      const next = { ...local, v: server.v };
-      const meta: QueueMeta = { rev: q.rev + 1, base: server };
-      this.map.set(id, next);
-      this.queue.set(id, meta);
-      this.persistEntry(next, meta);
+      this.requeue(id, { ...local, v: server.v }, server);
       return;
     }
-    // ③ 필드 단위 3-way 병합
+    // ③ 필드 단위 3-way 병합 — 결과가 서버와 같으면(내 쓰기의 에코 포함) 재전송 불필요
     const merged = mergeEntry(q.base, local, server);
     if (contentEqual(merged, server)) {
-      // 병합 결과가 서버와 동일(내 쓰기의 에코 포함) — 재전송 없이 서버 버전을 채택
-      this.queue.delete(id);
-      this.map.set(id, server);
-      this.txWrite(['entries', 'queue'], (tx) => {
-        void tx.objectStore('entries').put(server);
-        void tx.objectStore('queue').delete(id);
-      });
-      this.bump();
+      this.settle(id, server);
       return;
     }
-    const next = { ...merged, updatedAt: local.updatedAt };
-    const meta: QueueMeta = { rev: q.rev + 1, base: server };
+    this.requeue(id, { ...merged, updatedAt: local.updatedAt }, server);
+  }
+
+  /** 큐 정산 — 서버 행을 확정으로 채택하고 큐에서 뺀다 (tombstone이면 완전히 제거). */
+  private settle(id: string, server: Entry): void {
+    this.queue.delete(id);
+    const tombstone = !!server.deletedAt;
+    if (tombstone) this.map.delete(id);
+    else this.map.set(id, server);
+    this.txWrite(['entries', 'queue'], (tx) => {
+      if (tombstone) void tx.objectStore('entries').delete(id);
+      else void tx.objectStore('entries').put(server);
+      void tx.objectStore('queue').delete(id);
+    });
+    this.bump();
+  }
+
+  /** 재전송 대기 — 서버 행을 새 base로 삼아 rev를 올리고 다시 큐에 넣는다. */
+  private requeue(id: string, next: Entry, base: Entry): void {
+    const meta: QueueMeta = { rev: (this.queue.get(id)?.rev ?? 0) + 1, base };
     this.map.set(id, next);
     this.queue.set(id, meta);
     this.persistEntry(next, meta);
@@ -405,15 +396,18 @@ export class CrewStore {
   }
 
   /** fire-and-forget IDB 트랜잭션 — UI는 기다리지 않고, 실패해도 트랜잭션이라 반쪽 상태는 없다.
-      커밋되면 다른 탭에 알린다(BroadcastChannel) — 그쪽 메모리도 IDB를 다시 읽는다. */
-  private txWrite(stores: StoreName[], fill: (tx: CrewTx) => void): void {
+      커밋되면 다른 탭에 알린다(BroadcastChannel) — 그쪽 메모리도 IDB를 다시 읽는다.
+      notify=false는 커서 전진 같은 탭-로컬 메타 쓰기용: 다른 탭을 깨울 필요가 없다. */
+  private txWrite(stores: StoreName[], fill: (tx: CrewTx) => void, notify = true): void {
     const db = this.db;
     if (!db) return;
     try {
       const tx = db.transaction(stores, 'readwrite');
       fill(tx);
       tx.done.then(
-        () => this.bc?.postMessage('changed'),
+        () => {
+          if (notify) this.bc?.postMessage('changed');
+        },
         () => {},
       );
     } catch {
@@ -427,6 +421,9 @@ export class CrewStore {
     const db = this.db;
     if (!db || this.demo || this.refreshing) return;
     this.refreshing = true;
+    // 읽는 사이 이 탭 자신의 쓰기(pull 반영, 사용자 입력)가 끼어들면 스냅샷이 낡는다 —
+    // 그대로 병합하면 방금 반영된 행을 지우거나 되돌리므로, 감지 시 버리고 다시 예약한다.
+    const rev0 = this.snapshot.rev;
     try {
       const tx = db.transaction(['entries', 'queue', 'meta']);
       const [rows, qkeys, qvals, dbSt, dbDirty] = await Promise.all([
@@ -437,6 +434,11 @@ export class CrewStore {
         tx.objectStore('meta').get(STATUS_DIRTY_KEY),
       ]);
       await tx.done;
+      if (this.snapshot.rev !== rev0) {
+        if (this.refreshTimer) clearTimeout(this.refreshTimer);
+        this.refreshTimer = setTimeout(() => void this.refreshFromDB(), 150);
+        return;
+      }
       let changed = false;
 
       // 큐 병합 — 다른 탭의 로컬 쓰기(내게 없거나 rev가 높음)를 채택.
@@ -454,14 +456,21 @@ export class CrewStore {
         }
       }
 
-      // 행 병합 — 큐에 없는(clean) 행과 방금 채택한 dirty 행은 IDB 내용을 따른다
+      // 행 병합 — 큐에 없는(clean) 행과 방금 채택한 dirty 행은 IDB 내용을 따른다.
+      // 변경 감지는 (v, updatedAt, deletedAt)로 충분하다: 서버 변경은 v를, 로컬 수정은
+      // updatedAt을 반드시 바꾼다 — 본문 전체를 직렬화해 비교할 필요가 없다.
       const dbIds = new Set<string>();
       for (const e of rows) {
         dbIds.add(e.id);
         if (this.queue.has(e.id) && !adopted.has(e.id)) continue;
-        const norm: Entry = { ...e, v: typeof e.v === 'number' ? e.v : 0 };
+        const norm = normalizeEntry(e);
         const cur = this.map.get(e.id);
-        if (!cur || JSON.stringify(cur) !== JSON.stringify(norm)) {
+        if (
+          !cur ||
+          cur.v !== norm.v ||
+          cur.updatedAt !== norm.updatedAt ||
+          (cur.deletedAt === null) !== (norm.deletedAt === null)
+        ) {
           this.map.set(e.id, norm);
           changed = true;
         }

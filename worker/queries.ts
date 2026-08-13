@@ -81,21 +81,77 @@ export async function pushEntries(db: Db, rows: Entry[], me: MemberId): Promise<
   return { applied: returned.map(toEntry), conflicts: current.map(toEntry) };
 }
 
+/** v(base) 없는 구 프로토콜 push — 행 단위 LWW(예전 의미론 그대로).
+    아직 구버전 번들을 돌리는 탭이 새 서버에서 400으로 막히지 않게 하는 이행 경로다.
+    version은 +1로 올려서 새 클라이언트의 중복 무시(v 비교)가 이 변경을 놓치지 않게 한다. */
+export async function pushEntriesLegacy(
+  db: Db,
+  rows: Omit<Entry, 'v'>[],
+  me: MemberId,
+): Promise<Entry[]> {
+  if (rows.length === 0) return [];
+  const returned = await db
+    .insert(entries)
+    .values(
+      rows.map((e) => ({
+        id: e.id,
+        memberId: e.m,
+        day: e.day,
+        time: e.time,
+        tag: e.tag,
+        stars: e.tag === 'OFF' ? null : e.stars,
+        memo: e.memo,
+        body: e.body,
+        todos: e.todos,
+        version: 1,
+        deletedAt: e.deletedAt,
+      })),
+    )
+    .onConflictDoUpdate({
+      target: entries.id,
+      set: {
+        day: sql`excluded.day`,
+        time: sql`excluded.time`,
+        tag: sql`excluded.tag`,
+        stars: sql`excluded.stars`,
+        memo: sql`excluded.memo`,
+        body: sql`excluded.body`,
+        todos: sql`excluded.todos`,
+        version: sql`${entries.version} + 1`,
+        deletedAt: sql`excluded.deleted_at`,
+        updatedAt: sql`now()`,
+      },
+      setWhere: sql`${entries.memberId} = ${me}`,
+    })
+    .returning();
+  return returned.map(toEntry);
+}
+
 export interface PullResult {
   rows: Entry[];
   cursor: PullCursor | null;
 }
 
 /** 안전 지평선의 커서 id — ts 이후의 모든 id가 다시 잡히도록 최솟값 UUID를 쓴다. */
-const NIL_UUID = '00000000-0000-0000-0000-000000000000';
+export const NIL_UUID = '00000000-0000-0000-0000-000000000000';
+
+/** 커서 안전 지평선 폭 — "최대 쓰기 트랜잭션 지속시간 + Worker-DB 시계 오차"보다 커야 한다.
+    (neon-http 쓰기는 자동 커밋 단문이라 수 초, 클라우드 시계 오차는 초 미만 — 90초면 넉넉) */
+const HORIZON_MS = 90_000;
 
 /** (updated_at, id) 키셋 커서 이후 변경분. 최대 500행 — 클라이언트가 반복 호출한다.
 
-    커서는 "지금 - 60초" 안전 지평선까지만 전진한다. updated_at의 now()는 커밋 시각이
+    커서는 안전 지평선(지금 - 90초)까지만 전진한다. updated_at의 now()는 커밋 시각이
     아니라 트랜잭션 시작 시각이라, 먼저 시작해 늦게 커밋된 쓰기가 이미 지나간 커서
-    뒤편에 나타나 영구 누락될 수 있다. 지평선 안쪽(최근 60초)의 행은 다음 pull에
-    다시 실려 보내고, 클라이언트가 버전(v) 비교로 중복을 무시한다. */
+    뒤편에 나타나 영구 누락될 수 있다. 지평선 안쪽(최근 90초)의 행은 다음 pull에
+    다시 실려 보내고, 클라이언트가 버전(v) 비교로 중복을 무시한다.
+
+    한도(500)에 걸린 페이지는 키셋으로 전진해 페이지네이션이 항상 앞으로 가게 한다 —
+    마지막 페이지가 지평선에서 다시 멈추고, 빈 페이지도 지평선 너머의 커서를 끌어내리므로
+    페이지네이션이 어떻게 끝나든 커서는 지평선을 넘긴 채 방치되지 않는다. */
 export async function pullSince(db: Db, cursor: PullCursor | null): Promise<PullResult> {
+  const horizonMs = Date.now() - HORIZON_MS;
+  const horizon: PullCursor = { ts: new Date(horizonMs).toISOString(), id: NIL_UUID };
   const rows = await db
     .select()
     .from(entries)
@@ -107,22 +163,18 @@ export async function pullSince(db: Db, cursor: PullCursor | null): Promise<Pull
     .orderBy(entries.updatedAt, entries.id)
     .limit(500);
   const last = rows[rows.length - 1];
-  if (!last) return { rows: [], cursor };
+  if (!last) {
+    // 빈 페이지: 커서가 지평선을 넘어 있으면(정확히 500행 페이지 직후 등) 끌어내린다
+    const curMs = cursor ? Date.parse(cursor.ts) : NaN;
+    return { rows: [], cursor: Number.isFinite(curMs) && curMs > horizonMs ? horizon : cursor };
+  }
   // 마지막 행이 지평선보다 오래됐으면 키셋으로 정상 전진, 아니면 지평선에서 멈춘다.
-  // (비교는 SQL에서 — 드라이버별 타임스탬프 문자열을 JS로 파싱하지 않는다)
-  // 한도(500)에 걸린 페이지는 키셋으로 전진해 페이지네이션이 항상 앞으로 가게 한다 —
-  // 마지막 페이지(<500)가 다시 지평선에서 멈추므로 최근 윈도우는 결국 재검사된다.
-  const [h] = await db
-    .select({
-      olderThanHorizon: sql<boolean>`${last.updatedAt}::timestamptz <= now() - interval '60 seconds'`,
-      horizon: sql<string>`(now() - interval '60 seconds')::text`,
-    })
-    .from(entries)
-    .limit(1);
-  const holdAtHorizon = rows.length < 500 && h && !h.olderThanHorizon;
+  // (파싱이 안 되는 타임스탬프는 안전한 쪽 — 지평선 유지 — 로 처리한다)
+  const lastMs = Date.parse(last.updatedAt);
+  const hold = rows.length < 500 && !(Number.isFinite(lastMs) && lastMs <= horizonMs);
   return {
     rows: rows.map(toEntry),
-    cursor: holdAtHorizon ? { ts: h.horizon, id: NIL_UUID } : { ts: last.updatedAt, id: last.id },
+    cursor: hold ? horizon : { ts: last.updatedAt, id: last.id },
   };
 }
 

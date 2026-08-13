@@ -17,7 +17,7 @@
 ```
 [브라우저]  React SPA + IndexedDB 복제본 + 뮤테이션 큐   ← UI는 로컬만 읽고 쓴다 (0ms, 오프라인 동작)
     │  POST /api/sync/push   (백그라운드, 버전 CAS 업서트 — 충돌 시 서버 행을 받아 3-way 병합)
-    │  GET  /api/sync/pull   ((updated_at, id) 키셋 커서 + 60초 안전 지평선, 탭 보일 때만 20초 폴링)
+    │  GET  /api/sync/pull   ((updated_at, id) 키셋 커서 + 90초 안전 지평선, 탭 보일 때만 20초 폴링)
     │  POST /api/sync/status (지금 상태 — 액션 시각 기준 LWW, pull 응답에 전 멤버 상태 동봉)
     │  POST /api/push/subscribe·unsubscribe (웹 푸시 구독 — 기기당 1행)
 [Cloudflare Worker]  인증(HMAC 초대 토큰) + 동기화 API + SPA 정적 서빙
@@ -33,7 +33,7 @@
 - 수정 충돌: push는 base 버전 CAS — 충돌하면 서버 현재 행을 받아 **필드 단위 3-way 병합**
   (다른 필드끼리는 양쪽 다 살고, 같은 필드는 로컬 승리, 삭제는 항상 승리 — 부활 없음).
   전송 중 재수정은 rev 카운터로 감지해 큐에 남긴다 — ACK가 최신 수정을 지우지 못한다
-- 삭제는 `deleted_at` soft delete로 전파. pull 커서는 "지금-60초" 지평선까지만 전진해
+- 삭제는 `deleted_at` soft delete로 전파. pull 커서는 "지금-90초" 안전 지평선까지만 전진해
   트랜잭션 커밋 지연으로 과거 시각에 나타나는 행도 놓치지 않는다 (중복은 v 비교로 무시)
 - 서버는 "기존 행이 본인 것일 때만" 갱신을 허용 (`setWhere` 가드) — 남의 기록을 덮을 수 없다
 - IndexedDB 쓰기는 단일 트랜잭션(기록+큐, pull 행+커서) — 중단돼도 반쪽 상태가 없다.

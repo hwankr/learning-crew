@@ -4,6 +4,7 @@ import { drizzle } from 'drizzle-orm/neon-http';
 import { makeToken, verifyToken } from './auth';
 import {
   pushEntries,
+  pushEntriesLegacy,
   pullSince,
   setStatus,
   allStatuses,
@@ -21,6 +22,7 @@ import {
   TAGS,
   PLACES,
   PUSH_LIMITS,
+  STATUS_TTL_MS,
   type Entry,
   type MemberId,
   type PullCursor,
@@ -101,7 +103,8 @@ function invalidReason(e: Entry, me: MemberId): string | null {
       return 'bad todo item';
     }
   }
-  if (!Number.isInteger(e.v) || e.v < 0 || e.v > 2_000_000_000) return 'bad v';
+  // v가 아예 없으면 구버전 클라이언트(레거시 LWW 프로토콜) — 거부하지 않고 레거시 경로로 처리
+  if (e.v !== undefined && (!Number.isInteger(e.v) || e.v < 0 || e.v > 2_000_000_000)) return 'bad v';
   if (e.deletedAt !== null && typeof e.deletedAt !== 'string') return 'bad deletedAt';
   return null;
 }
@@ -124,13 +127,25 @@ app.post('/api/sync/push', async (c) => {
     if (seen.has(e.id)) return c.json({ error: 'duplicate id', id: e.id }, 400);
     seen.add(e.id);
   }
-  const outcome = await pushEntries(drizzle(neon(c.env.DATABASE_URL)), req.entries, me);
+  // v가 있는 행은 CAS, 없는 행은 구버전 프로토콜(LWW) — 배포 이행기의 옛 번들도 계속 동기화된다
+  const withV: Entry[] = [];
+  const legacy: Omit<Entry, 'v'>[] = [];
+  for (const e of req.entries) {
+    if (e.v === undefined) legacy.push(e);
+    else withV.push(e);
+  }
+  const db = drizzle(neon(c.env.DATABASE_URL));
+  const [outcome, legacyApplied] = await Promise.all([
+    pushEntries(db, withV, me),
+    pushEntriesLegacy(db, legacy, me),
+  ]);
   const res: PushResponse = {
     ok: true,
     serverTime: new Date().toISOString(),
     results: [
       ...outcome.applied.map((row) => ({ id: row.id, applied: true, row })),
       ...outcome.conflicts.map((row) => ({ id: row.id, applied: false, row })),
+      ...legacyApplied.map((row) => ({ id: row.id, applied: true, row })),
     ],
   };
   return c.json(res);
@@ -156,13 +171,13 @@ function normalizeSince(raw: unknown, now: number): string {
   return new Date(now).toISOString();
 }
 
-/** 액션 시각(LWW 기준) 정규화 — 미래는 지금으로, 24시간보다 오래된 것은 바닥으로 클램프.
-    (범위 밖을 "지금"으로 바꾸면 아주 오래된 오프라인 토글이 오히려 이겨 버린다) */
+/** 액션 시각(LWW 기준) 정규화 — 미래만 5분으로 캡하고 과거는 그대로 둔다.
+    과거를 끌어올리면(클램프하면) 아주 오래된 오프라인 토글이 더 새 액션을 이겨 버린다 —
+    오래된 액션은 LWW에서 자연히 지는 것이 정답이다. */
 function normalizeAt(raw: unknown, now: number): string {
-  const floor = now - 24 * 3_600_000;
   if (typeof raw === 'string') {
     const t = Date.parse(raw);
-    if (Number.isFinite(t)) return new Date(Math.min(Math.max(t, floor), now + 5 * 60_000)).toISOString();
+    if (Number.isFinite(t)) return new Date(Math.min(t, now + 5 * 60_000)).toISOString();
   }
   return new Date(now).toISOString();
 }
@@ -181,9 +196,14 @@ app.post('/api/sync/status', async (c) => {
   }
   const now = Date.now();
   const at = normalizeAt(body.at, now);
-  const s = body.on
+  let s = body.on
     ? { on: true, place: body.place!, since: normalizeSince(body.since, now), at }
     : { on: false, place: null, since: null, at };
+  // TTL(14시간)보다 오래된 ON 액션은 이미 끝난 세션 — 뒤늦게 도착해도 "지금 공부 중"으로
+  // 되살리거나 시작 알림을 쏘지 않고, 꺼짐으로 기록한다 (LWW 순서는 at이 그대로 지킨다)
+  if (s.on && now - Date.parse(at) >= STATUS_TTL_MS) {
+    s = { on: false, place: null, since: null, at };
+  }
   const db = drizzle(neon(c.env.DATABASE_URL));
   const prev = await getStatusRow(db, me);
   const { status: saved, applied } = await setStatus(db, me, s);
@@ -193,9 +213,10 @@ app.post('/api/sync/status', async (c) => {
   if (applied && shouldNotify(prev, s.on, now)) {
     c.executionCtx.waitUntil(
       (async () => {
-        if (!(await claimNotifySlot(db, me, NOTIFY_COOLDOWN_MS))) return;
+        // 수신자 확인이 먼저 — 구독자가 없는데 슬롯을 선점하면 쿨다운만 태운다
         const targets = await pushSubsExcept(db, me);
         if (targets.length === 0) return;
+        if (!(await claimNotifySlot(db, me, NOTIFY_COOLDOWN_MS))) return;
         await sendPushToAll(
           c.env,
           targets,

@@ -111,11 +111,19 @@ export class SyncClient {
       });
       ensureOk(res, 'push');
       const data = (await res.json()) as PushResponse;
-      for (const r of data.results ?? []) {
-        const rev = revById.get(r.id);
-        if (rev === undefined) continue; // 내가 보낸 행이 아니면 무시
-        if (r.applied) this.store.ackApplied(r.id, rev, r.row);
-        else this.store.resolveConflict(r.id, r.row);
+      if (Array.isArray(data.results)) {
+        for (const r of data.results) {
+          const rev = revById.get(r.id);
+          if (rev === undefined) continue; // 내가 보낸 행이 아니면 무시
+          if (r.applied) this.store.ackApplied(r.id, rev, r.row);
+          else this.store.resolveConflict(r.id, r.row);
+        }
+      } else {
+        // 배포 이행기의 구버전 Worker(LWW) 응답 — 전량 반영됐으므로 보낸 내용을 에코로 ACK
+        // (ACK하지 않으면 큐가 안 비어 400ms 재전송 루프가 된다)
+        for (const p of batch) {
+          this.store.ackApplied(p.entry.id, p.rev, { ...p.entry, updatedAt: data.serverTime });
+        }
       }
     }
   }

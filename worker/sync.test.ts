@@ -7,6 +7,7 @@ import { drizzle } from 'drizzle-orm/pglite';
 import { sql } from 'drizzle-orm';
 import {
   pushEntries,
+  pushEntriesLegacy,
   pullSince,
   setStatus,
   allStatuses,
@@ -16,6 +17,7 @@ import {
   deletePushSub,
   deleteGonePushSub,
   pushSubsExcept,
+  NIL_UUID,
   type Db,
 } from './queries';
 import { NOTIFY_COOLDOWN_MS, shouldNotify } from './push';
@@ -43,7 +45,7 @@ function entry(partial: Partial<Entry> & Pick<Entry, 'id' | 'm'>): Entry {
 const A = '11111111-1111-4111-8111-111111111111';
 const B = '22222222-2222-4222-8222-222222222222';
 
-/** 모든 행을 10분 과거로 — 커서가 안전 지평선(지금-60초)에 안 걸리고 키셋으로 전진하게 한다. */
+/** 모든 행을 10분 과거로 — 커서가 안전 지평선에 안 걸리고 키셋으로 전진하게 한다. */
 async function ageAll(): Promise<void> {
   await db.execute(sql`update entries set updated_at = updated_at - interval '10 minutes'`);
 }
@@ -148,16 +150,15 @@ describe('sync queries', () => {
 });
 
 describe('pull 커서 안전 지평선', () => {
-  const NIL = '00000000-0000-0000-0000-000000000000';
   const D = '44444444-4444-4444-8444-444444444444';
   const E = '55555555-5555-4555-8555-555555555555';
   let held: PullCursor | null = null;
 
-  it('최근(60초 이내) 행이 있으면 커서가 지평선에서 멈춘다', async () => {
+  it('최근 행이 있으면 커서가 지평선에서 멈춘다', async () => {
     await pushEntries(db, [entry({ id: D, m: 'sh', memo: '지평선 테스트' })], 'sh');
     const r = await pullSince(db, null);
     expect(r.rows.find((x) => x.id === D)).toBeTruthy();
-    expect(r.cursor!.id).toBe(NIL);
+    expect(r.cursor!.id).toBe(NIL_UUID);
     held = r.cursor;
   });
 
@@ -175,12 +176,50 @@ describe('pull 커서 안전 지평선', () => {
     expect(r.rows.some((x) => x.id === E)).toBe(true);
   });
 
+  it('지평선 너머로 방치된 커서는 빈 페이지에서 끌어내려진다 (정확히 500행 페이지 직후 상황)', async () => {
+    // 지평선 너머(지금)의 커서를 손에 든 클라이언트 시뮬레이션
+    const beyond: PullCursor = { ts: new Date().toISOString(), id: NIL_UUID };
+    const r = await pullSince(db, beyond);
+    expect(r.rows).toHaveLength(0);
+    expect(Date.parse(r.cursor!.ts)).toBeLessThan(Date.parse(beyond.ts)); // 지평선으로 후퇴
+    // 끌어내린 커서로 다시 pull하면 최근 행들이 재전달된다 — 늦은 커밋을 놓치지 않는다
+    const r2 = await pullSince(db, r.cursor);
+    expect(r2.rows.length).toBeGreaterThan(0);
+  });
+
   it('오래된 행만 있으면 키셋 커서로 전진하고 재-pull은 비어 있다', async () => {
     await ageAll();
     const r = await pullSince(db, null);
-    expect(r.cursor!.id).not.toBe(NIL);
+    expect(r.cursor!.id).not.toBe(NIL_UUID);
     const r2 = await pullSince(db, r.cursor);
     expect(r2.rows).toHaveLength(0);
+  });
+});
+
+describe('구버전 프로토콜 push (v 없음 — 레거시 LWW)', () => {
+  const L = '66666666-6666-4666-8666-666666666666';
+  const legacyEntry = (partial: Partial<Entry> & Pick<Entry, 'id' | 'm'>): Omit<Entry, 'v'> => {
+    const { v: _v, ...rest } = entry(partial);
+    return rest;
+  };
+
+  it('신규 행을 넣고 version 1을 준다', async () => {
+    const applied = await pushEntriesLegacy(db, [legacyEntry({ id: L, m: 'sh', memo: '레거시' })], 'sh');
+    expect(applied).toHaveLength(1);
+    expect(applied[0]!.v).toBe(1);
+  });
+
+  it('버전과 무관하게 덮어쓰고 version을 올린다 — 새 클라이언트의 v 비교가 변경을 놓치지 않는다', async () => {
+    const applied = await pushEntriesLegacy(db, [legacyEntry({ id: L, m: 'sh', memo: '레거시 수정' })], 'sh');
+    expect(applied[0]!.memo).toBe('레거시 수정');
+    expect(applied[0]!.v).toBe(2);
+  });
+
+  it('남의 행은 여전히 덮을 수 없다 (setWhere 가드)', async () => {
+    const applied = await pushEntriesLegacy(db, [legacyEntry({ id: L, m: 'wg', memo: '탈취' })], 'wg');
+    expect(applied).toHaveLength(0);
+    const r = await pullSince(db, null);
+    expect(r.rows.find((x) => x.id === L)!.memo).toBe('레거시 수정');
   });
 });
 
