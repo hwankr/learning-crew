@@ -1,7 +1,50 @@
 /* 다중 태그 파생 규칙 — 클라이언트(모달·스토어)와 Worker(검증·저장)가 같은 정의를 써야 한다.
    순서가 흔들리거나 tag/tags가 어긋나면 내용이 같은 기록이 서로를 "변경"으로 보고 헛 동기화가 돈다. */
 import { describe, expect, it } from 'vitest';
-import { TAGS, entryTags, isOffTags, normalizeTags, primaryTag } from './types';
+import { TAGS, entryTags, isOffTags, normalizePhotos, normalizeTags, primaryTag } from './types';
+
+const P1 = '11111111-1111-4111-8111-111111111111';
+const P2 = '22222222-2222-4222-8222-222222222222';
+const P3 = '33333333-3333-4333-8333-333333333333';
+const P4 = '44444444-4444-4444-8444-444444444444';
+const P5 = '55555555-5555-4555-8555-555555555555';
+
+describe('normalizePhotos', () => {
+  it('유효한 UUID만 남기고 대소문자만 다른 중복도 첫 항목 하나로 합친다', () => {
+    expect(
+      normalizePhotos([
+        { id: P1.toUpperCase(), w: 1600, h: 900 },
+        { id: 'not-a-uuid', w: 100, h: 100 },
+        { id: P1, w: 800, h: 600 },
+        null,
+      ]),
+    ).toEqual([{ id: P1, w: 1600, h: 900 }]);
+  });
+
+  it('4장을 넘으면 유효한 첫 4장까지만 남긴다', () => {
+    const photos = [P1, P2, P3, P4, P5].map((id) => ({ id, w: 100, h: 100 }));
+    expect(normalizePhotos(photos).map((p) => p.id)).toEqual([P1, P2, P3, P4]);
+  });
+
+  it('w/h를 가장 가까운 정수로 만든 뒤 1~10000으로 클램프한다', () => {
+    expect(
+      normalizePhotos([
+        { id: P1, w: 0, h: 10_001 },
+        { id: P2, w: 10.6, h: Number.NaN },
+        { id: P3, w: Number.POSITIVE_INFINITY, h: Number.NEGATIVE_INFINITY },
+      ]),
+    ).toEqual([
+      { id: P1, w: 1, h: 10_000 },
+      { id: P2, w: 11, h: 1 },
+      { id: P3, w: 10_000, h: 1 },
+    ]);
+  });
+
+  it('배열이 아니면 빈 배열이다', () => {
+    expect(normalizePhotos(undefined)).toEqual([]);
+    expect(normalizePhotos('photo')).toEqual([]);
+  });
+});
 
 describe('normalizeTags', () => {
   it('유효한 값만 남긴다', () => {

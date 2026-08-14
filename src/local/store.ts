@@ -30,6 +30,7 @@ import {
   entryTags,
   isOffTags,
   normalizeEmojis,
+  normalizePhotos,
   primaryTag,
   PUSH_LIMITS,
   UUID_RE,
@@ -103,11 +104,13 @@ const NOTIF_RETENTION_MS = 30 * 86_400_000;
 
 /** 3-way 병합 대상 필드 — 이 밖의 필드(v/updatedAt)는 동기화 메타데이터다.
     tag는 tags에서 파생되는 값이라 병합 대상이 아니다 — 병합 후 다시 계산한다. */
-const MERGE_FIELDS = ['day', 'time', 'tags', 'stars', 'memo', 'body'] as const;
+const MERGE_FIELDS = ['day', 'time', 'tags', 'stars', 'memo', 'body', 'photos'] as const;
 
 function fieldEq(a: Entry, b: Entry, f: (typeof MERGE_FIELDS)[number] | 'todos'): boolean {
   // 배열 필드는 JSON 비교 — 정규화가 순서를 고정하므로(TAGS 순서) 안전하다
-  if (f === 'todos' || f === 'tags') return JSON.stringify(a[f]) === JSON.stringify(b[f]);
+  if (f === 'todos' || f === 'tags' || f === 'photos') {
+    return JSON.stringify(a[f]) === JSON.stringify(b[f]);
+  }
   return a[f] === b[f];
 }
 
@@ -125,10 +128,11 @@ export function contentEqual(a: Entry, b: Entry): boolean {
 
 /** IDB에서 읽은 행 정규화 — 구버전 데이터에 v가 없으면 0(서버 리비전 모름)으로.
     첫 push가 CAS 충돌을 내면 병합 경로가 base를 되찾아 준다.
-    tags도 같은 이유로 여기서 채운다: 다중 태그 이전에 저장된 IDB 행과 구버전 Worker 응답에는
-    tags가 없다 — 그대로 두면 병합 비교와 push가 빈 배열을 진짜 값으로 본다. */
+    tags/photos도 같은 이유로 여기서 채운다: 예전에 저장된 IDB 행과 구버전 Worker
+    응답에는 새 필드가 없다 — 그대로 두면 병합 비교와 push가 undefined를 진짜 값으로 본다. */
 export function normalizeEntry(e: Entry): Entry {
   const tags = entryTags(e);
+  const photos = normalizePhotos(e.photos);
   const v = typeof e.v === 'number' ? e.v : 0;
   // OFF의 별점도 같은 경계에서 맞춘다. 구버전/깨진 IDB 행이 OFF+숫자를 들고 있으면
   // 서버 ACK 전까지 로컬 불변식이 깨지고, 병합에서 그 숫자를 "로컬 별점 수정"으로 오판한다.
@@ -138,11 +142,12 @@ export function normalizeEntry(e: Entry): Entry {
     v === e.v &&
     e.tag === primaryTag(tags) &&
     e.stars === stars &&
-    JSON.stringify(e.tags) === JSON.stringify(tags)
+    JSON.stringify(e.tags) === JSON.stringify(tags) &&
+    JSON.stringify(e.photos) === JSON.stringify(photos)
   ) {
     return e;
   }
-  return { ...e, v, tags, tag: primaryTag(tags), stars };
+  return { ...e, v, tags, tag: primaryTag(tags), stars, photos };
 }
 
 /** 필드 단위 3-way 병합 — base에서 로컬이 고친 필드만 로컬을 취하고 나머지는 서버를 따른다.
@@ -177,6 +182,7 @@ export function mergeEntry(baseRaw: Entry | null, localRaw: Entry, serverRaw: En
     memo: pick('memo'),
     body: pick('body'),
     todos: pick('todos'),
+    photos: pick('photos'),
     deletedAt: null, // 삭제 충돌은 병합 전에 별도 규칙으로 처리된다
   };
 }
@@ -1502,6 +1508,7 @@ export class CrewStore {
                     done: !!t.done,
                   }))
                 : [],
+              photos: [],
               v: 0,
               updatedAt: new Date().toISOString(),
               deletedAt: null,

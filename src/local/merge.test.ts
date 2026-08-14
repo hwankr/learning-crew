@@ -35,6 +35,7 @@ function e(partial: Partial<Entry>): Entry {
     memo: '',
     body: '원래 본문',
     todos: [{ t: '단어 암기', done: false }],
+    photos: [],
     v: 1,
     updatedAt: '2026-08-12T01:00:00.000Z',
     deletedAt: null,
@@ -78,6 +79,22 @@ describe('mergeEntry (필드 단위 3-way 병합)', () => {
     const merged = mergeEntry(null, raw, e({ v: 1 }));
     expect(merged.tags).toEqual(['영어', '기타']);
     expect(merged.tag).toBe('영어');
+  });
+
+  it('구버전 IDB 행에 photos가 없으면 빈 배열로 복원한다', () => {
+    const legacy = e({}) as Omit<Entry, 'photos'> & { photos?: Entry['photos'] };
+    delete legacy.photos;
+    expect(normalizeEntry(legacy as Entry).photos).toEqual([]);
+  });
+
+  it('사진과 본문을 다른 기기에서 고쳐도 3-way 병합이 둘 다 보존한다', () => {
+    const photo = { id: '22222222-2222-4222-8222-222222222222', w: 1600, h: 900 };
+    const base = e({});
+    const local = e({ photos: [photo] });
+    const server = e({ body: '서버에서 수정', v: 2 });
+    const merged = mergeEntry(base, local, server);
+    expect(merged.photos).toEqual([photo]);
+    expect(merged.body).toBe('서버에서 수정');
   });
 
   it('레거시 이관의 비-OFF+null은 보존하고 OFF의 숫자 별점만 null로 강제한다', () => {

@@ -2,6 +2,7 @@ import {
   PUSH_LIMITS,
   TAGS,
   UUID_RE,
+  normalizePhotos,
   type Entry,
   type MemberId,
 } from '../shared/types';
@@ -16,6 +17,13 @@ function isRealDay(day: string): boolean {
   const [y, m, d] = day.split('-').map(Number);
   const dt = new Date(Date.UTC(y!, m! - 1, d!));
   return dt.getUTCFullYear() === y && dt.getUTCMonth() === m! - 1 && dt.getUTCDate() === d;
+}
+
+/** push 경계의 사진 메타를 공용 정규화로 한 번만 맞춘다.
+    photos가 아예 없는 구버전 행은 필드 누락 자체가 의미이므로 그대로 둔다 —
+    쿼리 계층이 기존 서버 photos를 보존하는 근거가 이 undefined이다. */
+export function normalizePushedEntry(e: Entry): Entry {
+  return e.photos === undefined ? e : { ...e, photos: normalizePhotos(e.photos) };
 }
 
 /** 본인 행 + 형식이 유효할 때만 통과. 실패 사유 문자열, 성공이면 null. */
@@ -40,6 +48,9 @@ export function invalidReason(e: Entry, me: MemberId): string | null {
   } else if (!(TAGS as readonly string[]).includes(e.tag)) {
     return 'bad tag';
   }
+  // 배열 내 값은 normalizePhotos가 잘라내고 보정한다. 여기서는 비배열만
+  // 거부해 신구 프로토콜의 구분(undefined = 기존 값 보존)을 남겨 둔다.
+  if (e.photos !== undefined && !Array.isArray(e.photos)) return 'bad photos';
   // null은 다중 태그 이전 서버·레거시 이관에 이미 존재하는 "평가 없음" 값이라 허용한다.
   // OFF가 숫자를 보내도 실제 저장은 toInsertRow가 null로 강제한다 — 한 행의 레거시 값을
   // 이유로 배치 전체를 400으로 막지 않으면서 OFF ⇒ null 불변식은 DB 경계에서 지킨다.

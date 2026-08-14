@@ -27,6 +27,8 @@ export const entries = pgTable(
     memo: text('memo').notNull().default(''),
     body: text('body').notNull().default(''),
     todos: jsonb('todos').notNull().default([]),
+    // R2 바이너와 분리된 표시용 메타 — 기존 행/구버전 클라이언트는 빈 배열
+    photos: jsonb('photos').notNull().default([]),
     // 서버 리비전 — push CAS의 기준. 갱신마다 +1, 클라이언트는 pull로 받은 값을 base로 되돌려 보낸다.
     version: integer('version').notNull().default(1),
     updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
@@ -34,6 +36,13 @@ export const entries = pgTable(
   },
   (t) => [index('entries_updated_at_id_idx').on(t.updatedAt, t.id)],
 );
+
+/** R2 삭제가 끝날 때까지 남는 내구성 있는 작업 큐.
+    entry 변경과 같은 DB 문장 안에서 트리거가 넣어 메타가 먼저 사라져도 photo id를 잃지 않는다. */
+export const photoTombstones = pgTable('photo_tombstones', {
+  photoId: uuid('photo_id').primaryKey(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+});
 
 /** 지금 상태 — 멤버당 1행을 덮어쓴다. 컬럼명 is_on은 SQL 예약어(on) 회피. */
 export const status = pgTable('status', {

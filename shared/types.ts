@@ -66,6 +66,42 @@ export interface Todo {
   done: boolean;
 }
 
+export interface EntryPhoto {
+  id: string; // 클라이언트 생성 UUID — R2 표시용/썸네일 키가 이 id를 공유한다
+  w: number; // 표시용(1600px) 이미지의 실제 폭
+  h: number; // 표시용(1600px) 이미지의 실제 높이
+}
+
+const ENTRY_PHOTO_LIMIT = 4;
+const ENTRY_PHOTO_DIMENSION_MAX = 10_000;
+
+/** 사진 메타 정규화 — 유효한 UUID만, 첫 등장 순서로 중복 없이, 최대 4장.
+    서버와 클라이언트가 같은 경계를 써야 잘못된 메타가 push/pull마다
+    서로 다른 내용으로 바뀌어 헛 동기화가 돌지 않는다. 부정확한 크기도 0으로
+    남기지 않아 모자이크 종횡비를 깨뜨리지 않게, 가장 가까운 정수 후 1~10000으로 클램프한다. */
+export function normalizePhotos(list: unknown): EntryPhoto[] {
+  if (!Array.isArray(list)) return [];
+  const photos: EntryPhoto[] = [];
+  const seen = new Set<string>();
+
+  const dimension = (value: unknown): number => {
+    const rounded = typeof value === 'number' && !Number.isNaN(value) ? Math.round(value) : 1;
+    return Math.max(1, Math.min(ENTRY_PHOTO_DIMENSION_MAX, rounded));
+  };
+
+  for (const item of list) {
+    if (!item || typeof item !== 'object') continue;
+    const photo = item as { id?: unknown; w?: unknown; h?: unknown };
+    if (typeof photo.id !== 'string' || !UUID_RE.test(photo.id)) continue;
+    const id = canonicalUuid(photo.id);
+    if (seen.has(id)) continue;
+    seen.add(id);
+    photos.push({ id, w: dimension(photo.w), h: dimension(photo.h) });
+    if (photos.length === ENTRY_PHOTO_LIMIT) break;
+  }
+  return photos;
+}
+
 export interface Entry {
   id: string; // 클라이언트 생성 UUID — 멱등 업서트의 키
   m: MemberId;
@@ -81,6 +117,8 @@ export interface Entry {
   memo: string;
   body: string;
   todos: Todo[];
+  /** 표시용 사진 메타 — 바이너는 R2에 별도 저장하고 이 배열만 CAS 동기화한다. */
+  photos: EntryPhoto[];
   /** 서버 리비전. pull로 받은 값이 곧 base — push 시 이 값으로 CAS한다. 로컬 신규 행은 0. */
   v: number;
   updatedAt: string; // 서버 시계 기준 (클라이언트 값은 잠정치)
@@ -345,6 +383,7 @@ export const PUSH_LIMITS = {
   body: 4000,
   todos: 50,
   todoText: 500,
+  photos: ENTRY_PHOTO_LIMIT,
   /** 댓글 한 개 길이 (batch 200은 세 스트림이 공유한다) */
   commentBody: 500,
 } as const;

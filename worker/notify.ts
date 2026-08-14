@@ -2,6 +2,7 @@
    순수 판정은 shared/notify.ts, SQL은 queries.ts에 있고 여기는 그 둘을 잇는 오케스트레이션이다.
    푸시 발송기(send)는 주입 가능해서 테스트가 PGlite + 스텁으로 전 경로를 검증한다. */
 import { sendPushToAll, type PushBody, type PushEnvVars } from './push';
+import { cleanupPhotoTombstones } from './photos';
 import {
   allNotifPrefs,
   claimNotificationsPushed,
@@ -299,10 +300,21 @@ function digestCtx(rows: Notification[]): string {
     설정의 시각 값이 전부 'HH:00'이라(검증이 강제) 시간 단위면 충분하다. */
 export async function runHourly(
   db: Db,
-  env: PushEnvVars,
+  env: PushEnvVars & { PHOTOS: R2Bucket },
   nowMs: number,
   send: Sender = sendPushToAll,
 ): Promise<void> {
+  // R2 오류로 남은 톰스톤은 매시 먼저 재시도한다. DB 정산 전에 실패하면
+  // 행이 그대로 남아 다음 시간을 기다린다. 이 일의 실패는 알림 cron을 막지 않는다.
+  try {
+    await cleanupPhotoTombstones(db, env.PHOTOS);
+  } catch (error) {
+    console.error(JSON.stringify({
+      message: 'photo tombstone cron failed',
+      error: error instanceof Error ? error.message : String(error),
+    }));
+  }
+
   const hour = kstHourStr(nowMs);
   const day = kstDayStr(nowMs);
   const prefs = await allNotifPrefs(db);

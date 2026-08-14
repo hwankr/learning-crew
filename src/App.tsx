@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { Entry, ReactionEmoji, Tag, Todo } from '../shared/types';
-import { PUSH_LIMITS, entryTags, isOffTags, normalizeTags, primaryTag } from '../shared/types';
+import {
+  PUSH_LIMITS,
+  entryTags,
+  isOffTags,
+  normalizePhotos,
+  normalizeTags,
+  primaryTag,
+} from '../shared/types';
 import { contentEqual } from './local/store';
 import { BY_ID, COPY, MEMBERS, W, dayKey, pad2, shiftKey } from './lib/constants';
 import type { AppConfig } from './lib/config';
@@ -44,10 +51,10 @@ function draftHasContent(d: { body: string; todos: Todo[] }): boolean {
   return !!d.body.trim() || d.todos.some((t) => t.t.trim());
 }
 
-/** 저장된 기록 스냅샷의 태그 파생 보정 — 구버전(단일 태그) 초안 base용. */
+/** 저장된 기록 스냅샷의 구버전 경계 보정 — 초안 base도 현재 Entry 모양으로 되살린다. */
 function withTags(e: Entry): Entry {
   const tags = entryTags(e);
-  return { ...e, tags, tag: primaryTag(tags) };
+  return { ...e, tags, tag: primaryTag(tags), photos: normalizePhotos(e.photos) };
 }
 
 /** 읽을 때 방어적으로 정규화한다 — 깨진/구버전 초안이 크래시를 내거나,
@@ -266,6 +273,7 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
         id: crypto.randomUUID(),
         m: me.id,
         time: `${pad2(stamp.getHours())}:${pad2(stamp.getMinutes())}`,
+        photos: [],
         v: 0, // 신규 행 — 서버 리비전 없음
         ...common,
       });

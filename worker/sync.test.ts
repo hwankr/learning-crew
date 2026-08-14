@@ -22,9 +22,10 @@ import {
   pushReactions,
   pullReactions,
   NIL_UUID,
+  pendingPhotoTombstoneIds,
   type Db,
 } from './queries';
-import { invalidReason } from './validation';
+import { invalidReason, normalizePushedEntry } from './validation';
 import { NOTIFY_COOLDOWN_MS, shouldNotify } from './push';
 import {
   STATUS_TTL_MS,
@@ -56,6 +57,7 @@ function entry(partial: Partial<Entry> & Pick<Entry, 'id' | 'm'>): Entry {
     memo: '',
     body: '',
     todos: [],
+    photos: [],
     v: 0,
     updatedAt: new Date().toISOString(),
     deletedAt: null,
@@ -338,6 +340,117 @@ describe('다중 태그', () => {
     const row = r.rows.find((x) => x.id === M1)!;
     expect(row.tags).toEqual([row.tag]);
     expect(row.tags.length).toBe(1);
+  });
+});
+
+describe('사진 메타 동기화', () => {
+  const E1 = 'a1111111-1111-4111-8111-111111111111';
+  const P1 = 'b1111111-1111-4111-8111-111111111111';
+  const P2 = 'b2222222-2222-4222-8222-222222222222';
+  const P3 = 'b3333333-3333-4333-8333-333333333333';
+  const P4 = 'b4444444-4444-4444-8444-444444444444';
+  const P5 = 'b5555555-5555-4555-8555-555555555555';
+
+  it('push 경계가 중복·개수·크기를 정규화하고 pull까지 그대로 왕복한다', async () => {
+    const raw = entry({
+      id: E1,
+      m: 'sh',
+      photos: [
+        { id: P1.toUpperCase(), w: 0, h: 20_000 },
+        { id: P1, w: 800, h: 600 },
+        { id: P2, w: 100.6, h: 200.4 },
+        { id: P3, w: 300, h: 300 },
+        { id: P4, w: 400, h: 400 },
+        { id: P5, w: 500, h: 500 },
+      ],
+    });
+    expect(invalidReason(raw, 'sh')).toBeNull();
+    const normalized = normalizePushedEntry(raw);
+    expect(normalized.photos).toEqual([
+      { id: P1, w: 1, h: 10_000 },
+      { id: P2, w: 101, h: 200 },
+      { id: P3, w: 300, h: 300 },
+      { id: P4, w: 400, h: 400 },
+    ]);
+
+    const out = await pushEntries(db, [normalized], 'sh');
+    expect(out.conflicts).toHaveLength(0);
+    expect(out.applied[0]!.photos).toEqual(normalized.photos);
+    const pulled = (await pullSince(db, null)).rows.find((row) => row.id === E1)!;
+    expect(pulled.photos).toEqual(normalized.photos);
+  });
+
+  it('photos 필드 누락은 CAS push에서 기존 값을 보존하고, []는 의도한 삭제다', async () => {
+    await db.execute(sql`delete from photo_tombstones`);
+    const current = (await pullSince(db, null)).rows.find((row) => row.id === E1)!;
+    const { photos: _photos, ...withoutPhotos } = { ...current, memo: '구버전 수정' };
+    const preserved = await pushEntries(db, [withoutPhotos as Entry], 'sh');
+    expect(preserved.applied[0]!.photos.map((photo) => photo.id)).toEqual([P1, P2, P3, P4]);
+    expect(await pendingPhotoTombstoneIds(db)).toEqual([]);
+
+    const removed = await pushEntries(
+      db,
+      [{ ...preserved.applied[0]!, photos: [] }],
+      'sh',
+    );
+    expect(removed.applied[0]!.photos).toEqual([]);
+    expect((await pendingPhotoTombstoneIds(db)).sort()).toEqual([P1, P2, P3, P4].sort());
+    await db.execute(sql`delete from photo_tombstones`);
+  });
+
+  it('v와 photos가 모두 없는 구버전 LWW push도 기존 사진을 보존한다', async () => {
+    const current = (await pullSince(db, null)).rows.find((row) => row.id === E1)!;
+    const restored = await pushEntries(db, [{ ...current, photos: [{ id: P1, w: 1600, h: 900 }] }], 'sh');
+    const { v: _v, photos: _photos, ...legacy } = {
+      ...restored.applied[0]!,
+      memo: '레거시 LWW 수정',
+    };
+    const applied = await pushEntriesLegacy(db, [legacy as Omit<Entry, 'v'>], 'sh');
+    expect(applied[0]!.photos).toEqual([{ id: P1, w: 1600, h: 900 }]);
+  });
+
+  it('수정으로 빠진 id를 entry 변경과 같은 DB 문장에서 톰스톤으로 남긴다', async () => {
+    await db.execute(sql`delete from photo_tombstones`);
+    const current = (await pullSince(db, null)).rows.find((row) => row.id === E1)!;
+    const withTwo = await pushEntries(
+      db,
+      [{ ...current, photos: [...current.photos, { id: P2, w: 800, h: 600 }] }],
+      'sh',
+    );
+    const out = await pushEntries(
+      db,
+      [{ ...withTwo.applied[0]!, photos: [{ id: P2, w: 800, h: 600 }] }],
+      'sh',
+    );
+    expect(out.applied[0]!.photos.map((photo) => photo.id)).toEqual([P2]);
+    expect(await pendingPhotoTombstoneIds(db)).toEqual([P1]);
+    await db.execute(sql`delete from photo_tombstones`);
+  });
+
+  it('entry 수정이 롤백되면 같은 트랜잭션의 톰스톤도 남지 않는다', async () => {
+    const entryId = 'a2222222-2222-4222-8222-222222222222';
+    const created = await pushEntries(
+      db,
+      [entry({ id: entryId, m: 'sh', photos: [{ id: P5, w: 1200, h: 800 }] })],
+      'sh',
+    );
+    await db.execute(sql`delete from photo_tombstones`);
+
+    await expect(db.transaction(async (tx) => {
+      await pushEntries(tx as unknown as Db, [{ ...created.applied[0]!, photos: [] }], 'sh');
+      throw new Error('force rollback');
+    })).rejects.toThrow('force rollback');
+
+    expect(await pendingPhotoTombstoneIds(db)).toEqual([]);
+    const current = (await pullSince(db, null)).rows.find((row) => row.id === entryId)!;
+    expect(current.photos).toEqual([{ id: P5, w: 1200, h: 800 }]);
+  });
+
+  it('soft delete는 행에 남은 모든 사진 id를 톰스톤으로 남긴다', async () => {
+    const current = (await pullSince(db, null)).rows.find((row) => row.id === E1)!;
+    await pushEntries(db, [{ ...current, deletedAt: new Date().toISOString() }], 'sh');
+    expect(await pendingPhotoTombstoneIds(db)).toEqual([P2]);
+    await db.execute(sql`delete from photo_tombstones`);
   });
 });
 

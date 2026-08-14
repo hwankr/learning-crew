@@ -75,6 +75,7 @@ function entry(partial: Partial<Entry> & Pick<Entry, 'id' | 'm'>): Entry {
     memo: '',
     body: '',
     todos: [],
+    photos: [],
     v: 0,
     updatedAt: new Date().toISOString(),
     deletedAt: null,
@@ -104,7 +105,11 @@ function allPrefs(over: Partial<Record<MemberId, Partial<NotifPrefs>>> = {}) {
   >;
 }
 
-const ENV = { VAPID_PUBLIC_KEY: 'pk', VAPID_PRIVATE_KEY: 'sk' };
+const ENV = {
+  VAPID_PUBLIC_KEY: 'pk',
+  VAPID_PRIVATE_KEY: 'sk',
+  PHOTOS: { delete: async () => {} } as unknown as R2Bucket,
+};
 
 function makeSender() {
   const calls: { endpoints: string[]; data: PushBody }[] = [];
@@ -125,6 +130,7 @@ async function resetNotifState(): Promise<void> {
   await db.execute(sql`delete from notifications`);
   await db.execute(sql`delete from notif_prefs`);
   await db.execute(sql`delete from push_subs`);
+  await db.execute(sql`delete from photo_tombstones`);
 }
 
 const ISO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
@@ -576,6 +582,37 @@ describe('runHourly', () => {
       (await db.execute(sql`select count(*)::int as n from notifications where kind = 'system'`))
         .rows as { n: number }[],
     ).toEqual([{ n: 0 }]);
+  });
+
+  it('R2 삭제 실패 톰스톤을 남기고 다음 cron에서 재시도해 정산한다', async () => {
+    const photoId = 'f1111111-1111-4111-8111-111111111111';
+    await db.execute(sql`insert into photo_tombstones (photo_id) values (${photoId}::uuid)`);
+    let attempts = 0;
+    const deletedKeys: string[][] = [];
+    const env = {
+      ...ENV,
+      PHOTOS: {
+        delete: async (keys: string[]) => {
+          attempts += 1;
+          if (attempts === 1) throw new Error('temporary R2 error');
+          deletedKeys.push(keys);
+        },
+      } as unknown as R2Bucket,
+    };
+    const { send } = makeSender();
+    const at = lastKstHour(12);
+
+    await runHourly(db, env, at, send);
+    expect(
+      (await db.execute(sql`select photo_id from photo_tombstones`)).rows,
+    ).toEqual([{ photo_id: photoId }]);
+
+    await runHourly(db, env, at, send);
+    expect((await db.execute(sql`select photo_id from photo_tombstones`)).rows).toEqual([]);
+    expect(deletedKeys).toEqual([[
+      'p/f1111111-1111-4111-8111-111111111111',
+      'p/f1111111-1111-4111-8111-111111111111.t',
+    ]]);
   });
 });
 

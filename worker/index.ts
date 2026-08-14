@@ -20,6 +20,7 @@ import {
   claimNotifySlot,
   upsertPushSub,
   deletePushSub,
+  hasPhotoTombstone,
 } from './queries';
 import { NOTIFY_COOLDOWN_MS, shouldNotify } from './push';
 import { notifyCommentEvents, notifyStart, runHourly } from './notify';
@@ -51,7 +52,15 @@ import {
   type StatusSetResponse,
   type VapidKeyResponse,
 } from '../shared/types';
-import { invalidReason } from './validation';
+import { invalidReason, normalizePushedEntry } from './validation';
+import {
+  PHOTO_MAX_BYTES,
+  cleanupPhotoTombstones,
+  parsePhotoKind,
+  photoObjectKey,
+  putOwnedPhoto,
+  readBoundedPhotoBody,
+} from './photos';
 
 type Env = {
   Bindings: {
@@ -61,6 +70,7 @@ type Env = {
     VAPID_PRIVATE_KEY: string;
     VAPID_SUBJECT?: string;
     ASSETS: Fetcher;
+    PHOTOS: R2Bucket;
   };
   Variables: {
     memberId: MemberId;
@@ -99,6 +109,75 @@ const requireMember: MiddlewareHandler<Env> = async (c, next) => {
 app.use('/api/sync/*', requireMember);
 app.use('/api/push/*', requireMember);
 app.use('/api/notify/*', requireMember);
+app.use('/api/photos/*', requireMember);
+
+/* ---------- 사진 R2 업로드·서빙 ---------- */
+
+function hasR2Body(object: R2Object | R2ObjectBody): object is R2ObjectBody {
+  return 'body' in object;
+}
+
+app.put('/api/photos/:photoId', async (c) => {
+  const rawId = c.req.param('photoId');
+  if (!UUID_RE.test(rawId)) return c.json({ error: 'bad photo id' }, 400);
+  const photoId = canonicalUuid(rawId);
+  const kind = parsePhotoKind(c.req.query('kind'));
+  if (kind === null) return c.json({ error: 'bad photo kind' }, 400);
+
+  const db = drizzle(neon(c.env.DATABASE_URL));
+  if (await hasPhotoTombstone(db, photoId)) {
+    return c.json({ error: 'photo was removed' }, 410);
+  }
+
+  const mediaType = c.req.header('content-type')?.split(';', 1)[0]?.trim().toLowerCase();
+  if (mediaType !== 'image/jpeg') return c.json({ error: 'content type must be image/jpeg' }, 415);
+
+  const maxBytes = PHOTO_MAX_BYTES[kind];
+  const declaredLength = c.req.header('content-length');
+  if (declaredLength !== undefined) {
+    if (!/^\d+$/.test(declaredLength)) return c.json({ error: 'bad content length' }, 400);
+    if (Number(declaredLength) > maxBytes) return c.json({ error: 'photo too large' }, 413);
+  }
+  const body = await readBoundedPhotoBody(c.req.raw.body, maxBytes);
+  if (body.tooLarge) return c.json({ error: 'photo too large' }, 413);
+
+  const stored = await putOwnedPhoto(
+    c.env.PHOTOS,
+    photoObjectKey(photoId, kind),
+    body.data,
+    c.get('memberId'),
+  );
+  if (!stored.ok) {
+    return stored.reason === 'forbidden'
+      ? c.json({ error: 'photo belongs to another member' }, 403)
+      : c.json({ error: 'photo upload conflict' }, 409);
+  }
+  c.header('ETag', stored.etag);
+  return c.json({ ok: true, etag: stored.etag });
+});
+
+app.get('/api/photos/:photoId', async (c) => {
+  const rawId = c.req.param('photoId');
+  if (!UUID_RE.test(rawId)) return c.json({ error: 'bad photo id' }, 400);
+  const kind = parsePhotoKind(c.req.query('kind'));
+  if (kind === null) return c.json({ error: 'bad photo kind' }, 400);
+  const key = photoObjectKey(rawId, kind);
+
+  const ifNoneMatch = c.req.header('if-none-match');
+  const object = ifNoneMatch === undefined
+    ? await c.env.PHOTOS.get(key)
+    : await c.env.PHOTOS.get(key, { onlyIf: new Headers({ 'if-none-match': ifNoneMatch }) });
+  if (object === null) return c.json({ error: 'photo not found' }, 404);
+
+  const headers = new Headers();
+  object.writeHttpMetadata(headers);
+  headers.set('Content-Type', object.httpMetadata?.contentType ?? 'image/jpeg');
+  headers.set('Cache-Control', 'private, max-age=31536000, immutable');
+  // R2 etag는 맨 값이 아니라 HTTP 규격에 맞게 따옴표가 붙은 httpEtag를 써야 한다.
+  headers.set('ETag', object.httpEtag);
+  if (!hasR2Body(object)) return new Response(null, { status: 304, headers });
+  return new Response(object.body, { headers });
+});
 
 /** 댓글 행 검증 — 본문은 trim 후 길이를 본다(공백만 남는 댓글은 실수다). */
 function invalidCommentReason(x: Comment, me: MemberId): string | null {
@@ -170,11 +249,14 @@ app.post('/api/sync/push', async (c) => {
     reads.push({ id: canonicalUuid(r.id), at: new Date(Date.parse(r.at)).toISOString() });
   }
   const seen = new Set<string>();
+  const entryRows: Entry[] = [];
   for (const e of req.entries) {
     const reason = invalidReason(e, me);
     if (reason) return c.json({ error: reason, id: (e as { id?: string })?.id }, 400);
-    if (seen.has(e.id)) return c.json({ error: 'duplicate id', id: e.id }, 400);
-    seen.add(e.id);
+    const id = canonicalUuid(e.id);
+    if (seen.has(id)) return c.json({ error: 'duplicate id', id }, 400);
+    seen.add(id);
+    entryRows.push(normalizePushedEntry({ ...e, id }));
   }
   const now = Date.now();
   const seenComments = new Set<string>();
@@ -219,7 +301,7 @@ app.post('/api/sync/push', async (c) => {
   // v가 있는 행은 CAS, 없는 행은 구버전 프로토콜(LWW) — 배포 이행기의 옛 번들도 계속 동기화된다
   const withV: Entry[] = [];
   const legacy: Omit<Entry, 'v'>[] = [];
-  for (const e of req.entries) {
+  for (const e of entryRows) {
     if (e.v === undefined) legacy.push(e);
     else withV.push(e);
   }
@@ -231,6 +313,18 @@ app.post('/api/sync/push', async (c) => {
     pushReactions(db, rRows),
     markNotificationsRead(db, me, reads),
   ]);
+  // entry 문장의 DB 트리거가 빠진 photo id를 같은 트랜잭션에서 톰스톤으로
+  // 남겼다. 응답은 막지 않고 빠른 삭제를 시도하되, 실패한 행은 cron이 재시도한다.
+  if (entryRows.length > 0) {
+    c.executionCtx.waitUntil(
+      cleanupPhotoTombstones(db, c.env.PHOTOS).catch((error: unknown) => {
+        console.error(JSON.stringify({
+          message: 'photo tombstone fast path failed',
+          error: error instanceof Error ? error.message : String(error),
+        }));
+      }),
+    );
+  }
   // 방금 반영된 새 댓글(tombstone 제외)과 새로 추가된 이모지만 알림이 된다 —
   // 재전송·삭제·제거는 applied/deltas에서 이미 걸러져 알림이 중복되지 않는다.
   const newComments = cOut.applied.filter((r) => r.deletedAt === null);

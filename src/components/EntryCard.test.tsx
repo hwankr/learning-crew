@@ -7,6 +7,7 @@ const entry: Entry = {
   id: 'e1', m: 'sh', day: '2026-08-14', time: '12:00',
   tag: '코딩테스트', tags: ['코딩테스트'], stars: 4, memo: '', body: '오늘의 기록',
   todos: [{ t: '기출 1회', done: true }, { t: '오답 정리', done: false }],
+  photos: [],
   v: 0, updatedAt: '2026-08-14T03:00:00.000Z', deletedAt: null,
 };
 

@@ -1,7 +1,16 @@
 /* 동기화 쿼리 — Worker(neon-http)와 테스트(PGlite)가 같은 코드를 쓴다. */
 import { and, eq, inArray, isNull, lt, ne, notInArray, or, sql } from 'drizzle-orm';
 import type { PgDatabase } from 'drizzle-orm/pg-core';
-import { comments, entries, notifPrefs, notifications, pushSubs, reactions, status } from './schema';
+import {
+  comments,
+  entries,
+  notifPrefs,
+  notifications,
+  photoTombstones,
+  pushSubs,
+  reactions,
+  status,
+} from './schema';
 import {
   DEFAULT_NOTIF_PREFS,
   MEMBER_IDS,
@@ -9,6 +18,7 @@ import {
   entryTags,
   isOffTags,
   normalizeEmojis,
+  normalizePhotos,
   primaryTag,
 } from '../shared/types';
 import type {
@@ -58,6 +68,8 @@ function toEntry(r: typeof entries.$inferSelect): Entry {
     memo: r.memo,
     body: r.body,
     todos: r.todos as Todo[],
+    // jsonb는 손상된 값도 담을 수 있으므로 pull 경계에서 공용 규칙으로 다시 맞춘다.
+    photos: normalizePhotos(r.photos),
     v: r.version,
     updatedAt: isoTs(r.updatedAt),
     deletedAt: r.deletedAt === null ? null : isoTs(r.deletedAt),
@@ -81,12 +93,17 @@ function toInsertRow(e: Omit<Entry, 'v'>, version: number) {
     memo: e.memo,
     body: e.body,
     todos: e.todos,
+    // 신규 구버전 행(photos 누락)은 []로 시작하고, 기존 행 보존은
+    // onConflict SET에서 처리한다. DB에는 항상 정규화된 배열만 들어간다.
+    photos: normalizePhotos(e.photos),
     version,
     deletedAt: e.deletedAt,
   };
 }
 
-/** onConflictDoUpdate가 공유하는 내용 필드 갱신 — version/updated_at은 호출부가 정한다. */
+/** onConflictDoUpdate가 공유하는 내용 필드 갱신 — version/updated_at은 호출부가 정한다.
+    photos는 별도로 더한다. 구버전 push의 필드 누락을 [] 삭제로 오인하지 않으려면
+    "포함된 행"과 "누락된 행"을 다른 upsert SET으로 보내야 한다. */
 const CONTENT_SET = {
   day: sql`excluded.day`,
   time: sql`excluded.time`,
@@ -98,6 +115,35 @@ const CONTENT_SET = {
   todos: sql`excluded.todos`,
   deletedAt: sql`excluded.deleted_at`,
 } as const;
+
+const PHOTO_SET = { photos: sql`excluded.photos` } as const;
+
+/** 구버전 행의 photos 누락을 기존 DB 값 보존으로 처리하는 CAS upsert.
+    신규 행은 toInsertRow의 []가 저장되고, 기존 행은 includePhotos=false일 때
+    SET에 photos를 넣지 않아 갱신 시점의 값을 원자적으로 그대로 둔다. */
+async function pushEntriesCasGroup(
+  db: Db,
+  rows: Entry[],
+  me: MemberId,
+  includePhotos: boolean,
+): Promise<(typeof entries.$inferSelect)[]> {
+  if (rows.length === 0) return [];
+  return db
+    .insert(entries)
+    .values(rows.map((e) => toInsertRow(e, e.v + 1)))
+    .onConflictDoUpdate({
+      target: entries.id,
+      set: {
+        ...CONTENT_SET,
+        ...(includePhotos ? PHOTO_SET : {}),
+        version: sql`excluded.version`,
+        updatedAt: sql`now()`,
+      },
+      // excluded.version = base+1 이므로 "현재 version = base"가 CAS 조건이 된다
+      setWhere: sql`${entries.memberId} = ${me} and ${entries.version} = excluded.version - 1`,
+    })
+    .returning();
+}
 
 export interface PushOutcome {
   /** 반영된 행 — 서버가 부여한 새 version/updated_at을 담아 돌려준다. */
@@ -112,20 +158,14 @@ export interface PushOutcome {
       전송이 겹쳐도 한쪽만 반영된다. 불일치 행은 현재 서버 행을 conflicts로 돌려준다. */
 export async function pushEntries(db: Db, rows: Entry[], me: MemberId): Promise<PushOutcome> {
   if (rows.length === 0) return { applied: [], conflicts: [] };
-  const returned = await db
-    .insert(entries)
-    .values(rows.map((e) => toInsertRow(e, e.v + 1)))
-    .onConflictDoUpdate({
-      target: entries.id,
-      set: {
-        ...CONTENT_SET,
-        version: sql`excluded.version`,
-        updatedAt: sql`now()`,
-      },
-      // excluded.version = base+1 이므로 "현재 version = base"가 CAS 조건이 된다
-      setWhere: sql`${entries.memberId} = ${me} and ${entries.version} = excluded.version - 1`,
-    })
-    .returning();
+  // undefined인 행은 구버전 프로토콜: 빈 배열을 보낸 것이 아니므로 기존 값을 보존한다.
+  const withPhotos = rows.filter((e) => e.photos !== undefined);
+  const withoutPhotos = rows.filter((e) => e.photos === undefined);
+  const [withReturned, withoutReturned] = await Promise.all([
+    pushEntriesCasGroup(db, withPhotos, me, true),
+    pushEntriesCasGroup(db, withoutPhotos, me, false),
+  ]);
+  const returned = [...withReturned, ...withoutReturned];
   const appliedIds = new Set(returned.map((r) => r.id));
   const missed = rows.filter((e) => !appliedIds.has(e.id)).map((e) => e.id);
   const current = missed.length
@@ -143,20 +183,61 @@ export async function pushEntriesLegacy(
   me: MemberId,
 ): Promise<Entry[]> {
   if (rows.length === 0) return [];
-  const returned = await db
-    .insert(entries)
-    .values(rows.map((e) => toInsertRow(e, 1)))
-    .onConflictDoUpdate({
-      target: entries.id,
-      set: {
-        ...CONTENT_SET,
-        version: sql`${entries.version} + 1`,
-        updatedAt: sql`now()`,
-      },
-      setWhere: sql`${entries.memberId} = ${me}`,
-    })
-    .returning();
+  const run = async (
+    group: Omit<Entry, 'v'>[],
+    includePhotos: boolean,
+  ): Promise<(typeof entries.$inferSelect)[]> => {
+    if (group.length === 0) return [];
+    return db
+      .insert(entries)
+      .values(group.map((e) => toInsertRow(e, 1)))
+      .onConflictDoUpdate({
+        target: entries.id,
+        set: {
+          ...CONTENT_SET,
+          ...(includePhotos ? PHOTO_SET : {}),
+          version: sql`${entries.version} + 1`,
+          updatedAt: sql`now()`,
+        },
+        setWhere: sql`${entries.memberId} = ${me}`,
+      })
+      .returning();
+  };
+  const [withReturned, withoutReturned] = await Promise.all([
+    run(rows.filter((e) => e.photos !== undefined), true),
+    run(rows.filter((e) => e.photos === undefined), false),
+  ]);
+  const returned = [...withReturned, ...withoutReturned];
   return returned.map(toEntry);
+}
+
+/* ---------- 사진 R2 삭제 톰스톤 ---------- */
+
+/** PUT 경계에서 늦은 업로드를 막는 존재 확인. */
+export async function hasPhotoTombstone(db: Db, photoId: string): Promise<boolean> {
+  const rows = await db
+    .select({ photoId: photoTombstones.photoId })
+    .from(photoTombstones)
+    .where(eq(photoTombstones.photoId, photoId))
+    .limit(1);
+  return rows.length > 0;
+}
+
+/** 매시 cron이 한 번에 처리할 유한한 묶음. 오래된 작업부터 내본다. */
+export async function pendingPhotoTombstoneIds(db: Db, limit = 500): Promise<string[]> {
+  const rows = await db
+    .select({ photoId: photoTombstones.photoId })
+    .from(photoTombstones)
+    .orderBy(photoTombstones.createdAt, photoTombstones.photoId)
+    .limit(limit);
+  return rows.map((row) => row.photoId);
+}
+
+/** R2 두 객체 삭제가 성공한 id만 큐에서 정산한다. */
+export async function deletePhotoTombstones(db: Db, photoIds: readonly string[]): Promise<void> {
+  const ids = [...new Set(photoIds)];
+  if (ids.length === 0) return;
+  await db.delete(photoTombstones).where(inArray(photoTombstones.photoId, ids));
 }
 
 export interface PullResult {

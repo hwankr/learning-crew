@@ -181,8 +181,8 @@ export function shiftKey(days: number): string {
 export function seedEntries(): Entry[] {
   const t = shiftKey(0), y = shiftKey(-1), b = shiftKey(-2);
   const now = new Date().toISOString();
-  const base: Pick<Entry, 'body' | 'todos' | 'v' | 'updatedAt' | 'deletedAt'> = {
-    body: '', todos: [], v: 0, updatedAt: now, deletedAt: null,
+  const base: Pick<Entry, 'body' | 'todos' | 'photos' | 'v' | 'updatedAt' | 'deletedAt'> = {
+    body: '', todos: [], photos: [], v: 0, updatedAt: now, deletedAt: null,
   };
   // tag·stars는 tags의 파생값이라 직접 쓰지 않고 여기서 한 번에 맞춘다. tags도 여기서
   // 정규화한다 — 리터럴이 TAGS 순서가 아니면 시드가 만든 tag와 화면이 entryTags로 다시
