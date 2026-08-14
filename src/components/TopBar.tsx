@@ -43,10 +43,14 @@ export function TopBar({
         </button>
         <div className="wordmark">러닝 크루 👟</div>
         <div className="seg">
-          <button className={'seg-btn' + (view === 'feed' ? ' on' : '')} aria-pressed={view === 'feed'}
-            onClick={() => onView('feed')}>피드</button>
-          <button className={'seg-btn' + (view === 'cal' ? ' on' : '')} aria-pressed={view === 'cal'}
-            onClick={() => onView('cal')}>캘린더</button>
+          <button className={'seg-btn' + (view === 'feed' ? ' on' : '')} data-label="피드"
+            aria-pressed={view === 'feed'} onClick={() => onView('feed')}>
+            <span>피드</span>
+          </button>
+          <button className={'seg-btn' + (view === 'cal' ? ' on' : '')} data-label="캘린더"
+            aria-pressed={view === 'cal'} onClick={() => onView('cal')}>
+            <span>캘린더</span>
+          </button>
         </div>
         <div className="top-gap" />
         {sync && <SyncStatus sync={sync} variant="top" />}
