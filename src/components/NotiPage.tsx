@@ -2,7 +2,7 @@
    행 문구·배지·그룹핑은 전부 스냅샷(Notification[])에서 파생한다 — 여기서 쓰기는
    "읽음 처리"뿐이고, 같은 날의 크루 전체 댓글(why=all)은 표시할 때만 한 줄로 접는다. */
 import { useEffect, useMemo, useState } from 'react';
-import type { NotifKind, NotifWhy, Notification } from '../../shared/types';
+import type { MemberId, NotifKind, NotifWhy, Notification } from '../../shared/types';
 import { W, dayKey, memberName, memberOf, pad2 } from '../lib/constants';
 import { Avatar, BELL_D, GearIcon, Icon } from './icons';
 
@@ -134,6 +134,13 @@ export function readRow(row: NotiRow, onRead: (id: string) => void): void {
   for (const x of row.group) if (x.readAt === null) onRead(x.id);
 }
 
+/** 행 앞에 세울 사람 — 하루 요약은 actor 대신 actors에 참여자를 담아 오므로 첫 사람을 쓴다.
+    system만 사람 아바타가 아닌 벨이고, 모르는 id는 이후 memberOf의 중립 표시로 간다. */
+export function displayActorOf(n: Notification): MemberId | null {
+  if (n.kind === 'system') return null;
+  return n.actor ?? (n.why === 'react_daily' ? n.actors[0] ?? null : null);
+}
+
 /* ---------- 컴포넌트 ---------- */
 
 function BellCircle({ size }: { size: number }) {
@@ -159,9 +166,10 @@ export function NotiRowView({
   const grouped = row.group.length > 1;
   const anyUnread = row.group.some((x) => x.readAt === null);
   const badge = WHY_BADGE[n.why];
-  // 행위자가 없는 행(system)만 벨 아이콘이다 — 모르는 id는 중립 아바타로 세운다
-  // (벨을 세우면 사람이 한 일이 시스템 알림처럼 읽힌다)
-  const member = n.actor ? memberOf(n.actor) : undefined;
+  // 하루 요약은 actor=null이어도 actors[0]이 있다 — 벨을 세우면 사람이 보낸 응원이
+  // 시스템 알림처럼 읽힌다. 모르는 id는 memberOf가 중립 아바타로 받는다.
+  const displayActor = displayActorOf(n);
+  const member = displayActor ? memberOf(displayActor) : undefined;
   const actorCount = new Set(row.group.map((x) => x.actor)).size;
   const name = grouped
     ? `${nameOf(n)}${actorCount > 1 ? ` 외 ${actorCount - 1}명` : ''}`

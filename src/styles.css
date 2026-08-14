@@ -356,6 +356,7 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 }
 .comment-input:hover { border-color: #CDD2DB; }
 .comment-input:focus { border-color: #FFB800; }
+.comment-input::placeholder { color: #B4BAC4; }
 /* 쓸 내용이 있을 때만 나타난다 — 빈 입력 옆의 죽은 버튼을 두지 않는다 */
 .comment-send {
   flex: none; height: 34px; padding: 0 14px; border: none; border-radius: 999px;
@@ -759,7 +760,7 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 .noti-group { margin-top: 14px; }
 .noti-group-label { font-size: 12px; font-weight: 800; color: #9AA1AD; padding-bottom: 2px; }
 .noti-row {
-  display: flex; gap: 11px; width: 100%; text-align: left; cursor: pointer;
+  display: flex; align-items: flex-start; gap: 11px; width: 100%; text-align: left; cursor: pointer;
   border: none; border-top: 1px solid #F5F6F8; padding: 15px 2px;
   background: #FFFFFF; transition: background 140ms;
 }

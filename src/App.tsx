@@ -142,15 +142,14 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
   // 데스크톱은 벨 드롭다운으로 알림을 읽고, 모바일은 전체 화면 내역으로 간다 —
   // 같은 벨이 무엇을 여는지가 갈리므로 렌더 중에 폭을 알아야 한다
   const desktop = useIsDesktop();
-  // 알림은 탭이 아니라 벨로 잠깐 들르는 화면이라 view와 따로 둔다(저장하지도 않는다).
-  // 내역 전체 화면은 <900px 전용이다 — 데스크톱에서는 드롭다운이 그 자리를 대신한다.
-  const [noti, setNoti] = useState(urlView === 'noti');
-  // 데스크톱 드롭다운 열림 — ?view=noti로 들어오면 연 채로 시작한다(설정 진입은 예외)
-  const [drop, setDrop] = useState(urlView === 'noti' && !cfg.initialNotiSettings);
+  // 알림 내역의 열림 여부는 폭과 무관하게 하나다 — 900px 경계를 오갈 때 데스크톱의
+  // 드롭다운이 모바일 전체 화면으로(또는 반대로) 이어져야지, 사라졌다가 다시 뜨면 안 된다.
+  // 설정은 내역이 아니므로 ?view=notiset에서는 닫힌 채로 시작한다.
+  const [notiOpen, setNotiOpen] = useState(urlView === 'noti' && !cfg.initialNotiSettings);
   // 알림 설정 — 폭과 무관하게 본문 전체를 쓰는 유일한 알림 화면
   const [notiSettings, setNotiSettings] = useState(cfg.initialNotiSettings);
   const bellRef = useRef<HTMLButtonElement>(null);
-  const closeDrop = useCallback(() => setDrop(false), []);
+  const closeNoti = useCallback(() => setNotiOpen(false), []);
   const [panelOpen, setPanelOpen] = useState(ui.panelOpen ?? false);
   const [selDay, setSelDay] = useState<string | null>(ui.selDay ?? null);
   const [modal, setModal] = useState<ModalState>(EMPTY_MODAL);
@@ -301,30 +300,33 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
 
   const pendingDel = delId ? entries.find((e) => e.id === delId) ?? null : null;
   // 본문을 알림이 차지하는 경우 — 설정, 그리고 좁은 화면의 내역
-  const notiScreen = notiSettings || (noti && !desktop);
+  const notiScreen = notiSettings || (notiOpen && !desktop);
 
   return (
     <div className="screen">
       <TopBar me={me} wit={wit} view={view}
-        onView={(v) => { setView(v); setNoti(false); setNotiSettings(false); setDrop(false); }}
+        onView={(v) => { setView(v); setNotiOpen(false); setNotiSettings(false); }}
         panelOpen={panelOpen} onTogglePanel={() => setPanelOpen((o) => !o)}
         sync={cfg.token ? snap.sync : null}
-        unread={snap.unreadNotifications} notiOn={desktop ? drop : noti}
-        // 설정을 보고 있었다면 벨은 본문을 보던 탭으로 되돌리고 내역을 연다
+        unread={snap.unreadNotifications} notiOn={notiOpen}
+        // 설정을 보고 있었다면 벨은 현재 폭에 맞는 내역을 바로 연다
         onBell={() => {
-          setNotiSettings(false);
-          if (desktop) setDrop((o) => !o);
-          else setNoti((n) => !n);
+          if (notiSettings) {
+            setNotiSettings(false);
+            setNotiOpen(true);
+          } else {
+            setNotiOpen((o) => !o);
+          }
         }}
         bellRef={bellRef} hasDropdown={desktop}
-        dropdown={desktop && drop ? (
+        dropdown={desktop && notiOpen ? (
           <NotiDropdown notifications={snap.notifications} unread={snap.unreadNotifications}
             bellRef={bellRef}
             onRead={(id) => store.markNotificationRead(id)}
             onReadAll={() => { store.markAllNotificationsRead(); showToast(wit.notiReadAll); }}
-            onOpenSettings={() => { setDrop(false); setNotiSettings(true); }}
-            onOpenFeed={() => { setDrop(false); setView('feed'); }}
-            onClose={closeDrop} />
+            onOpenSettings={() => { setNotiOpen(false); setNotiSettings(true); }}
+            onOpenFeed={() => { setNotiOpen(false); setView('feed'); }}
+            onClose={closeNoti} />
         ) : null}
         onCompose={openNew} composeRef={ctaRef} />
       {/* 패널 열은 접혀 있어도 마운트를 유지한다 — 열 폭만 300ms로 오가고 안쪽 래퍼는
@@ -346,13 +348,16 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
           {notiScreen ? (
             notiSettings ? (
               <NotiSettings token={cfg.token} meId={me.id} demo={cfg.demo}
-                // 뒤로 = 좁은 화면이면 내역, 데스크톱이면 보던 탭 (noti가 그대로 갈라 준다)
-                onBack={() => setNotiSettings(false)} />
+                // 뒤로 = 좁은 화면이면 내역, 데스크톱이면 보던 탭
+                onBack={() => {
+                  setNotiSettings(false);
+                  setNotiOpen(!desktop);
+                }} />
             ) : (
               <NotiPage notifications={snap.notifications}
                 onRead={(id) => store.markNotificationRead(id)}
                 onReadAll={() => store.markAllNotificationsRead()}
-                onOpenSettings={() => setNotiSettings(true)} />
+                onOpenSettings={() => { setNotiOpen(false); setNotiSettings(true); }} />
             )
           ) : view === 'feed' ? (
             <div className="feed-wrap">
