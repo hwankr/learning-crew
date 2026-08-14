@@ -72,7 +72,7 @@ export interface EntryPhoto {
   h: number; // 표시용(1600px) 이미지의 실제 높이
 }
 
-const ENTRY_PHOTO_LIMIT = 4;
+export const ENTRY_PHOTO_LIMIT = 4;
 const ENTRY_PHOTO_DIMENSION_MAX = 10_000;
 
 /** 사진 메타 정규화 — 유효한 UUID만, 첫 등장 순서로 중복 없이, 최대 4장.

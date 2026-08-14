@@ -15,6 +15,7 @@ import type { IDBPTransaction } from 'idb';
 import type {
   Comment,
   Entry,
+  EntryPhoto,
   MemberId,
   MemberStatus,
   Notification,
@@ -27,6 +28,8 @@ import type {
 } from '../../shared/types';
 import {
   MEMBER_IDS,
+  ENTRY_PHOTO_LIMIT,
+  canonicalUuid,
   entryTags,
   isOffTags,
   normalizeEmojis,
@@ -35,7 +38,23 @@ import {
   PUSH_LIMITS,
   UUID_RE,
 } from '../../shared/types';
-import { openCrewDB, reactionKey, type CrewDatabase, type CrewDB, type QueueMeta } from './idb';
+import {
+  openCrewDB,
+  photoCacheKey,
+  reactionKey,
+  type CrewDatabase,
+  type CrewDB,
+  type PhotoBlobRecord,
+  type PhotoKind,
+  type PhotoUploadState,
+  type QueueMeta,
+} from './idb';
+import { prepareUpload, type PreparedUpload } from '../lib/image';
+import {
+  PhotoUploadQueue,
+  type PhotoUploadItem,
+  type PhotoUploadStorage,
+} from './photoUpload';
 import {
   seedComments,
   seedEntries,
@@ -53,6 +72,8 @@ type StoreName =
   | 'reactionQueue'
   | 'notifications'
   | 'notifReadQueue'
+  | 'photoBlobs'
+  | 'photoCache'
   | 'meta';
 type CrewTx = IDBPTransaction<CrewDB, StoreName[], 'readwrite'>;
 
@@ -81,7 +102,23 @@ export interface StoreSnapshot {
   notifications: Notification[];
   /** 안 읽은 알림 수 — 벨 배지가 이 값 하나만 본다 */
   unreadNotifications: number;
+  /** 내 사진의 이 기기 전용 상태 — UI 배지는 photoId로 이 Map만 구독한다. */
+  photoUploads: Map<string, PhotoUploadInfo>;
   sync: SyncInfo;
+}
+
+export interface PhotoUploadInfo {
+  state: PhotoUploadState;
+  pct: number;
+}
+
+export class PhotoLimitError extends Error {
+  readonly code = 'PHOTO_LIMIT_REACHED';
+
+  constructor() {
+    super(`사진은 기록마다 최대 ${ENTRY_PHOTO_LIMIT}장까지 첨부할 수 있습니다.`);
+    this.name = 'PhotoLimitError';
+  }
 }
 
 // meta 스토어의 지금 상태 저장 키
@@ -360,7 +397,7 @@ function asMemberStatus(v: unknown): MemberStatus | null {
   return v !== null && typeof v === 'object' && 'on' in v ? (v as MemberStatus) : null;
 }
 
-export class CrewStore {
+export class CrewStore implements PhotoUploadStorage {
   private map = new Map<string, Entry>();
   private queue = new Map<string, QueueMeta>();
   private statuses = new Map<MemberId, MemberStatus>();
@@ -375,6 +412,17 @@ export class CrewStore {
   // 값은 읽은 시점에 관측한 그 행의 updatedAt(세대 판별값)이다
   private notifications = new Map<string, Notification>();
   private notifReadQueue = new Map<string, string>();
+  // 내가 고른 사진은 상태와 함께 메모리에 미러링한다 — IDB 실패 시 이 Map이 세션 폴백이다.
+  private photoBlobs = new Map<string, PhotoBlobRecord>();
+  // 내려받은 캐시는 보통 IDB에서 필요할 때 읽고, 실패/메모리 전용 경로는 여기서 이어 쓴다.
+  private photoCache = new Map<string, Blob>();
+  private photoUploader: PhotoUploadQueue | null = null;
+  // 여러 파일을 동시에 디코드해도 네 장 경계를 함께 통과하지 못하게 준비 중 자리도 센다.
+  private photoReservations = new Map<string, number>();
+  // 열려 있는 초안의 참조는 원격 Entry 채택과 수명이 다르다. 동기화가 Entry를
+  // 지워도 시트가 살리기를 결정할 때까지 blob을 보호하고, pin이 풀리면 미뤄 둔 정리를 끝낸다.
+  private activeDraftPhotoIds = new Set<string>();
+  private deferredPhotoCleanup = new Set<string>();
   private me: MemberId = 'sh';
   private demo = false;
   private listeners = new Set<() => void>();
@@ -387,6 +435,7 @@ export class CrewStore {
     reactions: new Map(),
     notifications: [],
     unreadNotifications: 0,
+    photoUploads: new Map(),
     sync: { phase: 'ok', pending: 0 },
   };
   private db: CrewDatabase | null = null;
@@ -403,7 +452,7 @@ export class CrewStore {
   /** SyncClient가 등록 — 로컬 쓰기 직후 push를 예약한다. */
   onLocalWrite: (() => void) | null = null;
 
-  async init(opts: { demo: boolean; memberId: MemberId }): Promise<void> {
+  async init(opts: { demo: boolean; memberId: MemberId; token?: string | null }): Promise<void> {
     this.me = opts.memberId;
     this.demo = opts.demo;
     // IndexedDB가 막힌 환경(사생활 모드, 손상된 프로필)에서도 첫 렌더는 무조건 되어야 한다.
@@ -428,9 +477,25 @@ export class CrewStore {
         'reactionQueue',
         'notifications',
         'notifReadQueue',
+        'photoBlobs',
         'meta',
       ]);
-      const [rows, qkeys, qvals, cRows, cQueue, rRows, rQueue, nRows, nQKeys, nQVals, st, dirty] =
+      const [
+        rows,
+        qkeys,
+        qvals,
+        cRows,
+        cQueue,
+        rRows,
+        rQueue,
+        nRows,
+        nQKeys,
+        nQVals,
+        photoKeys,
+        photoRows,
+        st,
+        dirty,
+      ] =
         await Promise.all([
           tx.objectStore('entries').getAll(),
           tx.objectStore('queue').getAllKeys(),
@@ -442,6 +507,8 @@ export class CrewStore {
           tx.objectStore('notifications').getAll(),
           tx.objectStore('notifReadQueue').getAllKeys(),
           tx.objectStore('notifReadQueue').getAll(),
+          tx.objectStore('photoBlobs').getAllKeys(),
+          tx.objectStore('photoBlobs').getAll(),
           tx.objectStore('meta').get(MY_STATUS_KEY),
           tx.objectStore('meta').get(STATUS_DIRTY_KEY),
         ]);
@@ -468,6 +535,12 @@ export class CrewStore {
           this.notifReadQueue.set(key.slice(myPrefix.length), String(nQVals[i]));
         }
       });
+      if (!opts.demo) {
+        photoKeys.forEach((k, i) => {
+          const row = photoRows[i];
+          if (row) this.photoBlobs.set(String(k), row);
+        });
+      }
       if (expired.length && !opts.demo) {
         this.txWrite(['notifications', 'notifReadQueue'], (tx2) => {
           for (const id of expired) {
@@ -497,6 +570,14 @@ export class CrewStore {
       this.bc = new BroadcastChannel('lc-sync');
       // 다른 탭이 IDB를 갱신했다 — 짧게 모아서 다시 읽는다
       this.bc.onmessage = () => this.scheduleRefresh();
+    }
+    // Node 기반 순수 로직 테스트에는 window가 없다. 브라우저에서는 init 직후 미완료 큐를 재개한다.
+    if (typeof window !== 'undefined') {
+      this.photoUploader = new PhotoUploadQueue(this, {
+        token: opts.token ?? null,
+        demo: opts.demo,
+      });
+      this.photoUploader.start();
     }
     this.bump();
   }
@@ -531,12 +612,328 @@ export class CrewStore {
     return out;
   }
 
+  /* ---------- 사진 바이너리 (UI/업로드 큐/표시 훅의 공용 경계) ---------- */
+
+  /** 파일 선택 경로 — 디코드·리사이즈가 성공한 뒤에만 photoBlobs에 행을 만든다.
+      수정 시트는 currentPhotos를 넘겨 "4장에서 한 장 빼고 교체"도 현재 시트 기준으로 센다. */
+  async addPhoto(
+    entryId: string,
+    file: File,
+    currentPhotos?: readonly EntryPhoto[],
+  ): Promise<EntryPhoto> {
+    this.reservePhotoSlot(entryId, currentPhotos);
+    try {
+      return this.storePreparedPhoto(entryId, await prepareUpload(file), crypto.randomUUID());
+    } finally {
+      const left = (this.photoReservations.get(entryId) ?? 1) - 1;
+      if (left > 0) this.photoReservations.set(entryId, left);
+      else this.photoReservations.delete(entryId);
+    }
+  }
+
+  /** 리사이즈 결과 저장. prepareUpload을 직접 묶는 UI도 currentPhotos를 마지막 인자로 넘긴다. */
+  addPreparedPhoto(
+    entryId: string,
+    prepared: PreparedUpload,
+    photoId: string = crypto.randomUUID(),
+    currentPhotos?: readonly EntryPhoto[],
+  ): EntryPhoto {
+    if (this.photoCount(entryId, currentPhotos) >= ENTRY_PHOTO_LIMIT) throw new PhotoLimitError();
+    return this.storePreparedPhoto(entryId, prepared, photoId);
+  }
+
+  private storePreparedPhoto(
+    entryId: string,
+    prepared: PreparedUpload,
+    photoId: string,
+  ): EntryPhoto {
+    if (!UUID_RE.test(photoId)) throw new RangeError('photo id must be a UUID');
+    const id = canonicalUuid(photoId);
+    if (this.photoBlobs.has(id)) throw new Error(`duplicate photo id: ${id}`);
+    const state: PhotoUploadState = this.demo ? 'done' : 'wait';
+    const row: PhotoBlobRecord = {
+      full: prepared.full,
+      thumb: prepared.thumb,
+      state,
+      pct: state === 'done' ? 100 : 0,
+      entryId,
+      addedAt: Date.now(),
+    };
+    this.photoBlobs.set(id, row);
+    if (!this.demo) {
+      this.txWrite(['photoBlobs'], (tx) => {
+        void tx.objectStore('photoBlobs').put(row, id);
+      });
+    }
+    this.bump();
+    return { id, w: prepared.w, h: prepared.h };
+  }
+
+  private photoCount(entryId: string, currentPhotos?: readonly EntryPhoto[]): number {
+    const ids = new Set(
+      currentPhotos ?? this.map.get(entryId)?.photos ?? [],
+    );
+    const photoIds = new Set([...ids].map((photo) => photo.id));
+    for (const [id, row] of this.photoBlobs) {
+      if (row.entryId === entryId) photoIds.add(id);
+    }
+    return photoIds.size;
+  }
+
+  private reservePhotoSlot(entryId: string, currentPhotos?: readonly EntryPhoto[]): void {
+    const reserved = this.photoReservations.get(entryId) ?? 0;
+    if (this.photoCount(entryId, currentPhotos) + reserved >= ENTRY_PHOTO_LIMIT) {
+      throw new PhotoLimitError();
+    }
+    this.photoReservations.set(entryId, reserved + 1);
+  }
+
+  private photoIsAttached(photoId: string, row: PhotoBlobRecord): boolean {
+    const entry = this.map.get(row.entryId);
+    return (
+      !!entry &&
+      entry.m === this.me &&
+      !entry.deletedAt &&
+      entry.photos.some((photo) => photo.id === photoId)
+    );
+  }
+
+  /** 상태 배지도 현재 토큰 주인의 사진만 본다. Entry가 아직 없는 신규 초안은
+      현재 탭에서 만든 행이므로 보이되, 다른 멤버 Entry에 묶인 행은 멤버 전환 뒤 숨긴다. */
+  private photoStatusBelongsToMe(row: PhotoBlobRecord): boolean {
+    const entry = this.map.get(row.entryId);
+    return !entry || entry.m === this.me;
+  }
+
+  /** App이 활성 초안의 참조 목록을 교체하는 경계. 중간에 빈 목록을 거치지 않게
+      전체 목록을 한 번에 받아야, 사진 추가/제거 렌더 사이에 보호 blob이 사라지지 않는다. */
+  setActiveDraftPhotoIds(photoIds: readonly string[]): void {
+    const next = new Set(photoIds);
+    this.activeDraftPhotoIds = next;
+    let changed = false;
+    for (const id of [...this.deferredPhotoCleanup]) {
+      if (next.has(id)) continue;
+      this.deferredPhotoCleanup.delete(id);
+      changed = this.dropPhotoBlob(id) || changed;
+    }
+    if (changed) this.bump();
+  }
+
+  /** 시트에서 한 장을 빼는 경로. 아직 업로드 중이면 XHR부터 끊고 로컬 바이너리를 지운다. */
+  removeDraftPhoto(photoId: string): void {
+    if (this.dropPhotoBlob(photoId)) this.bump();
+  }
+
+  /** 기록 삭제/초안 폐기 때 entryId로 묶인 바이너리를 전부 정리한다. */
+  removePhotosForEntry(entryId: string): void {
+    let changed = false;
+    for (const [id, row] of [...this.photoBlobs]) {
+      if (row.entryId === entryId) changed = this.dropPhotoBlob(id) || changed;
+    }
+    if (changed) this.bump();
+  }
+
+  retryPhoto(photoId: string): boolean {
+    const row = this.photoBlobs.get(photoId);
+    if (!row || !this.photoIsAttached(photoId, row)) return false;
+    return this.photoUploader?.retryPhoto(photoId) ?? false;
+  }
+
+  getPhotoUploadStatus(photoId: string): PhotoUploadInfo | null {
+    const row = this.photoBlobs.get(photoId);
+    return row && this.photoStatusBelongsToMe(row) ? { state: row.state, pct: row.pct } : null;
+  }
+
+  /** PhotoUploadStorage 구현 — 큐는 Map이나 IDB를 직접 만지지 않는다. */
+  listPhotoUploads(): PhotoUploadItem[] {
+    // 시트에서 고르기만 한 사진은 아직 R2로 보내지 않는다. Entry.photos에 실려 저장된
+    // 순간부터 큐 대상이다 — 취소한 초안이 서버에 orphan을 남기지 않게 하는 경계다.
+    return [...this.photoBlobs]
+      .filter(([id, row]) => this.photoIsAttached(id, row))
+      .sort((a, b) => a[1].addedAt - b[1].addedAt || cmp(a[0], b[0]))
+      .map(([id, row]) => ({ id, ...row }));
+  }
+
+  getPhotoUpload(photoId: string): PhotoBlobRecord | undefined {
+    return this.photoBlobs.get(photoId);
+  }
+
+  setPhotoUploadState(photoId: string, state: PhotoUploadState, pct: number): void {
+    const cur = this.photoBlobs.get(photoId);
+    if (!cur) return;
+    const nextPct = Math.max(0, Math.min(100, Math.round(pct)));
+    if (cur.state === state && cur.pct === nextPct) return;
+    const next = { ...cur, state, pct: nextPct };
+    this.photoBlobs.set(photoId, next);
+    // 진행률은 같은 탭 스냅샷에는 즉시 반영하되 매 1%마다 다른 탭 전체를 깨우지는 않는다.
+    if (!this.demo) {
+      this.txWrite(['photoBlobs'], (tx) => {
+        void tx.objectStore('photoBlobs').put(next, photoId);
+      }, cur.state !== state);
+    }
+    this.bump();
+  }
+
+  /** usePhotoUrl 우선순위 1: 내가 올린 사진. done 전에도 로컬 미리보기가 가능하다. */
+  getLocalPhotoBlob(photoId: string, kind: PhotoKind): Blob | null {
+    return this.photoBlobs.get(photoId)?.[kind] ?? null;
+  }
+
+  /** 수정하던 Entry가 원격에서 사라진 뒤 "새 기록으로 살리기" 전용.
+      기존 photoId는 삭제된 Entry의 R2 소유권에 묶였으므로 재사용하지 않고, 로컬 JPEG가
+      둘 다 남은 사진만 새 UUID와 업로드 상태로 복제한다. blob이 없으면 404 메타를
+      만들지 않고 결과에서 뺀다. */
+  cloneDraftPhotosForEntry(photos: readonly EntryPhoto[], entryId: string): EntryPhoto[] {
+    const out: EntryPhoto[] = [];
+    const seen = new Set<string>();
+    for (const photo of photos) {
+      if (seen.has(photo.id) || out.length >= ENTRY_PHOTO_LIMIT) continue;
+      seen.add(photo.id);
+      const row = this.photoBlobs.get(photo.id);
+      if (!row) continue;
+      out.push(
+        this.storePreparedPhoto(
+          entryId,
+          { full: row.full, thumb: row.thumb, w: photo.w, h: photo.h },
+          crypto.randomUUID(),
+        ),
+      );
+    }
+    return out;
+  }
+
+  /** usePhotoUrl 우선순위 2: 내려받은 크루 사진 캐시. IDB 실패 시 Map이 세션 캐시다. */
+  async getCachedPhotoBlob(photoId: string, kind: PhotoKind): Promise<Blob | null> {
+    const key = photoCacheKey(photoId, kind);
+    const memory = this.photoCache.get(key);
+    if (memory) return memory;
+    if (this.demo) return null;
+    const db = this.db;
+    if (!db) return null;
+    try {
+      const blob = await db.get('photoCache', key);
+      if (blob) this.photoCache.set(key, blob);
+      return blob ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  async cachePhotoBlob(photoId: string, kind: PhotoKind, blob: Blob): Promise<void> {
+    const key = photoCacheKey(photoId, kind);
+    this.photoCache.set(key, blob);
+    if (this.demo) return;
+    const db = this.db;
+    if (!db) return;
+    try {
+      await db.put('photoCache', blob, key);
+    } catch {
+      // 용량 초과·닫힌 DB면 세션 Map만으로 계속 표시한다.
+    }
+  }
+
+  /** 앱/테스트가 명시적으로 수명을 끝낼 때 online/offline 리스너와 XHR을 정리한다. */
+  stopPhotoUploads(): void {
+    this.photoUploader?.stop();
+  }
+
+  private dropPhotoBlob(photoId: string): boolean {
+    if (!this.photoBlobs.has(photoId)) return false;
+    this.photoUploader?.cancel(photoId);
+    this.photoBlobs.delete(photoId);
+    this.activeDraftPhotoIds.delete(photoId);
+    this.deferredPhotoCleanup.delete(photoId);
+    if (!this.demo) {
+      this.txWrite(['photoBlobs'], (tx) => {
+        void tx.objectStore('photoBlobs').delete(photoId);
+      });
+    }
+    return true;
+  }
+
+  /** 새 기록으로 살리는 경로처럼 draft의 임시 entryId가 바뀌어도 삭제 수명은 최종 기록을 따른다. */
+  private associatePhoto(photoId: string, entryId: string): void {
+    const cur = this.photoBlobs.get(photoId);
+    if (!cur || cur.entryId === entryId) return;
+    const next = { ...cur, entryId };
+    this.photoBlobs.set(photoId, next);
+    if (!this.demo) {
+      this.txWrite(['photoBlobs'], (tx) => {
+        void tx.objectStore('photoBlobs').put(next, photoId);
+      });
+    }
+  }
+
+  private cleanupPhotoBlob(photoId: string, protectDraft: boolean): boolean {
+    if (!this.photoBlobs.has(photoId)) return false;
+    if (protectDraft && this.activeDraftPhotoIds.has(photoId)) {
+      this.deferredPhotoCleanup.add(photoId);
+      return false;
+    }
+    return this.dropPhotoBlob(photoId);
+  }
+
+  /** Entry 참조가 바뀌는 모든 채택 경로의 blob 수명 규칙.
+      - 살아 있는 next가 참조하는 사진은 그 Entry에 연결한다.
+      - previous에서 빠진 참조(삭제는 해당 entryId의 모든 행)는 정리한다.
+      - 원격/CAS/다른 탭 채택은 활성 초안 pin을 보호하고, 로컬 저장은 사용자가
+        확정한 photos가 최종 참조이므로 pin과 무관하게 정리한다. */
+  private reconcileEntryPhotoReferences(
+    previous: Entry | undefined,
+    next: Entry | null,
+    entryId: string,
+    protectDraft: boolean,
+  ): boolean {
+    const kept = new Set(
+      next && !next.deletedAt ? next.photos.map((photo) => photo.id) : [],
+    );
+    for (const id of kept) {
+      this.deferredPhotoCleanup.delete(id);
+      this.associatePhoto(id, entryId);
+    }
+
+    const removed = new Set<string>();
+    for (const photo of previous?.photos ?? []) {
+      if (!kept.has(photo.id)) removed.add(photo.id);
+    }
+    if (!next || next.deletedAt) {
+      for (const [id, row] of this.photoBlobs) {
+        if (row.entryId === entryId) removed.add(id);
+      }
+      for (const photo of next?.photos ?? []) removed.add(photo.id);
+    }
+
+    let changed = false;
+    for (const id of removed) {
+      if (!kept.has(id)) changed = this.cleanupPhotoBlob(id, protectDraft) || changed;
+    }
+    return changed;
+  }
+
+  /** 서버·CAS·다른 탭의 Entry를 확정으로 채택한다. blob 정리는 반드시 위의
+      참조 기반 규칙을 거쳐, 새 채택 지점이 수명 처리를 빼먹지 않게 한다. */
+  private adoptEntry(next: Entry, retainTombstone = false): boolean {
+    const previous = this.map.get(next.id);
+    const photoChanged = this.reconcileEntryPhotoReferences(previous, next, next.id, true);
+    if (next.deletedAt && !retainTombstone) return this.map.delete(next.id) || photoChanged;
+    this.map.set(next.id, next);
+    return true;
+  }
+
+  /** 다른 탭이 tombstone ACK까지 끝내 IDB 행 자체가 사라진 경우의 채택. */
+  private adoptMissingEntry(id: string): boolean {
+    const previous = this.map.get(id);
+    const photoChanged = this.reconcileEntryPhotoReferences(previous, null, id, true);
+    return this.map.delete(id) || photoChanged;
+  }
+
   /* ---------- 쓰기 (UI 경로 — 항상 즉시 반영) ---------- */
   upsert(raw: Entry): void {
     // UI/레거시 이관을 포함한 모든 로컬 쓰기의 마지막 경계. 호출자가 실수로 tag를 직접
     // 대입하거나 tags 순서를 뒤섞어도 IDB와 push 큐에는 정규형만 들어가게 한다.
     const entry = normalizeEntry(raw);
     const prev = this.map.get(entry.id);
+    this.reconcileEntryPhotoReferences(prev, entry, entry.id, false);
     this.map.set(entry.id, entry);
     if (UUID_RE.test(entry.id)) {
       const q = this.queue.get(entry.id);
@@ -549,6 +946,10 @@ export class CrewStore {
       this.onLocalWrite?.();
     }
     this.bump();
+    // Entry push와 바이너리 PUT은 서로 기다리지 않지만, 둘 다 사용자의 저장 동작 뒤 시작한다.
+    if (!entry.deletedAt && entry.m === this.me) {
+      for (const photo of entry.photos) this.photoUploader?.queuePhoto(photo.id);
+    }
   }
 
   /** 지금 상태 토글 — 켜면 since가 지금으로 시작한다(장소 변경도 새로 시작). */
@@ -579,6 +980,7 @@ export class CrewStore {
     const cur = this.map.get(id);
     if (!cur) return;
     if (!UUID_RE.test(id)) {
+      this.removePhotosForEntry(id);
       this.map.delete(id); // 데모 시드는 그냥 지운다
       this.bump();
       return;
@@ -687,13 +1089,11 @@ export class CrewStore {
       // 커서 안전 윈도우의 중복 전달 — 조용히 무시. updatedAt까지 봐야 비정상적으로
       // 로컬만 바뀐(v 동일) 행이 서버 내용으로 복구될 수 있다
       if (cur && cur.v === row.v && cur.updatedAt === row.updatedAt) continue;
+      if (this.adoptEntry(row)) changed = true;
       if (row.deletedAt) {
-        if (this.map.delete(row.id)) changed = true;
         dels.push(row.id);
       } else {
-        this.map.set(row.id, row);
         puts.push(row);
-        changed = true;
       }
     }
     let myStatus: MemberStatus | null = null;
@@ -1064,7 +1464,7 @@ export class CrewStore {
       this.queue.set(id, meta);
       if (cur) {
         const next = { ...cur, v: server.v };
-        this.map.set(id, next);
+        this.adoptEntry(next, true);
         this.persistEntry(next, meta);
       } else {
         // 행이 없어도 큐 meta는 영속화 — 메모리와 IDB의 base가 어긋나면 안 된다
@@ -1113,8 +1513,7 @@ export class CrewStore {
   private settle(id: string, server: Entry): void {
     this.queue.delete(id);
     const tombstone = !!server.deletedAt;
-    if (tombstone) this.map.delete(id);
-    else this.map.set(id, server);
+    this.adoptEntry(server);
     this.txWrite(['entries', 'queue'], (tx) => {
       if (tombstone) void tx.objectStore('entries').delete(id);
       else void tx.objectStore('entries').put(server);
@@ -1126,7 +1525,7 @@ export class CrewStore {
   /** 재전송 대기 — 서버 행을 새 base로 삼아 rev를 올리고 다시 큐에 넣는다. */
   private requeue(id: string, next: Entry, base: Entry): void {
     const meta: QueueMeta = { rev: (this.queue.get(id)?.rev ?? 0) + 1, base };
-    this.map.set(id, next);
+    this.adoptEntry(next, true);
     this.queue.set(id, meta);
     this.persistEntry(next, meta);
     this.bump();
@@ -1277,6 +1676,7 @@ export class CrewStore {
         'reactionQueue',
         'notifications',
         'notifReadQueue',
+        'photoBlobs',
         'meta',
       ]);
       const [
@@ -1290,6 +1690,8 @@ export class CrewStore {
         dbNotifs,
         dbNQKeys,
         dbNQVals,
+        dbPhotoKeys,
+        dbPhotoRows,
         dbSt,
         dbDirty,
       ] = await Promise.all([
@@ -1303,6 +1705,8 @@ export class CrewStore {
         tx.objectStore('notifications').getAll(),
         tx.objectStore('notifReadQueue').getAllKeys(),
         tx.objectStore('notifReadQueue').getAll(),
+        tx.objectStore('photoBlobs').getAllKeys(),
+        tx.objectStore('photoBlobs').getAll(),
         tx.objectStore('meta').get(MY_STATUS_KEY),
         tx.objectStore('meta').get(STATUS_DIRTY_KEY),
       ]);
@@ -1313,6 +1717,27 @@ export class CrewStore {
         return;
       }
       let changed = false;
+
+      // 사진 행을 Entry보다 먼저 채택한다. 같은 IDB 스냅샷에 이전 photoBlobs 행이
+      // 남아 있어도, 아래 Entry 참조 정리가 나중에 실행돼 삭제된 사진을 다시 살리지 않는다.
+      const adoptedPhotos: string[] = [];
+      dbPhotoKeys.forEach((key, i) => {
+        const id = String(key);
+        const row = dbPhotoRows[i];
+        if (!row) return;
+        const cur = this.photoBlobs.get(id);
+        if (
+          !cur ||
+          cur.state !== row.state ||
+          cur.pct !== row.pct ||
+          cur.entryId !== row.entryId ||
+          cur.addedAt !== row.addedAt
+        ) {
+          this.photoBlobs.set(id, row);
+          if (!cur) adoptedPhotos.push(id);
+          changed = true;
+        }
+      });
 
       // 큐 병합 — 다른 탭의 로컬 쓰기(내게 없거나 rev가 높음)를 채택.
       // 내 메모리에만 있는 큐 항목은 유지한다: 아직 지속 전이거나, 다른 탭이 ack한
@@ -1339,15 +1764,14 @@ export class CrewStore {
         const norm = normalizeEntry(e);
         const cur = this.map.get(e.id);
         if (!cur || cur.v !== norm.v || cur.updatedAt !== norm.updatedAt || !sameLiveness(cur, norm)) {
-          this.map.set(e.id, norm);
+          this.adoptEntry(norm, true);
           changed = true;
         }
       }
       // IDB에서 사라진 행(다른 탭이 tombstone을 ack) — 내 큐에 없으면 메모리에서도 제거
       for (const id of [...this.map.keys()]) {
         if (!dbIds.has(id) && !this.queue.has(id) && UUID_RE.test(id)) {
-          this.map.delete(id);
-          changed = true;
+          changed = this.adoptMissingEntry(id) || changed;
         }
       }
 
@@ -1470,6 +1894,16 @@ export class CrewStore {
 
       if (changed) this.bump();
       if (tookDirty) this.onLocalWrite?.();
+      for (const id of adoptedPhotos) {
+        const row = this.photoBlobs.get(id);
+        if (
+          row &&
+          this.photoIsAttached(id, row) &&
+          (row.state === 'wait' || row.state === 'up')
+        ) {
+          this.photoUploader?.queuePhoto(id);
+        }
+      }
     } catch {
       // 읽기 실패 — 다음 신호/가시화 때 다시 시도된다
     } finally {
@@ -1532,6 +1966,11 @@ export class CrewStore {
       reactions: groupReactions(this.reactions.values()),
       notifications,
       unreadNotifications: notifications.filter((n) => n.readAt === null).length,
+      photoUploads: new Map(
+        [...this.photoBlobs]
+          .filter(([, row]) => this.photoStatusBelongsToMe(row))
+          .map(([id, row]) => [id, { state: row.state, pct: row.pct }]),
+      ),
       sync: {
         phase: this.syncPhase,
         pending:

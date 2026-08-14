@@ -35,12 +35,12 @@ describe('saveGate (한 장짜리 시트의 저장 문턱)', () => {
   it('막힌 이유는 태그 → 별점 → 내용 순으로 하나씩만 알린다', () => {
     expect(saveGate(m({})).blocked).toBe('무엇을 했는지 골라주세요');
     expect(saveGate(m({ tags: ['영어'] })).blocked).toBe('만족도를 골라주세요');
-    expect(saveGate(m({ tags: ['영어'], stars: 3 })).blocked).toBe('기록을 한 줄 적어주세요');
+    expect(saveGate(m({ tags: ['영어'], stars: 3 })).blocked).toBe('기록을 한 줄 적거나 사진을 넣어주세요');
     expect(saveGate(m({ tags: ['영어'], stars: 3, body: '한 줄' })).blocked).toBe('');
   });
 
   it('쉬는 날은 별점을 묻지 않는다 — 내용만 있으면 저장된다', () => {
-    expect(saveGate(m({ tags: ['OFF'] })).blocked).toBe('기록을 한 줄 적어주세요');
+    expect(saveGate(m({ tags: ['OFF'] })).blocked).toBe('기록을 한 줄 적거나 사진을 넣어주세요');
     expect(saveGate(m({ tags: ['OFF'], body: '재충전' })).canSave).toBe(true);
   });
 
@@ -53,5 +53,13 @@ describe('saveGate (한 장짜리 시트의 저장 문턱)', () => {
   it('할 일만 적어도 내용으로 친다 (공백뿐인 줄은 빼고)', () => {
     expect(saveGate(m({ tags: ['기타'], stars: 2, todos: [{ t: '  ', done: false }] })).hasContent).toBe(false);
     expect(saveGate(m({ tags: ['기타'], stars: 2, todos: [{ t: '기출 1회', done: false }] })).canSave).toBe(true);
+  });
+
+  it('본문이 없어도 사진이 있으면 새 기록을 저장할 수 있다', () => {
+    expect(saveGate(m({
+      tags: ['영어'],
+      stars: 3,
+      photos: [{ id: '22222222-2222-4222-8222-222222222222', w: 1600, h: 900 }],
+    })).canSave).toBe(true);
   });
 });

@@ -1,5 +1,5 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type RefObject } from 'react';
-import type { Tag, Todo } from '../../shared/types';
+import type { EntryPhoto, Tag, Todo } from '../../shared/types';
 import { PUSH_LIMITS, TAGS, isOffTags, normalizeTags } from '../../shared/types';
 import { TAGMETA, W, dayKey, pad2, type CopySet } from '../lib/constants';
 import { useFocusTrap } from '../lib/useFocusTrap';
@@ -7,17 +7,20 @@ import { CheckMark, Icon, PLUS_D, STAR_D, X_D } from './icons';
 
 export interface ModalState {
   open: boolean;
+  /** 신규도 시트를 여는 순간 UUID를 갖는다 — 선택한 blob의 entryId와 최종 Entry id가 같다. */
+  entryId: string;
   editingId: string | null;
   /** 고른 공부 종류 — 다중 선택. 항상 normalizeTags를 지난 값(TAGS 순서, 'OFF'면 단독). */
   tags: Tag[];
   stars: number;
   body: string;
   todos: Todo[];
+  photos: EntryPhoto[];
   day: string; // YYYY-MM-DD — 새 기록도 지난 날짜를 고를 수 있다
 }
 
 export const EMPTY_MODAL: ModalState = {
-  open: false, editingId: null, tags: [], stars: 0, body: '', todos: [], day: '',
+  open: false, entryId: '', editingId: null, tags: [], stars: 0, body: '', todos: [], photos: [], day: '',
 };
 
 /** 태그 칩 토글 결과 — 'OFF'(쉬는 날)는 배타적이다.
@@ -31,20 +34,20 @@ export function toggledTags(cur: readonly Tag[], t: Tag): Tag[] {
 
 /** 저장 문턱과 막힌 이유 — 두 단계로 나뉘어 있던 검사("다음"의 내용 검사, 저장의 태그·별점
     검사)가 시트가 한 장이 되면서 저장 버튼 하나로 모였다. 뜻은 그대로다:
-    태그 하나 이상 + (쉬는 날이거나 별점 하나 이상), 그리고 새 기록은 내용이 있어야 한다
+    태그 하나 이상 + (쉬는 날이거나 별점 하나 이상), 그리고 새 기록은 글/할 일/사진이 있어야 한다
     (수정은 예외 — 내용을 지우는 것도 수정이다).
     이유는 채울 순서대로 하나만 돌려준다 — 한 번에 다 늘어놓으면 무엇부터 손대야 할지 흐려진다. */
-export function saveGate(m: Pick<ModalState, 'editingId' | 'tags' | 'stars' | 'body' | 'todos'>): {
+export function saveGate(m: Pick<ModalState, 'editingId' | 'tags' | 'stars' | 'body' | 'todos' | 'photos'>): {
   canSave: boolean;
   hasContent: boolean;
   blocked: string;
 } {
   const ready = m.tags.length > 0 && (isOffTags(m.tags) || m.stars > 0);
-  const hasContent = !!m.body.trim() || m.todos.some((t) => t.t.trim());
+  const hasContent = !!m.body.trim() || m.todos.some((t) => t.t.trim()) || m.photos.length > 0;
   const canSave = ready && (hasContent || !!m.editingId);
   const blocked = !m.tags.length ? '무엇을 했는지 골라주세요'
     : !ready ? '만족도를 골라주세요'
-      : !canSave ? '기록을 한 줄 적어주세요' : '';
+      : !canSave ? '기록을 한 줄 적거나 사진을 넣어주세요' : '';
   return { canSave, hasContent, blocked };
 }
 

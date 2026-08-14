@@ -5,6 +5,7 @@ import { loadConfig } from './lib/config';
 import { CrewStore } from './local/store';
 import { SyncClient } from './local/sync';
 import { registerSW } from './lib/push';
+import { configurePhotoProvider } from './lib/usePhoto';
 import './styles.css';
 
 async function boot(): Promise<void> {
@@ -15,7 +16,8 @@ async function boot(): Promise<void> {
     return;
   }
   const store = new CrewStore();
-  await store.init({ demo: cfg.demo, memberId: cfg.memberId });
+  await store.init({ demo: cfg.demo, memberId: cfg.memberId, token: cfg.token });
+  configurePhotoProvider(store, { token: cfg.token, demo: cfg.demo });
   if (cfg.token) {
     new SyncClient(store, cfg.token, cfg.memberId).start();
   }

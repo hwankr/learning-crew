@@ -18,6 +18,23 @@ export interface QueueMeta {
   base: Entry | null;
 }
 
+export type PhotoUploadState = 'wait' | 'up' | 'fail' | 'done';
+
+/** 내가 고른 사진의 두 JPEG와 이 기기에서만 보이는 업로드 상태. key는 photoId다. */
+export interface PhotoBlobRecord {
+  full: Blob;
+  thumb: Blob;
+  state: PhotoUploadState;
+  pct: number;
+  entryId: string;
+  addedAt: number;
+}
+
+export type PhotoKind = 'full' | 'thumb';
+
+/** 내려받은 사진 키 — IDB 스키마와 usePhoto가 같은 문자열을 쓰게 한곳에 둔다. */
+export const photoCacheKey = (photoId: string, kind: PhotoKind): string => `${photoId}:${kind}`;
+
 export interface CrewDB extends DBSchema {
   entries: { key: string; value: Entry };
   queue: { key: string; value: QueueMeta };
@@ -37,6 +54,10 @@ export interface CrewDB extends DBSchema {
       B의 토큰으로 보내 "정산된 척" 지워 버리면 A의 읽음 의도가 유실된다.
       값은 읽은 시점에 관측한 그 행의 updatedAt — 서버·다른 탭과의 세대 판별값이다. */
   notifReadQueue: { key: string; value: string };
+  /** key = photoId — 원본 대신 리사이즈된 JPEG 두 장만 보관한다. */
+  photoBlobs: { key: string; value: PhotoBlobRecord };
+  /** key = `${photoId}:${kind}` — 인증 fetch로 받은 다른 멤버 사진의 로컬 캐시. */
+  photoCache: { key: string; value: Blob };
   meta: { key: string; value: PullCursor | ReactionCursor | boolean | MemberStatus };
 }
 
@@ -47,7 +68,7 @@ export type CrewDatabase = IDBPDatabase<CrewDB>;
 
 export function openCrewDB(): Promise<CrewDatabase> {
   let handle: CrewDatabase | null = null;
-  const opened = openDB<CrewDB>('learning-crew', 4, {
+  const opened = openDB<CrewDB>('learning-crew', 5, {
     async upgrade(db, oldVersion, _newVersion, tx) {
       if (oldVersion < 1) {
         db.createObjectStore('entries', { keyPath: 'id' });
@@ -77,6 +98,12 @@ export function openCrewDB(): Promise<CrewDatabase> {
         // (알림 행 자체는 서버만 만든다 — 클라이언트가 만드는 알림은 없다).
         db.createObjectStore('notifications', { keyPath: 'id' });
         db.createObjectStore('notifReadQueue');
+      }
+      if (oldVersion < 5) {
+        // 바이너리는 Entry CAS 큐와 수명이 다르다. 업로드할 내 파일과 내려받은 캐시를
+        // 분리해야 캐시 정리가 미완료 업로드를 지우거나, 그 반대가 되지 않는다.
+        db.createObjectStore('photoBlobs');
+        db.createObjectStore('photoCache');
       }
     },
     // 다른 탭이 더 높은 버전으로 업그레이드하려 할 때 이 연결이 막고 있으면 양보한다 —

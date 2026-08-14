@@ -1,7 +1,16 @@
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import type { Entry, ReactionEmoji, Tag, Todo } from '../shared/types';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react';
+import type { Entry, EntryPhoto, ReactionEmoji, Tag, Todo } from '../shared/types';
 import {
   PUSH_LIMITS,
+  UUID_RE,
+  canonicalUuid,
   entryTags,
   isOffTags,
   normalizePhotos,
@@ -34,10 +43,13 @@ import { Toast } from './components/Toast';
    판정한다 — updatedAt은 동기화 정산이 내용 변화 없이도 재작성하므로 기준이 될 수 없고,
    시계 비교는 기기 오차·브라우저별 파싱 차이에 흔들린다. */
 interface Draft {
+  /** 새 기록도 파일 선택 전에 id를 만든다 — photoBlobs.entryId와 저장될 Entry id가 같다. */
+  entryId: string;
   tags: Tag[];
   stars: number;
   body: string;
   todos: Todo[];
+  photos: EntryPhoto[];
   day: string;
   /** 수정 초안: 초안 시작 시점의 기록 스냅샷 — 내용이 그대로일 때만 복원. 신규는 null. */
   base: Entry | null;
@@ -47,8 +59,8 @@ interface Draft {
 const DRAFT_PREFIX = 'lc-draft:';
 const DRAFT_TTL_MS = 14 * 86_400_000;
 
-function draftHasContent(d: { body: string; todos: Todo[] }): boolean {
-  return !!d.body.trim() || d.todos.some((t) => t.t.trim());
+function draftHasContent(d: { body: string; todos: Todo[]; photos: EntryPhoto[] }): boolean {
+  return !!d.body.trim() || d.todos.some((t) => t.t.trim()) || d.photos.length > 0;
 }
 
 /** 저장된 기록 스냅샷의 구버전 경계 보정 — 초안 base도 현재 Entry 모양으로 되살린다. */
@@ -72,6 +84,10 @@ function loadDraft(key: string): Draft | null {
     // 저장된 기록용 규칙이고, 초안은 사용자가 고르지 않았다는 사실을 그대로 남겨야 한다.
     const legacyTag = (d as { tag?: unknown }).tag;
     return {
+      entryId:
+        typeof d.entryId === 'string' && UUID_RE.test(d.entryId)
+          ? canonicalUuid(d.entryId)
+          : '',
       tags: d.tags === undefined ? normalizeTags([legacyTag]) : normalizeTags(d.tags),
       stars: typeof d.stars === 'number' && d.stars >= 0 && d.stars <= 5 ? d.stars : 0,
       body: d.body.slice(0, PUSH_LIMITS.body),
@@ -79,6 +95,7 @@ function loadDraft(key: string): Draft | null {
         t: String((t as Partial<Todo> | undefined)?.t ?? '').slice(0, PUSH_LIMITS.todoText),
         done: !!(t as Partial<Todo> | undefined)?.done,
       })),
+      photos: normalizePhotos(d.photos),
       day: isDayKey(d.day) ? d.day : '',
       // 초안 기준 스냅샷도 파생을 채워 둔다 — 다중 태그 이전에 저장된 base는 tags가 없어
       // contentEqual이 무조건 불일치가 되고, 멀쩡한 수정 초안이 통째로 버려진다
@@ -96,7 +113,16 @@ let lastSavedDraftSig = '';
 function saveDraft(key: string, m: ModalState, base: Entry | null): void {
   try {
     if (draftHasContent(m)) {
-      const payload = { tags: m.tags, stars: m.stars, body: m.body, todos: m.todos, day: m.day, base };
+      const payload = {
+        entryId: m.entryId,
+        tags: m.tags,
+        stars: m.stars,
+        body: m.body,
+        todos: m.todos,
+        photos: m.photos,
+        day: m.day,
+        base,
+      };
       const sig = key + '\n' + JSON.stringify(payload);
       if (sig === lastSavedDraftSig) return; // debounce 저장 직후의 닫기 등 — 동일 내용 재직렬화 방지
       localStorage.setItem(key, JSON.stringify({ ...payload, savedAt: Date.now() } satisfies Draft));
@@ -121,13 +147,23 @@ function removeDraft(key: string): void {
 }
 
 /** 오래 방치되거나 형식이 깨진 초안 정리 — 슬롯이 기록별이라 쌓일 수 있다. */
-function pruneDrafts(): void {
+function pruneDrafts(store: CrewStore): void {
   try {
     const cutoff = Date.now() - DRAFT_TTL_MS;
     for (const k of Object.keys(localStorage)) {
       if (!k.startsWith(DRAFT_PREFIX)) continue;
       const d = loadDraft(k);
-      if (!d || typeof d.savedAt !== 'number' || d.savedAt < cutoff) localStorage.removeItem(k);
+      if (!d || typeof d.savedAt !== 'number' || d.savedAt < cutoff) {
+        if (d) {
+          // 수정 초안에는 원래 기록 사진도 함께 든다. 초안에서 새로 더한 것만 버려야
+          // 아직 살아 있는 Entry의 로컬 캐시까지 지우지 않는다.
+          const basePhotos = new Set(d.base?.photos.map((photo) => photo.id) ?? []);
+          for (const photo of d.photos) {
+            if (!basePhotos.has(photo.id)) store.removeDraftPhoto(photo.id);
+          }
+        }
+        localStorage.removeItem(k);
+      }
     }
   } catch {
     // 접근 불가 환경 — 무시
@@ -136,8 +172,15 @@ function pruneDrafts(): void {
 
 function modalFromDraft(d: Draft, editingId: string | null, fallbackDay: string): ModalState {
   return {
-    open: true, editingId, tags: d.tags, stars: d.stars,
-    body: d.body, todos: d.todos, day: d.day || fallbackDay,
+    open: true,
+    entryId: editingId ?? (d.entryId || crypto.randomUUID()),
+    editingId,
+    tags: d.tags,
+    stars: d.stars,
+    body: d.body,
+    todos: d.todos,
+    photos: d.photos,
+    day: d.day || fallbackDay,
   };
 }
 
@@ -215,7 +258,14 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
   );
   // 수정 초안의 기준 — 모달을 연 시점의 기록 스냅샷 (신규는 null)
   const editBase = useRef<Entry | null>(null);
-  useEffect(() => pruneDrafts(), []);
+  useEffect(() => pruneDrafts(store), [store]);
+  // 열린 시트가 참조하는 blob은 원격 Entry 삭제·사진 변경을 채택해도 시트가
+  // 닫히거나 살리기를 끝낼 때까지 남겨 둔다. 목록 교체를 한 번에 해 사진 패치 사이에
+  // 순간적으로 pin이 전부 풀리지 않게 한다.
+  useLayoutEffect(() => {
+    store.setActiveDraftPhotoIds(modal.open ? modal.photos.map((photo) => photo.id) : []);
+  }, [store, modal.open, modal.photos]);
+  useEffect(() => () => store.setActiveDraftPhotoIds([]), [store]);
   useEffect(() => {
     if (!modal.open) return;
     const t = setTimeout(() => saveDraft(draftKey(modal.editingId), modal, editBase.current), 350);
@@ -239,7 +289,7 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
       setModal(modalFromDraft(d, null, openDay));
       return;
     }
-    setModal({ ...EMPTY_MODAL, open: true, day: openDay });
+    setModal({ ...EMPTY_MODAL, open: true, entryId: crypto.randomUUID(), day: openDay });
   };
 
   const submit = () => {
@@ -259,6 +309,7 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
         .slice(0, PUSH_LIMITS.todos)
         .map((t) => ({ t: t.t.trim().slice(0, PUSH_LIMITS.todoText), done: t.done })),
       day: modal.day || dayKey(stamp),
+      photos: normalizePhotos(modal.photos),
       updatedAt: stamp.toISOString(),
       deletedAt: null,
     };
@@ -268,14 +319,22 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
       store.upsert({ ...orig, ...common });
     } else {
       // 신규 — 또는 수정하던 기록이 그 사이 다른 기기에서 삭제된 경우:
-      // 쓰던 내용을 조용히 버리는 대신 새 기록으로 살린다
+      // 쓰던 내용을 조용히 버리는 대신 새 기록으로 살린다. 수정 살리기는 삭제된
+      // Entry의 photoId를 재사용하지 않고, 로컬 blob이 남은 항목만 새 UUID로 복제한다.
+      const id =
+        !modal.editingId && UUID_RE.test(modal.entryId)
+          ? modal.entryId
+          : crypto.randomUUID();
+      const photos = modal.editingId
+        ? store.cloneDraftPhotosForEntry(common.photos, id)
+        : common.photos;
       store.upsert({
-        id: crypto.randomUUID(),
+        id,
         m: me.id,
         time: `${pad2(stamp.getHours())}:${pad2(stamp.getMinutes())}`,
-        photos: [],
         v: 0, // 신규 행 — 서버 리비전 없음
         ...common,
+        photos,
       });
     }
     removeDraft(draftKey(modal.editingId)); // 제출됐으니 초안은 소임을 다했다
@@ -296,15 +355,23 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
         setModal(modalFromDraft(d, e.id, e.day));
         return;
       }
-      if (d) removeDraft(key); // 기록 내용이 그 뒤로 바뀌었다 — 낡은 초안은 버린다
+      if (d) {
+        // 기록 내용이 그 뒤로 바뀌었다 — 낡은 초안 메타와 거기에만 달린 blob을 함께 버린다.
+        for (const photo of d.photos) {
+          if (!e.photos.some((current) => current.id === photo.id)) store.removeDraftPhoto(photo.id);
+        }
+        removeDraft(key);
+      }
       setModal({
         open: true,
+        entryId: e.id,
         editingId: e.id,
         tags: entryTags(e), // 구버전 IDB 행(tags 없음)도 대표 태그에서 되살린다
         stars: e.stars ?? 0,
         // 예전 한 줄 메모는 본문 첫 줄로 승격해서 이어 쓴다 (서버 한도 내로)
         body: [e.memo, e.body].filter(Boolean).join('\n').slice(0, PUSH_LIMITS.body),
         todos: e.todos.map((t) => ({ ...t })),
+        photos: normalizePhotos(e.photos),
         day: e.day,
       });
     },
