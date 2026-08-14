@@ -26,7 +26,7 @@ export function TopBar({
   notiOn: boolean;
   onBell: () => void;
   onCompose: () => void;
-  /** 모달이 닫힐 때 초점이 돌아올 자리 — 이 버튼이 모달을 여는 유일한 입구다 */
+  /** 카드가 사라진 뒤에도 모달·확인창의 초점이 돌아올 수 있는 전역 버튼 */
   composeRef: RefObject<HTMLButtonElement | null>;
 }) {
   return (

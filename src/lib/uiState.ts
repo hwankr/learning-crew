@@ -6,6 +6,19 @@
 const KEY = 'lc-ui-v1';
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
+/** 모양만 YYYY-MM-DD인 값도 실제 달력에 없는 날이면 버린다 — 그대로 복원하면
+    캘린더 격자와 아래 선택일 제목이 서로 다른 달을 가리킨다. */
+function dayParts(value: unknown): { y: number; mo: number; d: number } | null {
+  if (typeof value !== 'string' || !DAY_RE.test(value)) return null;
+  const y = Number(value.slice(0, 4));
+  const mo = Number(value.slice(5, 7));
+  const d = Number(value.slice(8, 10));
+  if (y < 1 || mo < 1 || mo > 12 || d < 1) return null;
+  const leap = y % 4 === 0 && (y % 100 !== 0 || y % 400 === 0);
+  const monthDays = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  return d <= monthDays[mo - 1]! ? { y, mo, d } : null;
+}
+
 export interface UiState {
   view: 'feed' | 'cal';
   panelOpen: boolean;
@@ -22,7 +35,8 @@ export function loadUi(): Partial<UiState> {
     const out: Partial<UiState> = {};
     if (d.view === 'feed' || d.view === 'cal') out.view = d.view;
     if (typeof d.panelOpen === 'boolean') out.panelOpen = d.panelOpen;
-    if (typeof d.selDay === 'string' && DAY_RE.test(d.selDay)) out.selDay = d.selDay;
+    const selDay = d.selDay;
+    if (typeof selDay === 'string' && dayParts(selDay)) out.selDay = selDay;
     return out;
   } catch {
     return {};
@@ -40,9 +54,7 @@ export function saveUi(s: UiState): void {
 /** 저장된 선택일이 속한 달로 캘린더를 되돌린다 — 역산하지 않으면 8월 격자 아래
     9월 목록이 붙는다(월은 오프셋으로, 선택일은 날짜 문자열로 들고 있어서 생기는 틈). */
 export function calOffOf(selDay: string | null, today: Date): number {
-  if (!selDay || !DAY_RE.test(selDay)) return 0;
-  const y = Number(selDay.slice(0, 4));
-  const mo = Number(selDay.slice(5, 7));
-  if (!Number.isFinite(y) || !Number.isFinite(mo)) return 0;
-  return (y - today.getFullYear()) * 12 + (mo - 1 - today.getMonth());
+  const parts = dayParts(selDay);
+  if (!parts) return 0;
+  return (parts.y - today.getFullYear()) * 12 + (parts.mo - 1 - today.getMonth());
 }

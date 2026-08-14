@@ -311,7 +311,7 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
               onSetStatus={(on, place) => {
                 store.setMyStatus(on, place);
                 setNowTick(Date.now());
-                // 패널이 접혀 있으면 이 변화가 화면 어디에도 안 남는다 — 토스트가 유일한 확인이다
+                // 패널을 곧바로 닫아도 시작·종료 결과를 확인할 수 있게 짧은 알림을 남긴다
                 showToast(on && place ? wit.statusStarted(place) : wit.statusEnded);
               }} />
           </div>
