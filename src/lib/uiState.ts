@@ -58,3 +58,13 @@ export function calOffOf(selDay: string | null, today: Date): number {
   if (!parts) return 0;
   return (parts.y - today.getFullYear()) * 12 + (parts.mo - 1 - today.getMonth());
 }
+
+/** 위와 같은 틈을 반대 방향으로 메운다 — 이전/다음 달로 넘길 때 선택일도 같은 일(日)로
+    옮긴 키. 그 달에 없는 날짜(31일 → 2월)는 말일로 당긴다. */
+export function sameDayInMonth(base: Date, selDay: string): string {
+  const last = new Date(base.getFullYear(), base.getMonth() + 1, 0).getDate();
+  const want = dayParts(selDay)?.d ?? 1; // 깨진 값이면 1일 — 없는 날짜로 넘어가느니 달의 시작
+  const d = Math.min(want, last);
+  const mo = String(base.getMonth() + 1).padStart(2, '0');
+  return `${base.getFullYear()}-${mo}-${String(d).padStart(2, '0')}`;
+}

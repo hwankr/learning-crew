@@ -145,7 +145,7 @@ export const COPY: CopySet = {
   delAsk: '이 기록을 지울까요?', delNote: '지운 기록은 되돌릴 수 없어요.',
   footer: '오늘도 크루 중 누군가는 공부를 합니다.',
   count: (n) => `${MEMBERS.length}명 중 ${n}명 도장 찍음`,
-  calEmpty: '이 날은 다들 조용했네요.',
+  calEmpty: '이 날은 기록이 없어요',
   statusAsk: '공부 시작하면 켜주세요',
   statusOn: '공부 중',
   statusEnd: '공부 종료',

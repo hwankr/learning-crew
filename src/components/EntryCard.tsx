@@ -40,7 +40,7 @@ export function EntryCard({
 
   return (
     <div className={'entry' + (compact ? ' compact' : '') + (editing ? ' editing' : '')}>
-      <Avatar m={mm} size={compact ? 36 : 40} />
+      <Avatar m={mm} size={compact ? 32 : 40} />
       <div className="entry-main">
         <div className="entry-head">
           <span className="entry-name">{mm.name}</span>

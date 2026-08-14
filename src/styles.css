@@ -249,8 +249,8 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 .todo-text { font-size: 13.5px; color: #23262E; line-height: 1.5; overflow-wrap: break-word; min-width: 0; }
 .todo-text.done { color: #9AA1AD; text-decoration: line-through; }
 
-/* 캘린더 하단 목록의 컴팩트 엔트리 */
-.entry.compact { padding: 13px 10px; }
+/* 캘린더 선택일 패널의 컴팩트 엔트리 */
+.entry.compact { gap: 10px; padding: 14px 10px; }
 .entry.compact .entry-name { font-size: 13.5px; }
 .entry.compact .entry-time { font-size: 11px; }
 .entry.compact .entry-memo { font-size: 13.5px; margin-top: 5px; line-height: 1.5; }
@@ -365,15 +365,22 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 .entry.compact .comment-pill, .entry.compact .comment-input { font-size: 12px; }
 
 /* ---------- 캘린더 ---------- */
-.cal-head { display: flex; align-items: center; justify-content: space-between; margin: 18px 0 12px; }
-.cal-head-left { display: flex; align-items: center; gap: 10px; }
-.cal-title { font-size: 17px; font-weight: 800; letter-spacing: -0.01em; color: #16181D; }
+.cal-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 14px; }
+/* 좁은 화면은 제목·메타 두 줄, 와이드는 baseline 한 줄 (아래 미디어 쿼리) */
+.cal-head-text { min-width: 0; }
+.cal-title { font-size: 17px; font-weight: 800; letter-spacing: -0.02em; color: #16181D; white-space: nowrap; }
+.cal-meta { font-size: 12px; color: #9AA1AD; white-space: nowrap; flex: none; }
+.cal-meta-crew { display: none; }
+.cal-head-actions { display: flex; align-items: center; gap: 8px; flex: none; }
+/* nowrap/flex:none이 없으면 "오늘"이 음절 단위로 쪼개져 두 줄이 된다 */
 .cal-today-btn {
+  flex: none; white-space: nowrap;
   background: none; border: 1px solid #E4E7EC; border-radius: 999px; cursor: pointer;
-  padding: 4px 11px; font-size: 11.5px; font-weight: 700; color: #6B7280;
+  padding: 6px 13px; font-size: 12px; font-weight: 700; color: #4E555F;
 }
 .cal-today-btn:hover { background: #F1F3F6; }
 .cal-nav { display: flex; gap: 2px; }
+.cal-nav .icon-btn { width: 36px; height: 36px; }
 
 .icon-btn {
   display: flex; align-items: center; justify-content: center;
@@ -381,22 +388,30 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
   cursor: pointer; color: #6B7280;
 }
 .icon-btn:hover { background: #F1F3F6; }
-.cal-week { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; margin-bottom: 4px; }
-.cal-wd { text-align: center; font-size: 11.5px; font-weight: 700; color: #9AA1AD; padding: 4px 0; }
+/* 격자 간격은 디자인이 6px이지만 좁은 화면에서는 3px로 둔다 — 320px에서 6px 간격이면
+   셀 트랙이 34.9px까지 좁아져 아래 색 점 5개(33px)가 한 줄에 못 선다 */
+.cal-week { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 3px; margin-bottom: 6px; }
+.cal-wd { text-align: center; font-size: 11.5px; font-weight: 700; color: #9AA1AD; padding: 2px 0; }
 .cal-wd.sun { color: #D3352A; }
-.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; }
+.cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 3px; }
 .cal-cell {
-  /* min-width: 0 — 그리드 항목의 기본 최소 크기는 내용 크기라, 태그를 여러 개 이어 붙인
-     긴 알약 라벨이 셀을 밀어 넓혀 달력 격자 전체를 넘치게 한다 (라벨은 말줄임으로 처리) */
-  height: 54px; min-width: 0; background: transparent; border: 1.5px solid transparent; border-radius: 12px;
+  /* min-width: 0 — 그리드 항목의 기본 최소 크기는 내용 크기라, 긴 알약 라벨이 셀을 밀어
+     넓혀 달력 격자 전체를 넘치게 한다 (라벨은 말줄임으로 처리) */
+  height: 54px; min-width: 0; overflow: hidden;
+  background: #FFFFFF; border: 1px solid #F1F3F6; border-radius: 12px;
   cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 4px; padding: 0;
-  transition: background 140ms, border-color 140ms;
+  gap: 6px; padding: 4px 2px; text-align: center;
+  transition: background 140ms, border-color 140ms, box-shadow 140ms;
 }
-.cal-cell.sel { background: #FFF9E6; border-color: #FFB800; }
-.cal-cell:hover { background: #F8F9FB; }
+/* 선택은 테두리 색만 바꾼다 — 배경까지 덮으면 "오늘이면서 선택"인 흔한 상태에서
+   오늘 표시(#FFFDF4)가 사라진다 */
+.cal-cell.today { background: #FFFDF4; border-width: 1.5px; border-color: #FFD666; }
+.cal-cell.sel { border-width: 1.5px; border-color: #16181D; box-shadow: 0 2px 8px rgba(22, 24, 29, 0.08); }
+.cal-cell:not(.sel):not(.today):hover { background: #F8F9FB; }
+/* 42칸을 채우는 앞뒤 빈 칸 — 높이만 차지하고 읽히지도 눌리지도 않는다 */
+.cal-cell.blank { visibility: hidden; }
 .cal-num {
-  display: flex; align-items: center; justify-content: center;
+  display: flex; align-items: center; justify-content: center; flex: none;
   width: 22px; height: 22px; border-radius: 50%;
   font-size: 12.5px; font-weight: 600; color: #363B45; background: transparent;
 }
@@ -412,24 +427,27 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 .cal-day-dot { display: block; width: 5px; height: 5px; border-radius: 50%; }
 
 /* 셀 안 멤버·태그 알약 — 모바일에서는 점으로 대신한다 (와이드 미디어에서 전환) */
-.cal-pills { display: none; flex-direction: column; gap: 3px; min-width: 0; }
-.cal-pill { display: flex; align-items: center; gap: 4px; border-radius: 6px; padding: 2.5px 5px; min-width: 0; }
-.cal-pill-dot { display: block; width: 6px; height: 6px; border-radius: 50%; flex: none; }
+.cal-pills { display: none; flex-direction: column; gap: 3px; min-width: 0; width: 100%; }
+.cal-pill { display: flex; align-items: center; gap: 3px; border-radius: 6px; padding: 3px 5px; min-width: 0; }
+.cal-pill-dot { display: block; width: 5px; height: 5px; border-radius: 50%; flex: none; }
 .cal-pill-label { font-size: 10px; font-weight: 700; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.cal-more { font-size: 10px; font-weight: 700; color: #9AA1AD; padding: 0 5px; text-align: left; }
+.cal-more { font-size: 10px; font-weight: 700; color: #9AA1AD; padding: 0 5px; text-align: left; white-space: nowrap; }
 
-/* 선택한 날 헤더 — 아바타가 최대 인원까지 늘어난다(5명 = 88px). 가운데 선이 먼저
-   0까지 줄고, 그래도 모자라면 날짜 라벨이 말줄임된다: flex:none으로 두면 넘친다. */
-.sel-head { display: flex; align-items: center; gap: 10px; margin: 26px 0 2px; }
-.sel-label {
-  font-size: 13px; font-weight: 800; color: #16181D;
-  flex: 0 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
-}
+/* 선택한 날 패널 — 좁은 화면에선 격자 아래로 흐르고, 와이드에선 우측 340px 열로 선다.
+   min-height는 기록이 없는 날에도 격자 옆이 허전하지 않게 자리를 잡아 둔다. */
+.cal-layout { display: block; }
+.cal-grid-col { min-width: 0; }
+.cal-sel { min-width: 0; margin-top: 26px; min-height: 220px; }
+/* 아바타는 최대 인원까지 늘어난다 — flex:none인 라벨과 부딪히면 줄을 바꿔 받는다(말줄임 대신) */
+.sel-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; row-gap: 6px; margin: 0 0 2px; }
+.sel-label { font-size: 14px; font-weight: 800; color: #16181D; flex: none; white-space: nowrap; }
 .sel-count { font-size: 12px; font-weight: 600; color: #9AA1AD; flex: none; }
 .sel-avatars { display: flex; flex: none; }
 .sel-av { display: block; flex: none; border-radius: 50%; border: 2px solid #FFFFFF; }
-.sel-av + .sel-av { margin-left: -8px; }
-.sel-empty { text-align: center; font-size: 13px; color: #9AA1AD; padding: 26px 0 10px; }
+.sel-av + .sel-av { margin-left: -7px; }
+/* 첫 항목에도 윗줄을 둬 패널 머리와 목록을 가른다 (피드는 카드 사이만 가른다) */
+.sel-list .entry { border-top-color: #F1F3F6; }
+.sel-empty { text-align: center; font-size: 13px; color: #9AA1AD; padding: 28px 0 8px; }
 
 .footer { text-align: center; font-size: 12.5px; color: #9AA1AD; margin-top: 34px; }
 .demo-note { font-size: 11.5px; color: #C3C9D2; margin-top: 8px; }
@@ -878,17 +896,24 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
     transition: padding-left 300ms cubic-bezier(0.4, 0, 0.2, 1), border-color 300ms ease;
   }
   .body.open .main-col { padding-left: 36px; border-left-color: #F1F3F6; }
-  /* 캘린더 — 알약이 들어가는 큰 셀 */
-  .cal-title { font-size: 19px; }
+  /* 캘린더 — 알약이 들어가는 큰 셀 + 우측 선택일 패널 */
+  .cal-head { margin-bottom: 18px; }
+  .cal-head-text { display: flex; align-items: baseline; gap: 12px; }
+  .cal-title { font-size: 22px; }
+  .cal-meta-crew { display: inline; }
+  .cal-week, .cal-grid { gap: 6px; }
+  /* 142px 고정 — 알약을 3개로 끊는 규칙과 짝이다. 늘어나게 두면 기록이 몰린 주만 키가 커진다 */
   .cal-cell {
-    height: auto; min-height: 96px;
-    align-items: stretch; justify-content: flex-start; gap: 3px;
-    padding: 6px 5px; border-color: #F5F6F8;
+    height: 142px; align-items: stretch; justify-content: flex-start; gap: 5px;
+    padding: 7px 5px; text-align: left;
   }
-  .cal-cell.sel { border-color: #FFB800; }
-  .cal-num { width: 21px; height: 21px; font-size: 12px; margin: 0 auto 2px; }
+  .cal-num { margin: 0 auto 2px; }
   .cal-pills { display: flex; }
   .cal-day-dots { display: none; }
+  .cal-layout { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 32px; align-items: start; }
+  /* 격자를 훑는 동안 선택일이 따라 붙는다. 상단 바가 sticky라 그 아래(65px)부터 24px 띄운다 —
+     디자인의 top:24는 자체 스크롤 프레임 기준이라 그대로 쓰면 바 뒤로 들어간다. */
+  .cal-sel { position: sticky; top: 89px; margin-top: 0; min-height: 520px; }
   .overlay { align-items: center; }
   /* 와이드 규칙이 모바일의 뷰포트 제한을 소스 순서로 덮으므로 여기서도 높이를 뷰포트로
      묶는다 — min-height: 540px 그대로면 900×480(가로 태블릿)에서 시트가 540px로 서서
