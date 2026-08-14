@@ -36,7 +36,6 @@ export function EntryCard({
   const tags = entryTags(e);
   const hasStars = !isOffTags(tags) && (e.stars ?? 0) > 0;
   const doneN = e.todos.filter((t) => t.done).length;
-  const memoBold = e.body || e.todos.length > 0;
 
   return (
     <div className={'entry' + (compact ? ' compact' : '') + (editing ? ' editing' : '')}>
@@ -45,10 +44,11 @@ export function EntryCard({
         <div className="entry-head">
           <span className="entry-name">{mm.name}</span>
           <span className="entry-time">{e.time}</span>
-          <span className="spacer" />
-          {/* 컴팩트(캘린더)는 태그·별점 줄이 따로 없어 머리에 붙인다 */}
+          {/* 컴팩트(캘린더)는 태그·별점 줄이 따로 없어 머리에 붙인다 (넓은 모드는
+              수정·삭제가 margin-left:auto로 밀려나므로 빈 칸이 필요 없다) */}
           {compact && (
             <>
+              <span className="spacer" />
               {/* 좁은 한 줄 — 앞의 두 개만 보여 주고 나머지는 +N으로 접는다 */}
               <span className="entry-head-tags">
                 {tags.slice(0, COMPACT_CHIPS).map((t) => (
@@ -75,14 +75,16 @@ export function EntryCard({
             {tags.map((t) => (
               <Chip key={t} tag={t} variant="md" />
             ))}
-            {hasStars && <StarsRow n={e.stars ?? 0} w={70} h={14} />}
-            {e.todos.length > 0 && <span className="todo-count">{doneN}/{e.todos.length}</span>}
+            {hasStars && <StarsRow n={e.stars ?? 0} w={66} h={13} />}
+            {e.todos.length > 0 && (
+              <span className="todo-count">할 일 {doneN}/{e.todos.length}</span>
+            )}
           </div>
         )}
-        {e.memo && (
-          <div className="entry-memo" style={{ fontWeight: memoBold ? 700 : 400 }}>{e.memo}</div>
-        )}
-        {e.body && <div className="entry-body">{e.body}</div>}
+        {e.memo && <div className="entry-memo">{e.memo}</div>}
+        {/* 제목(memo)이 없으면 본문이 그 자리로 올라온다 — 한 줄짜리 기록이 회색 잔글씨로
+            깔리지 않게 하는 디자인 규칙 */}
+        {e.body && <div className={'entry-body' + (e.memo ? '' : ' lead')}>{e.body}</div>}
         {e.todos.length > 0 && (
           <div className="entry-todos">
             {e.todos.map((t, i) => (

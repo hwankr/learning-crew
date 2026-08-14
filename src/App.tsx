@@ -6,11 +6,13 @@ import { BY_ID, COPY, MEMBERS, dayKey, pad2, shiftKey } from './lib/constants';
 import type { AppConfig } from './lib/config';
 import type { CrewStore } from './local/store';
 import { loadUi, saveUi } from './lib/uiState';
+import { useIsDesktop } from './lib/useMediaQuery';
 import { TopBar } from './components/TopBar';
 import { CrewPanel } from './components/CrewPanel';
 import { Feed } from './components/Feed';
 import { CalendarView } from './components/CalendarView';
 import { NotiPage } from './components/NotiPage';
+import { NotiDropdown } from './components/NotiDropdown';
 import { NotiSettings } from './components/NotiSettings';
 import { EMPTY_MODAL, EntryModal, type ModalState } from './components/EntryModal';
 import { ConfirmDelete } from './components/ConfirmDelete';
@@ -137,10 +139,18 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
   const [view, setView] = useState<'feed' | 'cal'>(
     urlView === 'feed' || urlView === 'cal' ? urlView : ui.view ?? 'cal',
   );
-  // 알림은 탭이 아니라 벨로 잠깐 들르는 화면이라 view와 따로 둔다(저장하지도 않는다)
+  // 데스크톱은 벨 드롭다운으로 알림을 읽고, 모바일은 전체 화면 내역으로 간다 —
+  // 같은 벨이 무엇을 여는지가 갈리므로 렌더 중에 폭을 알아야 한다
+  const desktop = useIsDesktop();
+  // 알림은 탭이 아니라 벨로 잠깐 들르는 화면이라 view와 따로 둔다(저장하지도 않는다).
+  // 내역 전체 화면은 <900px 전용이다 — 데스크톱에서는 드롭다운이 그 자리를 대신한다.
   const [noti, setNoti] = useState(urlView === 'noti');
-  // 알림 뷰의 하위 화면 — 내역에서 톱니로 들어가는 설정
+  // 데스크톱 드롭다운 열림 — ?view=noti로 들어오면 연 채로 시작한다(설정 진입은 예외)
+  const [drop, setDrop] = useState(urlView === 'noti' && !cfg.initialNotiSettings);
+  // 알림 설정 — 폭과 무관하게 본문 전체를 쓰는 유일한 알림 화면
   const [notiSettings, setNotiSettings] = useState(cfg.initialNotiSettings);
+  const bellRef = useRef<HTMLButtonElement>(null);
+  const closeDrop = useCallback(() => setDrop(false), []);
   const [panelOpen, setPanelOpen] = useState(ui.panelOpen ?? false);
   const [selDay, setSelDay] = useState<string | null>(ui.selDay ?? null);
   const [modal, setModal] = useState<ModalState>(EMPTY_MODAL);
@@ -290,14 +300,32 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
   };
 
   const pendingDel = delId ? entries.find((e) => e.id === delId) ?? null : null;
+  // 본문을 알림이 차지하는 경우 — 설정, 그리고 좁은 화면의 내역
+  const notiScreen = notiSettings || (noti && !desktop);
 
   return (
     <div className="screen">
-      <TopBar me={me} wit={wit} view={view} onView={(v) => { setView(v); setNoti(false); }}
+      <TopBar me={me} wit={wit} view={view}
+        onView={(v) => { setView(v); setNoti(false); setNotiSettings(false); setDrop(false); }}
         panelOpen={panelOpen} onTogglePanel={() => setPanelOpen((o) => !o)}
         sync={cfg.token ? snap.sync : null}
-        unread={snap.unreadNotifications} notiOn={noti}
-        onBell={() => { setNotiSettings(false); setNoti((n) => !n); }}
+        unread={snap.unreadNotifications} notiOn={desktop ? drop : noti}
+        // 설정을 보고 있었다면 벨은 본문을 보던 탭으로 되돌리고 내역을 연다
+        onBell={() => {
+          setNotiSettings(false);
+          if (desktop) setDrop((o) => !o);
+          else setNoti((n) => !n);
+        }}
+        bellRef={bellRef} hasDropdown={desktop}
+        dropdown={desktop && drop ? (
+          <NotiDropdown notifications={snap.notifications} unread={snap.unreadNotifications}
+            bellRef={bellRef}
+            onRead={(id) => store.markNotificationRead(id)}
+            onReadAll={() => { store.markAllNotificationsRead(); showToast(wit.notiReadAll); }}
+            onOpenSettings={() => { setDrop(false); setNotiSettings(true); }}
+            onOpenFeed={() => { setDrop(false); setView('feed'); }}
+            onClose={closeDrop} />
+        ) : null}
         onCompose={openNew} composeRef={ctaRef} />
       {/* 패널 열은 접혀 있어도 마운트를 유지한다 — 열 폭만 300ms로 오가고 안쪽 래퍼는
           296px에 고정돼 있어서, 접히는 동안 내용이 찌그러지지 않는다(CSS가 맡는다) */}
@@ -315,9 +343,10 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
           </div>
         </div>
         <div className="main-col">
-          {noti ? (
+          {notiScreen ? (
             notiSettings ? (
               <NotiSettings token={cfg.token} meId={me.id} demo={cfg.demo}
+                // 뒤로 = 좁은 화면이면 내역, 데스크톱이면 보던 탭 (noti가 그대로 갈라 준다)
                 onBack={() => setNotiSettings(false)} />
             ) : (
               <NotiPage notifications={snap.notifications}
@@ -329,7 +358,7 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
             <div className="feed-wrap">
               <Feed entries={entries} todayKey={todayKey} yKey={yKey} meId={me.id}
                 editingId={modal.editingId} comments={snap.comments} reactions={snap.reactions}
-                actions={actions} />
+                wit={wit} actions={actions} />
               <div className="footer">
                 {wit.footer}
                 {cfg.demo && <div className="demo-note">데모 모드 — 초대 링크로 접속하면 크루와 동기화됩니다.</div>}

@@ -121,6 +121,9 @@ export interface CopySet {
   editSubmit: string;
   empty: string;
   emptyMe: string;
+  feedEmpty: string; // 피드에 기록이 하나도 없을 때
+  feedEmptyHint: string;
+  notiReadAll: string; // 알림 모두 읽음 토스트
   offNote: string;
   delAsk: string; // 기록 삭제 확인 물음
   delNote: string; // 되돌릴 수 없다는 안내
@@ -141,6 +144,8 @@ export const COPY: CopySet = {
   diaryPh: '오늘 하루 기록하기', todoPh: '할 일 내용',
   submit: '기록 남기기', editSubmit: '수정 저장',
   empty: '아직 안 옴', emptyMe: '오늘 첫 기록을 남겨보세요',
+  feedEmpty: '아직 기록이 없어요', feedEmptyHint: '오늘 기록 남기기로 첫 줄을 시작해보세요',
+  notiReadAll: '알림을 모두 읽음으로 표시했어요',
   offNote: '쉬는 날은 별점 없이 기록돼요.',
   delAsk: '이 기록을 지울까요?', delNote: '지운 기록은 되돌릴 수 없어요.',
   footer: '오늘도 크루 중 누군가는 공부를 합니다.',

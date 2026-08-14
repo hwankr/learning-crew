@@ -1,7 +1,7 @@
 /* 데스크톱 상단 바 — 이동(탭)·작성·동기화·알림을 한 줄에 모은다.
    예전 브랜드 줄에 쌓여 있던 아바타 스택·CTA·상태 줄이 전부 이 한 줄로 들어왔다.
    <900px에서는 줄바꿈으로 버티기만 한다(하단 탭바 셸은 별도 파트). */
-import type { RefObject } from 'react';
+import type { ReactNode, RefObject } from 'react';
 import type { SyncInfo } from '../local/store';
 import type { CopySet, Member } from '../lib/constants';
 import { Avatar, BELL_D, Icon, PENCIL_D } from './icons';
@@ -12,7 +12,8 @@ const PANEL_SHUT_D = 'M9 5l7 7-7 7';
 const PANEL_OPEN_D = 'M15 5l-7 7 7 7';
 
 export function TopBar({
-  me, wit, view, onView, panelOpen, onTogglePanel, sync, unread, notiOn, onBell, onCompose, composeRef,
+  me, wit, view, onView, panelOpen, onTogglePanel, sync, unread, notiOn, onBell, bellRef,
+  hasDropdown, dropdown, onCompose, composeRef,
 }: {
   me: Member;
   wit: CopySet;
@@ -25,6 +26,11 @@ export function TopBar({
   unread: number;
   notiOn: boolean;
   onBell: () => void;
+  bellRef: RefObject<HTMLButtonElement | null>;
+  /** 이 벨이 드롭다운을 여는가(데스크톱) — 모바일 벨은 화면을 바꾸므로 expanded가 아니다 */
+  hasDropdown: boolean;
+  /** 데스크톱 알림 드롭다운 — 열려 있을 때만 온다 */
+  dropdown: ReactNode;
   onCompose: () => void;
   /** 카드가 사라진 뒤에도 모달·확인창의 초점이 돌아올 수 있는 전역 버튼 */
   composeRef: RefObject<HTMLButtonElement | null>;
@@ -50,14 +56,19 @@ export function TopBar({
           <Icon d={PENCIL_D} size={15} sw={2.2} />
           <span>{wit.cta}</span>
         </button>
-        {/* 이 자리를 기준으로 알림 드롭다운이 뜬다(별도 파트) — 지금은 벨만 산다 */}
+        {/* 드롭다운은 이 래퍼를 기준으로 뜬다(벨이 아니라) — 벨에 붙이면 38px 버튼
+            안쪽으로 352px 상자의 위치를 잡게 된다 */}
         <div className="bell-wrap">
-          <button className={'bell-btn' + (notiOn ? ' on' : '')}
+          <button className={'bell-btn' + (notiOn ? ' on' : '')} ref={bellRef}
             aria-label={unread > 0 ? `알림 — 안 읽음 ${unread}개` : '알림'}
+            aria-haspopup={hasDropdown ? 'dialog' : undefined}
+            aria-expanded={hasDropdown ? notiOn : undefined}
             onClick={onBell}>
             <Icon d={BELL_D} size={19} sw={2} />
+            {/* 열려 있어도 배지는 남는다 — 안 읽은 수는 드롭다운을 여는 것과 무관하다 */}
             {unread > 0 && <span className="bell-badge">{unread > 9 ? '9+' : unread}</span>}
           </button>
+          {dropdown}
         </div>
         <span className="top-av">
           <Avatar m={me} size={34} />

@@ -22,6 +22,18 @@ export function Icon({ d, size, sw }: { d: string; size: number; sw: number }) {
   );
 }
 
+/** 톱니(알림 설정) — 축과 테두리 두 조각이라 단일 path인 Icon으로는 못 그린다.
+    알림 내역(전체 화면)과 벨 드롭다운이 같은 아이콘을 쓴다. */
+export function GearIcon({ size }: { size: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" style={{ display: 'block' }}>
+      <circle cx={12} cy={12} r={3.2} />
+      <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-2.87 1.2V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-2.87-1.2l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 2.6 15H2.5a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.2-2.87l-.06-.06A2 2 0 1 1 6.57 5.24l.06.06A1.7 1.7 0 0 0 9.5 4.1V4a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 2.87 1.2l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 21.4 11h.1a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.53 1z" />
+    </svg>
+  );
+}
+
 export function CheckMark({ size }: { size: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="#16181D"

@@ -34,7 +34,6 @@ export function EntrySocial({
 }) {
   const [pickOpen, setPickOpen] = useState(false);
   const [pickLeft, setPickLeft] = useState(0);
-  const [writing, setWriting] = useState(false);
   const [text, setText] = useState('');
   const pickWrap = useRef<HTMLDivElement>(null);
   const rowRef = useRef<HTMLDivElement>(null);
@@ -58,11 +57,6 @@ export function EntrySocial({
       document.removeEventListener('keydown', onKey);
     };
   }, [pickOpen]);
-
-  // 알약을 눌러 펼친 순간 바로 쓸 수 있게 — 한 번 더 탭하게 만들지 않는다
-  useEffect(() => {
-    if (writing) inputRef.current?.focus();
-  }, [writing]);
 
   const tally = tallyReactions(sets, meId);
   const myEmojis = sets.find((s) => s.m === meId)?.emojis ?? [];
@@ -163,34 +157,29 @@ export function EntrySocial({
         </div>
       )}
 
+      {/* 입력은 늘 펼쳐 둔다 — "보내기"만 내용이 있을 때 나타난다(디자인) */}
       <div className="comment-form">
         <Avatar m={me} size={24} />
-        {writing ? (
-          <div className="comment-input-wrap">
-            <input
-              ref={inputRef}
-              className="comment-input"
-              value={text}
-              placeholder="댓글 달기…"
-              maxLength={PUSH_LIMITS.commentBody}
-              onChange={(ev) => setText(ev.target.value)}
-              onKeyDown={(ev) => {
-                // 한글은 조합 중 Enter로 글자를 "확정"한다 — 그 Enter까지 제출로 받으면
-                // "안녕하세" 같은 미완성 댓글이 그대로 저장된다(댓글은 수정이 없다).
-                // 조합 중이면 넘긴다: isComposing이 표준, keyCode 229는 구형 브라우저 폴백.
-                if (ev.nativeEvent.isComposing || ev.keyCode === 229) return;
-                if (ev.key === 'Enter') {
-                  ev.preventDefault();
-                  submit();
-                }
-              }}
-              // 쓰다 만 내용은 남긴다 — 비었을 때만 조용히 접힌다
-              onBlur={() => { if (!text.trim()) setWriting(false); }}
-            />
-            <button className="comment-submit" disabled={!text.trim()} onClick={submit}>등록</button>
-          </div>
-        ) : (
-          <button className="comment-pill" onClick={() => setWriting(true)}>댓글 달기…</button>
+        <input
+          ref={inputRef}
+          className="comment-input"
+          value={text}
+          placeholder="댓글 달기…"
+          maxLength={PUSH_LIMITS.commentBody}
+          onChange={(ev) => setText(ev.target.value)}
+          onKeyDown={(ev) => {
+            // 한글은 조합 중 Enter로 글자를 "확정"한다 — 그 Enter까지 제출로 받으면
+            // "안녕하세" 같은 미완성 댓글이 그대로 저장된다(댓글은 수정이 없다).
+            // 조합 중이면 넘긴다: isComposing이 표준, keyCode 229는 구형 브라우저 폴백.
+            if (ev.nativeEvent.isComposing || ev.keyCode === 229) return;
+            if (ev.key === 'Enter') {
+              ev.preventDefault();
+              submit();
+            }
+          }}
+        />
+        {text.trim() && (
+          <button className="comment-send" onClick={submit}>보내기</button>
         )}
       </div>
     </div>
