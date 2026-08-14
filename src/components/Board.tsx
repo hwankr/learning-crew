@@ -45,10 +45,12 @@ function CrewRow({
   const isOff = isOffTags(tags);
   const hasStars = !!latest && !isOff && (latest.stars ?? 0) > 0;
   const firstTodo = latest && latest.todos.length > 0 ? latest.todos[0]!.t : '';
+  const firstBody = latest ? (latest.body || '').split('\n')[0] ?? '' : '';
   const subLine = live
     ? `${wit.placeAt(status.place ?? '기타')} ${status.since ? fmtElapsed(status.since, now) : ''}`.trim()
     : latest
-      ? latest.memo || firstTodo || (latest.body || '').split('\n')[0] || (isOff ? '오늘은 휴식' : '')
+      // 항목 요약은 기록 본문을 먼저 보여 준다 — 할 일은 본문까지 빈 기록의 대체문이다
+      ? latest.memo || firstBody || firstTodo || (isOff ? '오늘은 휴식' : '')
       : isMe
         ? wit.emptyMe
         : wit.empty;

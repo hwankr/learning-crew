@@ -5,7 +5,7 @@ import { contentEqual } from './local/store';
 import { BY_ID, COPY, MEMBERS, W, dayKey, pad2, shiftKey } from './lib/constants';
 import type { AppConfig } from './lib/config';
 import type { CrewStore } from './local/store';
-import { loadUi, saveUi, type MobileTab } from './lib/uiState';
+import { isDayKey, loadUi, saveUi, type MobileTab } from './lib/uiState';
 import { useIsDesktop } from './lib/useMediaQuery';
 import { TopBar } from './components/TopBar';
 import { TabBar } from './components/TabBar';
@@ -39,7 +39,6 @@ interface Draft {
 
 const DRAFT_PREFIX = 'lc-draft:';
 const DRAFT_TTL_MS = 14 * 86_400_000;
-const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 function draftHasContent(d: { body: string; todos: Todo[] }): boolean {
   return !!d.body.trim() || d.todos.some((t) => t.t.trim());
@@ -73,7 +72,7 @@ function loadDraft(key: string): Draft | null {
         t: String((t as Partial<Todo> | undefined)?.t ?? '').slice(0, PUSH_LIMITS.todoText),
         done: !!(t as Partial<Todo> | undefined)?.done,
       })),
-      day: typeof d.day === 'string' && DAY_RE.test(d.day) ? d.day : '',
+      day: isDayKey(d.day) ? d.day : '',
       // 초안 기준 스냅샷도 파생을 채워 둔다 — 다중 태그 이전에 저장된 base는 tags가 없어
       // contentEqual이 무조건 불일치가 되고, 멀쩡한 수정 초안이 통째로 버려진다
       base: d.base && typeof d.base === 'object' ? withTags(d.base as Entry) : null,
@@ -110,6 +109,8 @@ function removeDraft(key: string): void {
   } catch {
     // 접근 불가 환경 — 무시
   }
+  // 삭제 뒤 같은 내용으로 다시 작성해도 저장을 생략하지 않도록 메모이즈 값도 비운다.
+  if (lastSavedDraftSig.startsWith(`${key}\n`)) lastSavedDraftSig = '';
 }
 
 /** 오래 방치되거나 형식이 깨진 초안 정리 — 슬롯이 기록별이라 쌓일 수 있다. */

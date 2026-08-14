@@ -19,6 +19,12 @@ function dayParts(value: unknown): { y: number; mo: number; d: number } | null {
   return d <= monthDays[mo - 1]! ? { y, mo, d } : null;
 }
 
+/** localStorage에 들어가는 모든 날짜 슬롯의 공통 경계 — UI 선택일뿐 아니라 작성 초안도
+    이 검사를 써야, 모양만 날짜인 값이 저장 큐까지 들어가 동기화 전체를 막지 않는다. */
+export function isDayKey(value: unknown): value is string {
+  return dayParts(value) !== null;
+}
+
 /** 좁은 화면 하단 탭 — 데스크톱 view(피드·캘린더)와 따로 산다. 하나로 합치면
     폭이 바뀔 때마다 홈이 캘린더로, 알림이 피드로 번역되며 보던 자리가 뒤바뀐다. */
 export type MobileTab = 'home' | 'feed' | 'cal' | 'alerts';
@@ -43,7 +49,7 @@ export function loadUi(): Partial<UiState> {
     if (typeof d.mtab === 'string' && MTABS.includes(d.mtab)) out.mtab = d.mtab as MobileTab;
     if (typeof d.panelOpen === 'boolean') out.panelOpen = d.panelOpen;
     const selDay = d.selDay;
-    if (typeof selDay === 'string' && dayParts(selDay)) out.selDay = selDay;
+    if (isDayKey(selDay)) out.selDay = selDay;
     return out;
   } catch {
     return {};

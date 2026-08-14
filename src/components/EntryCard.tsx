@@ -89,12 +89,23 @@ export function EntryCard({
           <div className="entry-todos">
             {e.todos.map((t, i) => (
               <div className="todo-line" key={i}>
-                <button
-                  className={'todo-check' + (t.done ? ' done' : '') + (mine ? ' tappable' : '')}
-                  onClick={mine ? () => actions.onToggleTodo(e, i) : undefined}
-                >
-                  <CheckMark size={compact ? 10 : 11} />
-                </button>
+                {mine ? (
+                  <button
+                    type="button"
+                    className={'todo-check' + (t.done ? ' done' : '') + ' tappable'}
+                    aria-label={`${t.t}: ${t.done ? '완료 해제' : '완료로 표시'}`}
+                    aria-pressed={t.done}
+                    onClick={() => actions.onToggleTodo(e, i)}
+                  >
+                    <CheckMark size={compact ? 10 : 11} />
+                  </button>
+                ) : (
+                  // 남의 할 일은 조작할 수 없다 — 버튼으로 그리면 키보드에 아무 일도 안 하는 제어가 남는다
+                  <span className={'todo-check' + (t.done ? ' done' : '')}
+                    role="img" aria-label={t.done ? '완료' : '미완료'}>
+                    <CheckMark size={compact ? 10 : 11} />
+                  </span>
+                )}
                 <span className={'todo-text' + (t.done ? ' done' : '')}>{t.t}</span>
               </div>
             ))}

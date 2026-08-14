@@ -1,7 +1,7 @@
 /* 화면 상태는 신뢰할 수 없는 localStorage에서 온다 — 형식만 날짜처럼 생긴 값이
    캘린더의 달과 선택일 제목을 갈라놓지 않게 복원 경계를 검증한다. */
 import { afterEach, describe, expect, it } from 'vitest';
-import { calOffOf, loadUi, sameDayInMonth } from './uiState';
+import { calOffOf, isDayKey, loadUi, sameDayInMonth } from './uiState';
 
 const originalStorage = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
 
@@ -38,6 +38,19 @@ describe('loadUi', () => {
     (selDay) => {
       stored(JSON.stringify({ view: 'cal', panelOpen: false, selDay }));
       expect(loadUi()).toEqual({ view: 'cal', panelOpen: false });
+    },
+  );
+});
+
+describe('isDayKey', () => {
+  it.each(['2024-02-29', '2026-04-30', '9999-12-31'])('%s를 실제 날짜로 받는다', (day) => {
+    expect(isDayKey(day)).toBe(true);
+  });
+
+  it.each(['2026-02-29', '2026-04-31', '2026-99-99', '2026-8-14', '', null])(
+    '모양만 날짜인 %s는 버린다',
+    (day) => {
+      expect(isDayKey(day)).toBe(false);
     },
   );
 });

@@ -45,7 +45,8 @@ export function CheckMark({ size }: { size: number }) {
 
 export function StarsRow({ n, w, h }: { n: number; w: number; h: number }) {
   return (
-    <svg width={w} height={h} viewBox="0 0 120 24" style={{ display: 'block' }}>
+    <svg width={w} height={h} viewBox="0 0 120 24" style={{ display: 'block' }}
+      role="img" aria-label={`만족도 ${n}점`}>
       {[0, 1, 2, 3, 4].map((i) => (
         <path key={i} d={STAR_D} transform={i ? `translate(${i * 24} 0)` : undefined}
           fill={i < n ? '#FFB800' : '#E4E7EC'} />
