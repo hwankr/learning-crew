@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type RefObject } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import type { Tag, Todo } from '../../shared/types';
 import { PUSH_LIMITS, TAGS, isOffTags, normalizeTags } from '../../shared/types';
 import { TAGMETA, W, dayKey, pad2, type CopySet } from '../lib/constants';
@@ -29,13 +29,28 @@ export function toggledTags(cur: readonly Tag[], t: Tag): Tag[] {
   return normalizeTags(t === 'OFF' ? ['OFF'] : [...cur.filter((x) => x !== 'OFF'), t]);
 }
 
+/** 저장 문턱과 막힌 이유 — 두 단계로 나뉘어 있던 검사("다음"의 내용 검사, 저장의 태그·별점
+    검사)가 시트가 한 장이 되면서 저장 버튼 하나로 모였다. 뜻은 그대로다:
+    태그 하나 이상 + (쉬는 날이거나 별점 하나 이상), 그리고 새 기록은 내용이 있어야 한다
+    (수정은 예외 — 내용을 지우는 것도 수정이다).
+    이유는 채울 순서대로 하나만 돌려준다 — 한 번에 다 늘어놓으면 무엇부터 손대야 할지 흐려진다. */
+export function saveGate(m: Pick<ModalState, 'editingId' | 'tags' | 'stars' | 'body' | 'todos'>): {
+  canSave: boolean;
+  hasContent: boolean;
+  blocked: string;
+} {
+  const ready = m.tags.length > 0 && (isOffTags(m.tags) || m.stars > 0);
+  const hasContent = !!m.body.trim() || m.todos.some((t) => t.t.trim());
+  const canSave = ready && (hasContent || !!m.editingId);
+  const blocked = !m.tags.length ? '무엇을 했는지 골라주세요'
+    : !ready ? '만족도를 골라주세요'
+      : !canSave ? '기록을 한 줄 적어주세요' : '';
+  return { canSave, hasContent, blocked };
+}
+
 const CHEVRON_D = 'M6 9l6 6 6-6';
 const PREV_D = 'M15 18l-6-6 6-6';
 const NEXT_D = 'M9 6l6 6-6 6';
-const BACK_D = 'M19 12H5M11 18l-6-6 6-6';
-const FWD_D = 'M5 12h14M13 6l6 6-6 6';
-const TODO_D = 'M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11';
-const TAGSEC_D = 'M12 2l8 5v10l-8 5-8-5V7z';
 
 function parseDay(key: string): { y: number; m: number; d: number } {
   const [y = 0, m = 1, d = 1] = key.split('-').map(Number);
@@ -111,29 +126,29 @@ export function EntryModal({
       옮겨가고, 다른 기기에서 그 기록이 지워질 수도 있다. 그때 초점이 갈 자리. */
   fallbackRef: RefObject<HTMLElement | null>;
 }) {
-  const [step, setStep] = useState<'write' | 'meta'>('write');
   const [todoOpen, setTodoOpen] = useState(modal.todos.length > 0);
   const [calOpen, setCalOpen] = useState(false);
   const [typing, setTyping] = useState(false);
+  /* 저장이 막힌 이유는 한 번 눌러 본 뒤부터 보여준다 — 빈 시트를 열자마자 "골라주세요"가
+     떠 있으면 아직 시작도 안 한 사람을 다그치는 꼴이 된다. */
+  const [tried, setTried] = useState(false);
   const typeTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => () => clearTimeout(typeTimer.current), []);
 
+  const titleId = useId();
   const sheetRef = useRef<HTMLDivElement>(null);
-  const backRef = useRef<HTMLButtonElement>(null);
   const bodyRef = useRef<HTMLTextAreaElement>(null);
   useFocusTrap(sheetRef, fallbackRef);
 
-  /* 단계를 넘나들 때 초점도 같이 옮긴다 — 지금까지 초점이 있던 쪽(다음 버튼 / 다시 쓰기 버튼)이
-     곧바로 inert가 되므로, 두고 가면 초점이 body로 떨어져 키보드 사용자가 자리를 잃는다.
-     "단계가 실제로 바뀌었는지"를 직전 값과 비교해서 본다 — 플래그 한 개로 첫 실행만 걸러내면
-     effect가 다시 붙는 상황(StrictMode 등)에서 마운트가 단계 전환으로 둔갑해
-     본문 autoFocus를 가로챈다. */
-  const shownStep = useRef(step);
-  useEffect(() => {
-    if (shownStep.current === step) return;
-    shownStep.current = step;
-    (step === 'meta' ? backRef.current : bodyRef.current)?.focus();
-  }, [step]);
+  /* 시트가 통째로 하나로 굴러가므로 본문 칸 안에 또 스크롤이 생기면 스크롤이 두 겹이 된다 —
+     내용만큼 칸이 자라게 매번 다시 잰다. border-box라 scrollHeight(테두리 제외)만 넣으면
+     테두리 두께만큼 모자라 다시 스크롤이 남는다. */
+  useLayoutEffect(() => {
+    const el = bodyRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${el.scrollHeight + el.offsetHeight - el.clientHeight}px`;
+  }, [modal.body]);
 
   const sel = parseDay(modal.day || dayKey(new Date()));
   const selDow = new Date(sel.y, sel.m, sel.d).getDay();
@@ -141,32 +156,31 @@ export function EntryModal({
   const dateSuffix = modal.editingId ? '· 수정 중' : isToday ? '· 오늘' : '· 지난 기록';
 
   const isOff = isOffTags(modal.tags);
-  const ready = modal.tags.length > 0 && (isOff || modal.stars > 0);
-  const hasContent = !!modal.body.trim() || modal.todos.some((t) => t.t.trim());
-  const canNext = hasContent || !!modal.editingId;
-  const firstLine = modal.body.trim().split('\n')[0] || '';
-  const todoN = modal.todos.filter((t) => t.t.trim()).length;
-  const excerpt = firstLine || (todoN ? `할 일 ${todoN}개` : '(내용 없음)');
+  const { canSave, hasContent, blocked } = saveGate(modal);
+  const showBlocked = tried && !!blocked;
 
   return (
     <div className="overlay" onClick={close}>
       {/* 트랩은 Tab만 가둔다 — 화면 낭독기에 "여기가 모달"이라고 알리는 건 dialog 의미다 */}
-      <div className="sheet" ref={sheetRef} role="dialog" aria-modal="true"
-        aria-label={modal.editingId ? '기록 수정' : '새 기록'}
+      <div className="sheet" ref={sheetRef} role="dialog" aria-modal="true" aria-labelledby={titleId}
         onClick={(ev) => ev.stopPropagation()}>
-        {/* 메타 패널은 시트를 통째로 덮는다 — 가려진 쪽은 inert로 탭 순서·스크린 리더에서 뺀다.
-            (transform으로 밀어 둔 것만으로는 Tab이 그대로 들어간다) */}
-        <div className="sheet-head" inert={step === 'meta'}>
-          <div className="sheet-head-row">
-            <button className="sheet-date-btn" onClick={() => setCalOpen(!calOpen)}>
-              <span className="sheet-date-main">{sel.m + 1}월 {sel.d}일 {W[selDow]}요일</span>
-              <span className="sheet-date-suffix">{dateSuffix}</span>
-              <Icon d={CHEVRON_D} size={14} sw={2.4} />
-            </button>
-            <button className="icon-btn sheet-close" onClick={close}>
-              <Icon d={X_D} size={17} sw={2.4} />
-            </button>
-          </div>
+        <div className="sheet-head-row">
+          <h2 className="sheet-title" id={titleId}>
+            {/* 지난 날짜를 골라 놓고 "오늘"이라고 부르지 않는다 — 바로 아래 날짜 줄과 어긋난다 */}
+            {modal.editingId ? '기록 수정' : isToday ? '오늘 기록 남기기' : '기록 남기기'}
+          </h2>
+          <button className="icon-btn sheet-close" onClick={close} aria-label="닫기">
+            <Icon d={X_D} size={17} sw={2.4} />
+          </button>
+        </div>
+        {/* 팝오버는 이 줄을 기준으로 뜬다 — 시트 기준이면 아래로 굴린 뒤에 연 달력이
+            화면 밖(시트 맨 위)에 열린다 */}
+        <div className="sheet-date-wrap">
+          <button className="sheet-date-btn" onClick={() => setCalOpen(!calOpen)} aria-expanded={calOpen}>
+            <span className="sheet-date-main">{sel.m + 1}월 {sel.d}일 {W[selDow]}요일</span>
+            <span className="sheet-date-suffix">{dateSuffix}</span>
+            <Icon d={CHEVRON_D} size={14} sw={2.4} />
+          </button>
           {calOpen && (
             <DatePicker
               sel={sel}
@@ -174,146 +188,135 @@ export function EntryModal({
             />
           )}
         </div>
-        <div className="sheet-scroll" inert={step === 'meta'}>
-          <textarea
-            ref={bodyRef}
-            className="modal-diary"
-            value={modal.body}
-            placeholder={wit.diaryPh}
-            maxLength={PUSH_LIMITS.body}
-            autoFocus
-            onChange={(ev) => {
-              clearTimeout(typeTimer.current);
-              typeTimer.current = setTimeout(() => setTyping(false), 900);
-              setTyping(true);
-              patch({ body: ev.target.value });
-            }}
-          />
+
+        <div className="sheet-label">무엇을 했나요</div>
+        <div className="tag-chips">
+          {TAGS.map((t) => {
+            const on = modal.tags.includes(t);
+            const tm = TAGMETA[t];
+            return (
+              <button
+                key={t}
+                className="tag-chip"
+                aria-pressed={on}
+                style={on ? { background: tm.bg, color: tm.fg, borderColor: tm.fg } : undefined}
+                onClick={() => patch({ tags: toggledTags(modal.tags, t) })}
+              >
+                {t}
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="sheet-label">오늘 만족도</div>
+        {!isOff ? (
+          <div className="star-row">
+            {[1, 2, 3, 4, 5].map((n) => (
+              <button key={n} className="star-btn" aria-label={`${n}점`} onClick={() => patch({ stars: n })}>
+                <svg width={22} height={22} viewBox="0 0 24 24" style={{ display: 'block' }}>
+                  <path d={STAR_D} fill={n <= modal.stars ? '#FFB800' : '#E4E7EC'} />
+                </svg>
+              </button>
+            ))}
+            <span className="star-count" aria-live="polite">
+              {modal.stars ? `${modal.stars} / 5` : '눌러서 선택'}
+            </span>
+          </div>
+        ) : (
+          <span className="off-note">{wit.offNote}</span>
+        )}
+
+        <div className="sheet-label">기록</div>
+        <textarea
+          ref={bodyRef}
+          className="modal-diary"
+          value={modal.body}
+          placeholder={wit.diaryPh}
+          maxLength={PUSH_LIMITS.body}
+          autoFocus
+          onChange={(ev) => {
+            clearTimeout(typeTimer.current);
+            typeTimer.current = setTimeout(() => setTyping(false), 900);
+            setTyping(true);
+            patch({ body: ev.target.value });
+          }}
+        />
+
+        <div className="sheet-label-row">
+          <span className="sheet-label">할 일</span>
           <button
             className="todo-toggle"
+            aria-expanded={todoOpen}
             onClick={() => {
               if (!todoOpen && !modal.todos.length) patch({ todos: [{ t: '', done: false }] });
               setTodoOpen(!todoOpen);
             }}
           >
-            <Icon d={TODO_D} size={13} sw={2.2} />
-            <span>
-              {todoOpen ? '할 일 목록 접기' : modal.todos.length ? `할 일 목록 (${modal.todos.length})` : '할 일 목록 추가'}
-            </span>
+            {todoOpen ? '접기' : modal.todos.length ? `펼치기 (${modal.todos.length})` : '목록 추가'}
           </button>
-          {todoOpen && (
-            <div className="modal-todos">
-              {modal.todos.map((t, i) => (
-                <div className="modal-todo-row" key={i}>
-                  <button
-                    className={'todo-check modal-check' + (t.done ? ' done' : '')}
-                    onClick={() =>
-                      patch({ todos: modal.todos.map((x, j) => (j === i ? { ...x, done: !x.done } : x)) })
-                    }
-                  >
-                    <CheckMark size={12} />
-                  </button>
-                  <input
-                    className={'modal-todo-input' + (t.done ? ' done' : '')}
-                    value={t.t}
-                    placeholder={wit.todoPh}
-                    maxLength={PUSH_LIMITS.todoText}
-                    autoFocus={i === modal.todos.length - 1 && !t.t}
-                    onChange={(ev) =>
-                      patch({ todos: modal.todos.map((x, j) => (j === i ? { ...x, t: ev.target.value } : x)) })
-                    }
-                    onKeyDown={(ev) => {
-                      if (ev.key !== 'Enter') return;
-                      ev.preventDefault();
-                      if (i === modal.todos.length - 1 && t.t.trim() && modal.todos.length < PUSH_LIMITS.todos) {
-                        patch({ todos: [...modal.todos, { t: '', done: false }] });
-                      }
-                    }}
-                  />
-                  <button
-                    className="modal-todo-remove"
-                    onClick={() => patch({ todos: modal.todos.filter((_, j) => j !== i) })}
-                  >
-                    <Icon d={X_D} size={13} sw={2.4} />
-                  </button>
-                </div>
-              ))}
-              {modal.todos.length < PUSH_LIMITS.todos && (
-                <button className="add-todo" onClick={() => patch({ todos: [...modal.todos, { t: '', done: false }] })}>
-                  <Icon d={PLUS_D} size={13} sw={2.4} />
-                  <span>항목 추가</span>
+        </div>
+        {todoOpen && (
+          <div className="modal-todos">
+            {modal.todos.map((t, i) => (
+              <div className="modal-todo-row" key={i}>
+                <button
+                  className={'todo-check modal-check' + (t.done ? ' done' : '')}
+                  aria-label={t.done ? '완료 해제' : '완료로 표시'}
+                  onClick={() =>
+                    patch({ todos: modal.todos.map((x, j) => (j === i ? { ...x, done: !x.done } : x)) })
+                  }
+                >
+                  <CheckMark size={12} />
                 </button>
-              )}
-            </div>
-          )}
-        </div>
-        <div className="sheet-foot" inert={step === 'meta'}>
-          <span className="draft-note" style={{ opacity: hasContent ? 1 : 0 }}>
-            {hasContent ? (typing ? '쓰는 중…' : '초안 저장됨') : ''}
-          </span>
-          <button
-            className={'next-btn' + (canNext ? ' ready' : '')}
-            onClick={() => { if (canNext) { setStep('meta'); setCalOpen(false); } }}
-          >
-            <span>다음</span>
-            <Icon d={FWD_D} size={15} sw={2.4} />
-          </button>
-        </div>
-        <div className={'meta-panel' + (step === 'meta' ? ' on' : '')} inert={step !== 'meta'}>
-          <div className="meta-head">
-            <button className="back-btn" ref={backRef} onClick={() => setStep('write')}>
-              <Icon d={BACK_D} size={15} sw={2.4} />
-              <span>다시 쓰기</span>
-            </button>
-            <span className="sheet-date-suffix">{sel.m + 1}월 {sel.d}일 {W[selDow]}요일</span>
-          </div>
-          <div className="meta-scroll">
-            <div className="meta-excerpt">{excerpt}</div>
-            <div className="meta-label tags">
-              <Icon d={TAGSEC_D} size={13} sw={2} />
-              <span>오늘은 어떤 공부였나요?</span>
-              <span className="meta-hint">여러 개 고를 수 있어요</span>
-            </div>
-            <div className="tag-chips">
-              {TAGS.map((t) => {
-                const on = modal.tags.includes(t);
-                const tm = TAGMETA[t];
-                return (
-                  <button
-                    key={t}
-                    className="tag-chip"
-                    style={on ? { background: tm.bg, color: tm.fg, borderColor: tm.fg } : undefined}
-                    onClick={() => patch({ tags: toggledTags(modal.tags, t) })}
-                  >
-                    <Icon d={tm.icon} size={15} sw={2} />
-                    <span>{t}</span>
-                  </button>
-                );
-              })}
-            </div>
-            <div className="meta-label stars">
-              <Icon d={STAR_D} size={13} sw={2} />
-              <span>오늘의 만족도</span>
-            </div>
-            {!isOff ? (
-              <div className="star-row">
-                {[1, 2, 3, 4, 5].map((n) => (
-                  <button key={n} className="star-btn" onClick={() => patch({ stars: n })}>
-                    <svg width={34} height={34} viewBox="0 0 24 24" style={{ display: 'block' }}>
-                      <path d={STAR_D} fill={n <= modal.stars ? '#FFB800' : '#E4E7EC'} />
-                    </svg>
-                  </button>
-                ))}
+                <input
+                  className={'modal-todo-input' + (t.done ? ' done' : '')}
+                  value={t.t}
+                  placeholder={wit.todoPh}
+                  maxLength={PUSH_LIMITS.todoText}
+                  autoFocus={i === modal.todos.length - 1 && !t.t}
+                  onChange={(ev) =>
+                    patch({ todos: modal.todos.map((x, j) => (j === i ? { ...x, t: ev.target.value } : x)) })
+                  }
+                  onKeyDown={(ev) => {
+                    if (ev.key !== 'Enter') return;
+                    ev.preventDefault();
+                    if (i === modal.todos.length - 1 && t.t.trim() && modal.todos.length < PUSH_LIMITS.todos) {
+                      patch({ todos: [...modal.todos, { t: '', done: false }] });
+                    }
+                  }}
+                />
+                <button
+                  className="modal-todo-remove"
+                  aria-label="이 할 일 지우기"
+                  onClick={() => patch({ todos: modal.todos.filter((_, j) => j !== i) })}
+                >
+                  <Icon d={X_D} size={13} sw={2.4} />
+                </button>
               </div>
-            ) : (
-              <span className="off-note">{wit.offNote}</span>
+            ))}
+            {modal.todos.length < PUSH_LIMITS.todos && (
+              <button className="add-todo" onClick={() => patch({ todos: [...modal.todos, { t: '', done: false }] })}>
+                <Icon d={PLUS_D} size={13} sw={2.4} />
+                <span>항목 추가</span>
+              </button>
             )}
           </div>
-          <div className="meta-foot">
-            <button className={'submit' + (ready ? ' ready' : '')} onClick={submit}>
-              {modal.editingId ? wit.editSubmit : wit.submit}
-            </button>
-          </div>
+        )}
+
+        <div className="sheet-foot">
+          {/* 초안 표시와 "왜 저장이 안 되는지"가 한 자리를 나눠 쓴다 — 둘 다 버튼 옆 잔글씨고,
+              동시에 할 말이 있는 상황이 아니다(저장이 막혀 있으면 그게 먼저다) */}
+          <span className={'draft-note' + (showBlocked ? ' warn' : '')} role="status" aria-live="polite">
+            {showBlocked ? blocked : hasContent ? (typing ? '쓰는 중…' : '초안 저장됨') : ''}
+          </span>
+          <button className="cancel-btn" onClick={close}>취소</button>
+          <button
+            className={'submit' + (canSave ? ' ready' : '')}
+            aria-disabled={!canSave}
+            onClick={() => { if (canSave) submit(); else setTried(true); }}
+          >
+            {modal.editingId ? wit.editSubmit : wit.submit}
+          </button>
         </div>
       </div>
     </div>

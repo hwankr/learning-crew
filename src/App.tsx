@@ -244,6 +244,7 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
       deletedAt: null,
     };
     const orig = modal.editingId ? store.getById(modal.editingId) : undefined;
+    const isEdit = !!orig && !orig.deletedAt;
     if (orig && !orig.deletedAt) {
       store.upsert({ ...orig, ...common });
     } else {
@@ -259,6 +260,9 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
     }
     removeDraft(draftKey(modal.editingId)); // 제출됐으니 초안은 소임을 다했다
     setModal(EMPTY_MODAL);
+    /* 시트가 닫히면 방금 저장한 기록이 화면 어디에 놓였는지 바로 안 보인다 — 지난 날짜로
+       남기면 오늘 묶음에 없고, 캘린더 탭이면 선택일이 그 날이 아닐 수도 있다 */
+    showToast(isEdit ? wit.edited : common.day === todayKey ? wit.savedToday : wit.savedPast);
   };
 
   const actions = {
@@ -397,6 +401,7 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
             store.remove(pendingDel.id);
             removeDraft(draftKey(pendingDel.id)); // 지운 기록의 수정 초안도 함께
             setDelId(null);
+            showToast(wit.deleted);
           }}
         />
       )}

@@ -458,42 +458,45 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 .footer { text-align: center; font-size: 12.5px; color: #9AA1AD; margin-top: 34px; }
 .demo-note { font-size: 11.5px; color: #C3C9D2; margin-top: 8px; }
 
-/* ---------- 기록 모달 ---------- */
+/* ---------- 기록 작성/수정 시트 ---------- */
 .overlay {
-  position: fixed; inset: 0; background: rgba(22, 24, 29, 0.45);
+  position: fixed; inset: 0; background: rgba(22, 24, 29, 0.32);
   backdrop-filter: blur(4px); z-index: 50;
   display: flex; align-items: flex-end; justify-content: center;
   animation: rc-fade 160ms cubic-bezier(0.16, 1, 0.3, 1);
 }
+/* 시트는 통째로 하나가 굴러간다 — 머리·바닥을 고정하고 가운데만 굴리면 460px 시트에서
+   정작 굴러가는 자리가 얼마 안 남는다(단계가 사라지면서 내용이 한 장으로 길어졌다). */
 .sheet {
   width: 100%; max-width: 540px; background: #FFFFFF;
-  border-radius: 20px 20px 0 0; padding: 0; margin: 0;
-  box-shadow: 0 28px 64px rgba(22, 24, 29, 0.16);
-  /* 짧은 화면(가로 폰)에서 min-height가 뷰포트를 넘으면 상단·닫기 버튼이 밀려난다 —
-     뷰포트에 맞춰 낮아지게 min()으로 묶는다 (dvh 미지원 브라우저는 vh 폴백) */
-  min-height: min(460px, calc(100vh - 14px));
+  border-radius: 20px 20px 0 0; padding: 20px; margin: 0;
+  box-shadow: 0 24px 60px rgba(22, 24, 29, 0.28);
+  /* dvh 미지원 브라우저는 vh 폴백 */
   max-height: calc(100vh - 14px);
-  min-height: min(460px, calc(100dvh - 14px));
   max-height: calc(100dvh - 14px);
-  display: flex; flex-direction: column; overflow: hidden; position: relative;
+  overflow-y: auto; position: relative;
   animation: rc-pop 220ms cubic-bezier(0.16, 1, 0.3, 1);
 }
-.sheet-head { flex: none; position: relative; padding: 18px 26px 6px; }
-.sheet-head-row { display: flex; align-items: center; justify-content: space-between; }
+.sheet-head-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.sheet-title {
+  margin: 0; font-size: 18px; font-weight: 800; letter-spacing: -0.02em; color: #16181D;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.sheet-close { width: 34px; height: 34px; flex: none; border-radius: 50%; margin: -6px -6px -6px 0; }
+.sheet-close:hover { background: #F1F3F6; color: #16181D; }
+.sheet-date-wrap { position: relative; margin-top: 2px; }
 .sheet-date-btn {
   display: flex; align-items: center; gap: 6px; background: none; border: none;
-  cursor: pointer; padding: 6px 10px; margin: -6px 0 0 -10px; border-radius: 10px;
+  cursor: pointer; padding: 6px 10px; margin-left: -10px; border-radius: 10px;
   color: #9AA1AD;
 }
 .sheet-date-btn:hover { background: #F1F3F6; }
-.sheet-date-main { font-size: 14px; font-weight: 800; color: #16181D; letter-spacing: -0.01em; }
-.sheet-date-suffix { font-size: 12.5px; font-weight: 700; color: #9AA1AD; }
-.sheet-close { color: #9AA1AD; margin: -6px -8px 0 0; }
-.sheet-close:hover { background: #F1F3F6; color: #16181D; }
+.sheet-date-main { font-size: 13px; font-weight: 700; color: #4E555F; letter-spacing: -0.01em; }
+.sheet-date-suffix { font-size: 12px; font-weight: 700; color: #9AA1AD; }
 
-/* 날짜 선택 팝오버 */
+/* 날짜 선택 팝오버 — 시트가 아니라 날짜 줄을 기준으로 뜬다 */
 .cal-pop {
-  position: absolute; top: 50px; left: 26px; width: 300px;
+  position: absolute; top: calc(100% + 2px); left: 0; width: 300px; max-width: 100%;
   background: #FFFFFF; border: 1px solid #F1F3F6; border-radius: 16px;
   box-shadow: 0 12px 40px rgba(22, 24, 29, 0.18); padding: 14px; z-index: 20;
   animation: rc-pop 180ms cubic-bezier(0.16, 1, 0.3, 1);
@@ -521,29 +524,68 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 .cal-pop-day.today .cal-pop-num { background: #FFB800; color: #16181D; font-weight: 800; }
 .cal-pop-day.future .cal-pop-num { color: #CDD2DB; }
 
-/* 1단계 — 쓰기 */
-.sheet-scroll { flex: 1; overflow: auto; padding: 0 26px 8px; }
+/* 섹션 라벨 — 오른쪽에 곁들이는 버튼(할 일 접기)이 붙는 줄은 -row */
+.sheet-label {
+  display: block; font-size: 12px; font-weight: 800; color: #9AA1AD;
+  letter-spacing: 0.02em; margin-top: 20px;
+}
+.sheet-label-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 20px;
+}
+.sheet-label-row .sheet-label { margin-top: 0; }
+
+.tag-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
+.tag-chip {
+  display: flex; align-items: center; height: 36px; padding: 0 14px;
+  border-radius: 999px; font-size: 13px; font-weight: 700; cursor: pointer;
+  border: 1.5px solid #E4E7EC; background: #FFFFFF; color: #6B7280;
+  transition: background 120ms, color 120ms, border-color 120ms;
+}
+.tag-chip:active { transform: scale(0.97); }
+
+.star-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
+.star-btn {
+  display: flex; align-items: center; justify-content: center; width: 34px; height: 34px;
+  background: none; border: none; border-radius: 10px; cursor: pointer; padding: 0;
+  transition: background 120ms;
+}
+.star-btn:hover { background: #FFF9E6; }
+.star-btn:active { transform: scale(0.9); }
+.star-btn path { transition: fill 120ms; }
+.star-count { font-size: 12px; font-weight: 700; color: #9AA1AD; margin-left: 4px; white-space: nowrap; }
+.off-note { display: block; font-size: 13px; color: #6B7280; margin-top: 9px; }
+
 .modal-diary {
-  width: 100%; border: none; outline: none; resize: none; background: none; display: block;
-  font-size: 17px; line-height: 1.8; letter-spacing: -0.01em; color: #23262E;
-  min-height: 190px; padding: 8px 0 4px; caret-color: #FFB800;
+  display: block; width: 100%; margin-top: 9px; padding: 12px 14px;
+  border: 1.5px solid #E4E7EC; border-radius: 12px; background: #FFFFFF;
+  font-size: 14px; line-height: 1.6; color: #23262E;
+  /* 높이는 내용에 맞춰 스크립트가 다시 잡는다 — 여기 min-height는 빈 칸의 바닥이다 */
+  min-height: 104px; resize: none; overflow: hidden; outline: none; caret-color: #FFB800;
+  transition: border-color 120ms;
 }
-/* 짧은 화면(가로 폰): 본문 최소 높이를 줄이고 날짜 팝오버가 시트 안에서 스크롤되게 */
+.modal-diary:focus { border-color: #FFB800; }
+/* 짧은 화면(가로 폰): 빈 본문 칸을 낮추고, 날짜 팝오버는 제 안에서 굴러가게 */
 @media (max-height: 480px) {
-  .modal-diary { min-height: 96px; }
-  .cal-pop { max-height: calc(100dvh - 90px); overflow: auto; }
+  .modal-diary { min-height: 72px; }
+  .cal-pop { max-height: calc(100dvh - 130px); overflow: auto; }
 }
+
 .todo-toggle {
-  display: flex; align-items: center; gap: 7px; background: none; border: none; cursor: pointer;
-  padding: 8px 0; font-size: 13px; font-weight: 700; color: #9AA1AD; width: fit-content;
+  background: none; border: none; cursor: pointer; padding: 4px 8px; margin-right: -8px;
+  border-radius: 8px; font-size: 12px; font-weight: 700; color: #6B7280;
 }
-.todo-toggle:hover { color: #16181D; }
-.modal-todos { display: flex; flex-direction: column; gap: 1px; padding-bottom: 10px; }
+.todo-toggle:hover { background: #F1F3F6; color: #16181D; }
+/* 본문 칸과 같은 테두리로 묶는다 — 줄 하나짜리 입력이 여럿이라 테두리가 없으면
+   어디까지가 할 일 목록인지가 안 보인다 */
+.modal-todos {
+  display: flex; flex-direction: column; margin-top: 9px; padding: 4px 10px 6px;
+  border: 1.5px solid #E4E7EC; border-radius: 12px;
+}
 .modal-todo-row { display: flex; align-items: center; gap: 9px; }
-.modal-check { width: 21px; height: 21px; border-radius: 7px; cursor: pointer; }
+.modal-check { width: 21px; height: 21px; flex: none; border-radius: 7px; cursor: pointer; }
 .modal-todo-input {
   flex: 1; min-width: 0; border: none; outline: none; background: none;
-  font-size: 14px; padding: 8px 0; color: #23262E; caret-color: #FFB800;
+  font-size: 13.5px; padding: 9px 0; color: #23262E; caret-color: #FFB800;
 }
 .modal-todo-input.done { color: #9AA1AD; text-decoration: line-through; }
 .modal-todo-remove {
@@ -554,71 +596,30 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 .modal-todo-remove:hover { background: #F1F3F6; color: #6B7280; }
 .add-todo {
   display: flex; align-items: center; gap: 7px; background: none; border: none; cursor: pointer;
-  padding: 8px 0; font-size: 13px; font-weight: 700; color: #9AA1AD; width: fit-content;
+  padding: 7px 0 3px; font-size: 12.5px; font-weight: 700; color: #9AA1AD; width: fit-content;
 }
 .add-todo:hover { color: #16181D; }
 
-.sheet-foot {
-  flex: none; display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  padding: 12px 26px 18px; border-top: 1px solid #F1F3F6; background: #FFFFFF;
+.sheet-foot { display: flex; align-items: center; gap: 8px; margin-top: 20px; }
+/* 좁은 폭에서는 잔글씨가 먼저 줄어든다 — 저장 버튼이 눌리는 폭을 잃는 것보다 낫다 */
+.draft-note {
+  flex: 0 1 auto; min-width: 0; font-size: 11.5px; font-weight: 600; color: #C3C9D2;
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis; transition: color 160ms;
 }
-.draft-note { font-size: 11.5px; color: #C3C9D2; transition: opacity 240ms; }
-.next-btn {
-  display: flex; align-items: center; gap: 6px; height: 46px; padding: 0 24px;
-  border: none; border-radius: 999px; background: #F1F3F6; color: #9AA1AD;
-  font-size: 14.5px; font-weight: 800; cursor: pointer;
-  transition: background 160ms, color 160ms;
+.draft-note.warn { color: #D3352A; }
+.cancel-btn {
+  flex: none; height: 46px; padding: 0 18px; border: 1.5px solid #E4E7EC; border-radius: 12px;
+  background: #FFFFFF; color: #4E555F; font-size: 14px; font-weight: 700; cursor: pointer;
+  white-space: nowrap; transition: background 120ms;
 }
-.next-btn.ready { background: #16181D; color: #FFFFFF; }
-.next-btn:active { transform: scale(0.98); }
-
-/* 2단계 — 태그·만족도 패널 */
-.meta-panel {
-  position: absolute; inset: 0; background: #FFFFFF;
-  display: flex; flex-direction: column; z-index: 30;
-  transform: translateY(102%);
-  transition: transform 300ms cubic-bezier(0.16, 1, 0.3, 1);
-}
-.meta-panel.on { transform: translateY(0); }
-.meta-head { flex: none; display: flex; align-items: center; justify-content: space-between; padding: 18px 26px 6px; }
-.back-btn {
-  display: flex; align-items: center; gap: 6px; background: none; border: none; cursor: pointer;
-  padding: 6px 10px; margin: -6px 0 0 -10px; border-radius: 10px;
-  font-size: 13.5px; font-weight: 700; color: #6B7280;
-}
-.back-btn:hover { background: #F1F3F6; color: #16181D; }
-.meta-scroll { flex: 1; overflow: auto; padding: 6px 26px 8px; }
-.meta-excerpt {
-  font-size: 13.5px; color: #9AA1AD; line-height: 1.5;
-  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
-  padding-bottom: 14px; border-bottom: 1px solid #F1F3F6;
-}
-.meta-label { display: flex; align-items: center; gap: 6px; font-size: 13px; color: #9AA1AD; }
-.meta-label.tags { margin: 18px 0 10px; }
-.meta-hint { font-size: 11.5px; color: #B6BCC6; font-weight: 600; }
-.meta-label.stars { margin: 22px 0 6px; }
-.tag-chips { display: flex; flex-wrap: wrap; gap: 8px; }
-.tag-chip {
-  display: flex; align-items: center; gap: 6px; height: 42px; padding: 0 15px;
-  border-radius: 999px; font-size: 13.5px; font-weight: 700; cursor: pointer;
-  border: 1.5px solid #E4E7EC; background: #FFFFFF; color: #6B7280;
-  transition: background 120ms, color 120ms, border-color 120ms;
-}
-.tag-chip:active { transform: scale(0.97); }
-.tag-chip svg { flex: none; display: block; }
-.star-row { display: flex; align-items: center; min-width: 0; }
-.star-btn { display: flex; align-items: center; justify-content: center; width: 48px; height: 48px; background: none; border: none; cursor: pointer; padding: 0; }
-.star-btn:active { transform: scale(0.85); }
-.star-btn path { transition: fill 120ms; }
-.off-note { display: block; font-size: 13px; color: #6B7280; padding: 14px 0; }
-.meta-foot { flex: none; padding: 12px 26px 18px; border-top: 1px solid #F1F3F6; }
+.cancel-btn:hover { background: #F8F9FB; }
 .submit {
-  width: 100%; height: 52px; border: none; border-radius: 14px;
-  background: #F1F3F6; color: #9AA1AD; font-size: 15.5px; font-weight: 800; cursor: pointer;
-  box-shadow: none;
-  transition: background 160ms, color 160ms, box-shadow 160ms;
+  flex: 1; min-width: 0; height: 46px; border: none; border-radius: 12px;
+  background: #F1F3F6; color: #9AA1AD; font-size: 14px; font-weight: 800; cursor: pointer;
+  white-space: nowrap; transition: background 160ms, color 160ms;
 }
-.submit.ready { background: #FFB800; color: #16181D; box-shadow: 0 8px 24px rgba(255, 184, 0, 0.32); }
+.submit.ready { background: #FFB800; color: #16181D; }
+.submit.ready:hover { background: #F5B000; }
 .submit:active { transform: scale(0.98); }
 
 /* ---------- 삭제 확인 ---------- */
@@ -977,15 +978,13 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
   /* 격자를 훑는 동안 선택일이 따라 붙는다. 상단 바가 sticky라 그 아래(65px)부터 24px 띄운다 —
      디자인의 top:24는 자체 스크롤 프레임 기준이라 그대로 쓰면 바 뒤로 들어간다. */
   .cal-sel { position: sticky; top: 89px; margin-top: 0; min-height: 520px; }
-  .overlay { align-items: center; }
-  /* 와이드 규칙이 모바일의 뷰포트 제한을 소스 순서로 덮으므로 여기서도 높이를 뷰포트로
-     묶는다 — min-height: 540px 그대로면 900×480(가로 태블릿)에서 시트가 540px로 서서
-     top=-30/bottom=510이 되고 닫기 버튼과 푸터가 화면 밖으로 나간다.
-     min-height를 max-height와 같은 식(88vh)으로 잡아 둘이 서로 싸우지 않게 했다. */
+  /* 시트는 화면 가운데 뜬다. 높이는 오버레이 안쪽(패딩 24px 뺀 자리)까지만 — 900×480
+     (가로 태블릿)처럼 낮은 화면에서 시트가 제 키대로 서면 닫기 버튼과 저장 줄이
+     화면 밖으로 나간다. */
+  .overlay { align-items: center; padding: 24px; }
   .sheet {
-    max-width: 640px; border-radius: 24px; margin: 20px;
-    min-height: min(540px, 88vh); max-height: min(88vh, 760px);
-    min-height: min(540px, 88dvh); max-height: min(88dvh, 760px);
+    width: 460px; max-width: 100%; border-radius: 20px; padding: 26px;
+    max-height: 100%;
   }
 }
 

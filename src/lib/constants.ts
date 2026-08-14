@@ -125,6 +125,10 @@ export interface CopySet {
   feedEmptyHint: string;
   notiReadAll: string; // 알림 모두 읽음 토스트
   offNote: string;
+  savedToday: string; // 기록 저장 토스트 — 오늘 날짜
+  savedPast: string; // 기록 저장 토스트 — 지난 날짜
+  edited: string; // 기록 수정 토스트
+  deleted: string; // 기록 삭제 토스트
   delAsk: string; // 기록 삭제 확인 물음
   delNote: string; // 되돌릴 수 없다는 안내
   footer: string;
@@ -142,11 +146,14 @@ export const COPY: CopySet = {
   greeting: '오늘도 조용히 성장 중',
   cta: '기록 남기기',
   diaryPh: '오늘 하루 기록하기', todoPh: '할 일 내용',
-  submit: '기록 남기기', editSubmit: '수정 저장',
+  // 시트를 여는 버튼(cta)과 시트 안에서 저장하는 버튼은 같은 말이면 안 된다
+  submit: '기록 저장', editSubmit: '수정 저장',
   empty: '아직 안 옴', emptyMe: '오늘 첫 기록을 남겨보세요',
   feedEmpty: '아직 기록이 없어요', feedEmptyHint: '오늘 기록 남기기로 첫 줄을 시작해보세요',
   notiReadAll: '알림을 모두 읽음으로 표시했어요',
   offNote: '쉬는 날은 별점 없이 기록돼요.',
+  savedToday: '오늘 기록을 남겼어요', savedPast: '기록을 남겼어요',
+  edited: '기록을 수정했어요', deleted: '기록을 삭제했어요',
   delAsk: '이 기록을 지울까요?', delNote: '지운 기록은 되돌릴 수 없어요.',
   footer: '오늘도 크루 중 누군가는 공부를 합니다.',
   count: (n) => `${MEMBERS.length}명 중 ${n}명 도장 찍음`,
