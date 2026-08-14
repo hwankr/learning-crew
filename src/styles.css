@@ -27,17 +27,16 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 @keyframes rc-fade { from { opacity: 0; } to { opacity: 1; } }
 
 /* ---------- 셸 (상단 바 + 접히는 크루 패널) ---------- */
+/* 상단 바는 ≥900px에서만 그려진다(좁은 화면은 하단 탭바 셸) — 여기 값도 그 폭 기준이다 */
 .screen { min-height: 100vh; background: #FFFFFF; }
 /* 스크롤해도 남는 줄 — 탭·기록 버튼이 화면 밖으로 나가면 긴 피드 한가운데서 갈 곳이 없어진다 */
 .topbar { position: sticky; top: 0; z-index: 10; background: #FFFFFF; border-bottom: 1px solid #F1F3F6; }
-/* 좁은 화면에서는 여덟 요소가 한 줄에 못 선다 — 줄을 바꿔 받아 쓸 수 있는 상태만 유지한다 */
 .topbar-inner {
-  display: flex; align-items: center; flex-wrap: wrap; gap: 10px;
-  max-width: 1512px; margin: 0 auto; padding: 10px 20px;
+  display: flex; align-items: center; gap: 16px;
+  max-width: 1512px; margin: 0 auto; padding: 13px 28px;
 }
-/* 좁은 화면에는 접을 패널이 없다(본문 위에 그냥 붙어 있다) — 버튼도 그때는 숨긴다 */
 .panel-btn {
-  display: none; align-items: center; gap: 6px; flex: none; height: 36px; padding: 0 12px;
+  display: flex; align-items: center; gap: 6px; flex: none; height: 36px; padding: 0 12px;
   border: 1px solid #E4E7EC; border-radius: 10px; background: #FFFFFF; color: #4E555F;
   font-size: 11.5px; font-weight: 700; white-space: nowrap; cursor: pointer;
   transition: background 160ms ease, color 160ms ease;
@@ -46,7 +45,8 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 /* 테두리 폭은 투명으로 남긴다 — 토글할 때 뒤 요소가 2px씩 흔들리지 않게 하기 위해서다 */
 .panel-btn.on { border-color: transparent; background: transparent; color: #6B7280; }
 .wordmark { font-size: 18px; font-weight: 800; letter-spacing: -0.02em; white-space: nowrap; flex: none; }
-.seg { display: flex; gap: 3px; flex: none; padding: 3px; border-radius: 11px; background: #F1F3F6; }
+/* 프로토타입은 워드마크와 세그먼트 사이만 기본 gap보다 6px 더 벌린다. */
+.seg { display: flex; gap: 3px; flex: none; margin-left: 6px; padding: 3px; border-radius: 11px; background: #F1F3F6; }
 .seg-btn {
   display: flex; align-items: center; justify-content: center; height: 32px; padding: 0 16px;
   border: none; border-radius: 9px; background: transparent; color: #6B7280;
@@ -65,12 +65,78 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 .top-cta:active { transform: scale(0.97); }
 .top-av { display: flex; flex: none; border: 2px solid #FFFFFF; border-radius: 50%; }
 
-.body { padding: 22px 20px 40px; }
+/* 스크롤 영역 — 좁은 화면에서는 아래쪽에 탭바(66px)와 떠 있는 기록 버튼이 겹쳐 뜬다.
+   그만큼을 여백으로 비워 두지 않으면 마지막 카드가 영영 손에 안 닿는다.
+   with-fab은 좁은 셸에서만 붙는다(넓은 셸은 이 클래스를 아예 받지 않는다). */
+.body { padding: 22px 20px calc(92px + env(safe-area-inset-bottom)); }
+.body.with-fab { padding-bottom: calc(148px + env(safe-area-inset-bottom)); }
 .panel-col { min-width: 0; }
 .panel-inner { min-width: 0; }
-.main-col { min-width: 0; margin-top: 28px; }
+.main-col { min-width: 0; }
 /* 피드는 사이드바 없이 본문만 남는다 — 한 줄이 너무 길어지면 읽는 눈이 줄을 잃는다 */
 .feed-wrap { max-width: 720px; margin: 0 auto; }
+
+/* ---------- 모바일 셸 (하단 탭바 + 떠 있는 기록 버튼) ---------- */
+/* 홈 머리 — 상단 바가 없는 셸에서 여기가 유일한 이름표다.
+   아래 체크인이 스스로 16px을 띄우므로 여기서는 나머지 4px만 보탠다(합쳐서 디자인의 20px). */
+.mhome-head { margin-bottom: 4px; }
+.mhome-title { font-size: 21px; font-weight: 800; letter-spacing: -0.02em; line-height: 1.2; }
+.mhome-sub { font-size: 12.5px; color: #6B7280; margin-top: 5px; }
+
+/* 주소창이 나타났다 사라지는 브라우저·홈 화면 앱 모두에서 자리가 흔들리지 않게 fixed로 둔다.
+   높이는 66px 그대로 두고 안전 영역만 아래로 덧대 준다(탭이 홈 인디케이터에 깔리지 않게). */
+.tabbar {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 15;
+  display: flex; align-items: stretch; height: 66px;
+  padding-bottom: env(safe-area-inset-bottom);
+  box-sizing: content-box;
+  border-top: 1px solid #F1F3F6; border-radius: 16px 16px 0 0; background: #FFFFFF;
+}
+.tab {
+  flex: 1; min-width: 0; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 4px;
+  border: none; background: none; padding: 0; cursor: pointer;
+  color: #B4BAC4; transition: color 160ms ease;
+}
+.tab.on { color: #16181D; }
+.tab-label-row { display: flex; align-items: center; gap: 5px; }
+.tab-label { font-size: 11px; font-weight: 600; color: #9AA1AD; transition: color 160ms ease; }
+.tab.on .tab-label { font-weight: 800; color: #16181D; }
+.tab-badge {
+  display: flex; align-items: center; justify-content: center; flex: none;
+  min-width: 16px; height: 16px; padding: 0 4px; border-radius: 999px;
+  background: #FFB800; color: #16181D; font-size: 9.5px; font-weight: 800;
+}
+
+@keyframes rainbow-spin { from { background-position: 0% 50%; } to { background-position: 200% 50%; } }
+/* 그라디언트 테두리 — border로는 그라디언트를 못 주므로 2px 패딩을 두른 바깥 레이어가 맡는다 */
+.fab {
+  position: fixed; right: 18px; bottom: calc(82px + env(safe-area-inset-bottom)); z-index: 16;
+  padding: 2px; border-radius: 999px;
+  background: linear-gradient(90deg, #FFD666 0%, #FFB000 50%, #FFD666 100%);
+  box-shadow: 0 8px 20px rgba(150, 105, 0, 0.22);
+}
+/* 오늘 몫을 끝낸 뒤 — 흐르는 무지개로 바뀌지만 눌리는 것은 그대로다(기록을 더 남길 수 있다) */
+.fab.done {
+  background: linear-gradient(90deg, #FBBF24 0%, #F472B6 35%, #FDE047 70%, #FBBF24 100%);
+  background-size: 200% 100%;
+  animation: rainbow-spin 3.5s linear infinite;
+  box-shadow: 0 8px 20px rgba(251, 191, 36, 0.34);
+}
+.fab-btn {
+  display: flex; align-items: center; gap: 8px; height: 46px; padding: 0 20px;
+  border: none; border-radius: 999px; background: #FFFFFF; color: #16181D;
+  font-size: 13px; font-weight: 800; letter-spacing: -0.01em; cursor: pointer;
+  transition: transform 120ms ease;
+}
+.fab-btn:active { transform: scale(0.95); }
+.fab-ico {
+  display: flex; align-items: center; justify-content: center; flex: none;
+  font-size: 15px; line-height: 1; color: #E8A100; transition: transform 160ms ease;
+}
+.fab-btn:hover .fab-ico { transform: scale(1.2); }
+.fab.done .fab-btn:hover .fab-ico { transform: scale(1.25); }
+.fab-label { white-space: nowrap; }
 
 /* ---------- 체크인 (지금 상태) ---------- */
 .chk-cap { display: flex; align-items: center; gap: 7px; margin-top: 16px; margin-bottom: 9px; }
@@ -734,10 +800,11 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 .noti-row.compact .noti-sub-line, .noti-row.compact .noti-sub-quote { font-size: 12px; }
 .noti-row.compact .noti-expand { height: 22px; font-size: 11px; }
 
-.noti-page { padding-top: 4px; }
-.noti-head { display: flex; align-items: center; gap: 12px; padding-top: 8px; }
-.noti-title { flex: 1; min-width: 0; font-size: 27px; font-weight: 800; letter-spacing: -0.02em; }
-.noti-head .icon-btn { width: 44px; height: 44px; border-radius: 50%; color: #4E555F; }
+/* 전체 화면 내역은 좁은 화면(알림 탭) 전용이다 — 데스크톱은 벨 드롭다운이 대신한다.
+   제목은 모바일 홈 머리(21px)와 같은 치수로 맞춘다: 탭마다 머리 크기가 튀면 안 된다. */
+.noti-head { display: flex; align-items: center; gap: 12px; }
+.noti-title { flex: 1; min-width: 0; font-size: 21px; font-weight: 800; letter-spacing: -0.02em; }
+.noti-head .icon-btn { border-radius: 50%; color: #4E555F; }
 .noti-summary { display: flex; align-items: center; gap: 10px; margin-top: 2px; }
 .noti-summary-text { flex: 1; min-width: 0; font-size: 12.5px; color: #6B7280; }
 .noti-readall {
@@ -917,11 +984,13 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 
 /* ---------- 토스트 ---------- */
 @keyframes toast-in { from { opacity: 0; transform: translate(-50%, 8px); } to { opacity: 1; transform: translate(-50%, 0); } }
-/* 모달 오버레이(z 50)보다 위 — 시트 안에서 낸 토스트도 가려지면 안 된다 */
+/* 모달 오버레이(z 50)보다 위 — 시트 안에서 낸 토스트도 가려지면 안 된다.
+   좁은 화면에서는 탭바(66px) 위로 띄운다: 바닥에 붙으면 탭 라벨을 덮는다. */
 .toast {
-  position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); z-index: 60;
-  max-width: calc(100vw - 32px); padding: 11px 18px; border-radius: 999px;
-  background: #16181D; color: #FFFFFF; font-size: 13px; font-weight: 700;
+  position: fixed; left: 50%; bottom: calc(84px + env(safe-area-inset-bottom));
+  transform: translateX(-50%); z-index: 60;
+  max-width: calc(100vw - 32px); padding: 10px 16px; border-radius: 999px;
+  background: #16181D; color: #FFFFFF; font-size: 12.5px; font-weight: 700;
   overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
   box-shadow: 0 10px 24px rgba(22, 24, 29, 0.28);
   animation: toast-in 180ms ease-out;
@@ -929,10 +998,8 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 
 /* ---------- 와이드(≥900px) 레이아웃 ---------- */
 @media (min-width: 900px) {
-  .topbar-inner { flex-wrap: nowrap; gap: 16px; padding: 13px 28px; }
-  /* 프로토타입은 워드마크와 세그먼트 사이만 기본 gap보다 6px 더 벌린다. */
-  .seg { margin-left: 6px; }
-  .panel-btn { display: flex; }
+  /* 탭바가 없으니 바닥 여백도, 그 위로 띄우던 토스트도 원래 자리로 돌아온다 */
+  .toast { bottom: 28px; padding: 11px 18px; font-size: 13px; }
   /* 패널 열은 접혀도 마운트를 유지하고 폭만 0으로 닫는다 — 열 때마다 다시 그리면
      체크인 카드의 등장 애니메이션이 매번 처음부터 돈다.
      안쪽 래퍼는 296px 고정: 열 폭을 따라 줄어들면 애니메이션 내내 내용이 찌그러진다. */
@@ -955,7 +1022,7 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
   }
   .panel-inner { width: 296px; padding-right: 28px; }
   .main-col {
-    margin-top: 0; padding-left: 0; border-left: 1px solid transparent;
+    padding-left: 0; border-left: 1px solid transparent;
     transition: padding-left 300ms cubic-bezier(0.4, 0, 0.2, 1), border-color 300ms ease;
   }
   .body.open .main-col { padding-left: 36px; border-left-color: #F1F3F6; }

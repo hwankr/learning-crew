@@ -115,6 +115,7 @@ export function fmtElapsed(sinceISO: string, now: number): string {
 export interface CopySet {
   greeting: string; // 좁은 화면 홈의 인사 줄
   cta: string;
+  ctaDone: string; // 오늘 이미 기록한 뒤의 떠 있는 버튼 — 눌러서 한 번 더 쓸 수 있다
   diaryPh: string;
   todoPh: string;
   submit: string;
@@ -145,6 +146,7 @@ export interface CopySet {
 export const COPY: CopySet = {
   greeting: '오늘도 조용히 성장 중',
   cta: '기록 남기기',
+  ctaDone: '오늘 기록 완료!',
   diaryPh: '오늘 하루 기록하기', todoPh: '할 일 내용',
   // 시트를 여는 버튼(cta)과 시트 안에서 저장하는 버튼은 같은 말이면 안 된다
   submit: '기록 저장', editSubmit: '수정 저장',

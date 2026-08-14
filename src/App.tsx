@@ -2,12 +2,14 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from '
 import type { Entry, ReactionEmoji, Tag, Todo } from '../shared/types';
 import { PUSH_LIMITS, entryTags, isOffTags, normalizeTags, primaryTag } from '../shared/types';
 import { contentEqual } from './local/store';
-import { BY_ID, COPY, MEMBERS, dayKey, pad2, shiftKey } from './lib/constants';
+import { BY_ID, COPY, MEMBERS, W, dayKey, pad2, shiftKey } from './lib/constants';
 import type { AppConfig } from './lib/config';
 import type { CrewStore } from './local/store';
-import { loadUi, saveUi } from './lib/uiState';
+import { loadUi, saveUi, type MobileTab } from './lib/uiState';
 import { useIsDesktop } from './lib/useMediaQuery';
 import { TopBar } from './components/TopBar';
+import { TabBar } from './components/TabBar';
+import { Fab } from './components/Fab';
 import { CrewPanel } from './components/CrewPanel';
 import { Feed } from './components/Feed';
 import { CalendarView } from './components/CalendarView';
@@ -139,11 +141,17 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
   const [view, setView] = useState<'feed' | 'cal'>(
     urlView === 'feed' || urlView === 'cal' ? urlView : ui.view ?? 'cal',
   );
-  // 데스크톱은 벨 드롭다운으로 알림을 읽고, 모바일은 전체 화면 내역으로 간다 —
-  // 같은 벨이 무엇을 여는지가 갈리므로 렌더 중에 폭을 알아야 한다
+  // 좁은 화면의 탭 — 데스크톱 view와 한 상태로 묶지 않는다(홈·알림은 저쪽에 없는 자리다).
+  // ?view=는 두 셸에 각자의 말로 옮긴다: noti/notiset은 여기서 알림 탭이다.
+  const [mtab, setMtab] = useState<MobileTab>(
+    urlView === 'feed' || urlView === 'cal' ? urlView
+      : urlView === 'noti' ? 'alerts'
+        : ui.mtab ?? 'home',
+  );
+  // 상단 바(+벨 드롭다운)와 하단 탭바·기록 버튼은 서로를 대신하는 셸이다 — 어느 쪽을
+  // 그릴지가 갈리므로 CSS로는 못 나누고 렌더 중에 폭을 알아야 한다
   const desktop = useIsDesktop();
-  // 알림 내역의 열림 여부는 폭과 무관하게 하나다 — 900px 경계를 오갈 때 데스크톱의
-  // 드롭다운이 모바일 전체 화면으로(또는 반대로) 이어져야지, 사라졌다가 다시 뜨면 안 된다.
+  // 데스크톱 벨 드롭다운의 열림 — 모바일에는 벨이 없고 알림이 탭 하나를 통째로 쓴다.
   // 설정은 내역이 아니므로 ?view=notiset에서는 닫힌 채로 시작한다.
   const [notiOpen, setNotiOpen] = useState(urlView === 'noti' && !cfg.initialNotiSettings);
   // 알림 설정 — 폭과 무관하게 본문 전체를 쓰는 유일한 알림 화면
@@ -173,7 +181,8 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
   }, []);
 
   // 보던 탭·패널·날짜를 남긴다 — 새로고침이 화면을 처음으로 되돌리면 안 된다
-  useEffect(() => saveUi({ view, panelOpen, selDay }), [view, panelOpen, selDay]);
+  // (넓은 셸과 좁은 셸의 탭은 각자 저장한다: 폭이 바뀌어도 보던 자리가 서로를 덮지 않는다)
+  useEffect(() => saveUi({ view, mtab, panelOpen, selDay }), [view, mtab, panelOpen, selDay]);
 
   // "n분째" 경과 표시를 위한 분 단위 재렌더
   const [nowTick, setNowTick] = useState(() => Date.now());
@@ -305,90 +314,123 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
   };
 
   const pendingDel = delId ? entries.find((e) => e.id === delId) ?? null : null;
-  // 본문을 알림이 차지하는 경우 — 설정, 그리고 좁은 화면의 내역
-  const notiScreen = notiSettings || (notiOpen && !desktop);
+
+  const footer = (
+    <div className="footer">
+      {wit.footer}
+      {cfg.demo && <div className="demo-note">데모 모드 — 초대 링크로 접속하면 크루와 동기화됩니다.</div>}
+    </div>
+  );
+  // 두 셸이 같은 화면을 나눠 쓴다 — 상단 바 아래 본문이든 하단 탭 위 본문이든 내용은 하나다
+  const feedScreen = (
+    <div className="feed-wrap">
+      <Feed entries={entries} todayKey={todayKey} yKey={yKey} meId={me.id}
+        editingId={modal.editingId} comments={snap.comments} reactions={snap.reactions}
+        wit={wit} actions={actions} />
+      {footer}
+    </div>
+  );
+  const calScreen = (
+    <>
+      <CalendarView entries={entries} selDay={selDay ?? todayKey}
+        setSelDay={setSelDay} todayKey={todayKey}
+        meId={me.id} editingId={modal.editingId} comments={snap.comments}
+        reactions={snap.reactions} wit={wit} actions={actions} />
+      {footer}
+    </>
+  );
+  const crewScreen = (
+    <CrewPanel entries={entries} todays={todays} statuses={snap.statuses} meId={me.id}
+      now={nowTick} today={now} wit={wit} sync={cfg.token ? snap.sync : null}
+      onSetStatus={(on, place) => {
+        store.setMyStatus(on, place);
+        setNowTick(Date.now());
+        // 패널을 곧바로 닫아도 시작·종료 결과를 확인할 수 있게 짧은 알림을 남긴다
+        showToast(on && place ? wit.statusStarted(place) : wit.statusEnded);
+      }} />
+  );
+  // 설정은 내역의 하위 화면이라 같은 자리에 선다 — 데스크톱은 본문, 모바일은 알림 탭
+  const notiScreen = notiSettings ? (
+    <NotiSettings token={cfg.token} meId={me.id} demo={cfg.demo}
+      // 뒤로 = 데스크톱이면 보던 탭, 좁은 화면이면 이 탭의 내역
+      onBack={() => setNotiSettings(false)} />
+  ) : (
+    <NotiPage notifications={snap.notifications}
+      onRead={(id) => store.markNotificationRead(id)}
+      onReadAll={() => store.markAllNotificationsRead()}
+      onOpenSettings={() => { setNotiOpen(false); setNotiSettings(true); }} />
+  );
+
+  // 떠 있는 기록 버튼은 홈·피드에만 선다 — 캘린더·알림은 아래 여백도 그만큼 줄어든다
+  const fabTab = mtab === 'home' || mtab === 'feed';
+  const fabOn = fabTab && !modal.open;
 
   return (
     <div className="screen">
-      <TopBar me={me} wit={wit} view={view}
-        onView={(v) => { setView(v); setNotiOpen(false); setNotiSettings(false); }}
-        panelOpen={panelOpen} onTogglePanel={() => setPanelOpen((o) => !o)}
-        sync={cfg.token ? snap.sync : null}
-        unread={snap.unreadNotifications} notiOn={notiOpen}
-        // 설정을 보고 있었다면 벨은 현재 폭에 맞는 내역을 바로 연다
-        onBell={() => {
-          if (notiSettings) {
-            setNotiSettings(false);
-            setNotiOpen(true);
-          } else {
-            setNotiOpen((o) => !o);
-          }
-        }}
-        bellRef={bellRef} hasDropdown={desktop}
-        dropdown={desktop && notiOpen ? (
-          <NotiDropdown notifications={snap.notifications} unread={snap.unreadNotifications}
+      {desktop ? (
+        <>
+          <TopBar me={me} wit={wit} view={view}
+            onView={(v) => { setView(v); setNotiOpen(false); setNotiSettings(false); }}
+            panelOpen={panelOpen} onTogglePanel={() => setPanelOpen((o) => !o)}
+            sync={cfg.token ? snap.sync : null}
+            unread={snap.unreadNotifications} notiOn={notiOpen}
+            // 설정을 보고 있었다면 벨은 그 위의 내역으로 되돌린다
+            onBell={() => {
+              if (notiSettings) {
+                setNotiSettings(false);
+                setNotiOpen(true);
+              } else {
+                setNotiOpen((o) => !o);
+              }
+            }}
             bellRef={bellRef}
-            onRead={(id) => store.markNotificationRead(id)}
-            onReadAll={() => { store.markAllNotificationsRead(); showToast(wit.notiReadAll); }}
-            onOpenSettings={() => { setNotiOpen(false); setNotiSettings(true); }}
-            onOpenFeed={() => { setNotiOpen(false); setView('feed'); }}
-            onClose={closeNoti} />
-        ) : null}
-        onCompose={openNew} composeRef={ctaRef} />
-      {/* 패널 열은 접혀 있어도 마운트를 유지한다 — 열 폭만 300ms로 오가고 안쪽 래퍼는
-          296px에 고정돼 있어서, 접히는 동안 내용이 찌그러지지 않는다(CSS가 맡는다) */}
-      <div className={'body' + (panelOpen ? ' open' : '')}>
-        <div className="panel-col">
-          <div className="panel-inner">
-            <CrewPanel entries={entries} todays={todays} statuses={snap.statuses} meId={me.id}
-              now={nowTick} today={now} wit={wit} sync={cfg.token ? snap.sync : null}
-              onSetStatus={(on, place) => {
-                store.setMyStatus(on, place);
-                setNowTick(Date.now());
-                // 패널을 곧바로 닫아도 시작·종료 결과를 확인할 수 있게 짧은 알림을 남긴다
-                showToast(on && place ? wit.statusStarted(place) : wit.statusEnded);
-              }} />
-          </div>
-        </div>
-        <div className="main-col">
-          {notiScreen ? (
-            notiSettings ? (
-              <NotiSettings token={cfg.token} meId={me.id} demo={cfg.demo}
-                // 뒤로 = 좁은 화면이면 내역, 데스크톱이면 보던 탭
-                onBack={() => {
-                  setNotiSettings(false);
-                  setNotiOpen(!desktop);
-                }} />
-            ) : (
-              <NotiPage notifications={snap.notifications}
+            dropdown={notiOpen ? (
+              <NotiDropdown notifications={snap.notifications} unread={snap.unreadNotifications}
+                bellRef={bellRef}
                 onRead={(id) => store.markNotificationRead(id)}
-                onReadAll={() => store.markAllNotificationsRead()}
-                onOpenSettings={() => { setNotiOpen(false); setNotiSettings(true); }} />
-            )
-          ) : view === 'feed' ? (
-            <div className="feed-wrap">
-              <Feed entries={entries} todayKey={todayKey} yKey={yKey} meId={me.id}
-                editingId={modal.editingId} comments={snap.comments} reactions={snap.reactions}
-                wit={wit} actions={actions} />
-              <div className="footer">
-                {wit.footer}
-                {cfg.demo && <div className="demo-note">데모 모드 — 초대 링크로 접속하면 크루와 동기화됩니다.</div>}
-              </div>
+                onReadAll={() => { store.markAllNotificationsRead(); showToast(wit.notiReadAll); }}
+                onOpenSettings={() => { setNotiOpen(false); setNotiSettings(true); }}
+                onOpenFeed={() => { setNotiOpen(false); setView('feed'); }}
+                onClose={closeNoti} />
+            ) : null}
+            onCompose={openNew} composeRef={ctaRef} />
+          {/* 패널 열은 접혀 있어도 마운트를 유지한다 — 열 폭만 300ms로 오가고 안쪽 래퍼는
+              296px에 고정돼 있어서, 접히는 동안 내용이 찌그러지지 않는다(CSS가 맡는다) */}
+          <div className={'body' + (panelOpen ? ' open' : '')}>
+            <div className="panel-col">
+              <div className="panel-inner">{crewScreen}</div>
             </div>
-          ) : (
-            <>
-              <CalendarView entries={entries} selDay={selDay ?? todayKey}
-                setSelDay={setSelDay} todayKey={todayKey}
-                meId={me.id} editingId={modal.editingId} comments={snap.comments}
-                reactions={snap.reactions} wit={wit} actions={actions} />
-              <div className="footer">
-                {wit.footer}
-                {cfg.demo && <div className="demo-note">데모 모드 — 초대 링크로 접속하면 크루와 동기화됩니다.</div>}
-              </div>
-            </>
-          )}
-        </div>
-      </div>
+            <div className="main-col">
+              {notiSettings ? notiScreen : view === 'feed' ? feedScreen : calScreen}
+            </div>
+          </div>
+        </>
+      ) : (
+        <>
+          <div className={'body' + (fabTab ? ' with-fab' : '')}>
+            {mtab === 'home' ? (
+              <>
+                <div className="mhome-head">
+                  <div className="mhome-title">러닝 크루 👟</div>
+                  <div className="mhome-sub">
+                    {now.getMonth() + 1}월 {now.getDate()}일 {W[now.getDay()]}요일 · {wit.greeting}
+                  </div>
+                </div>
+                {crewScreen}
+              </>
+            ) : mtab === 'feed' ? feedScreen : mtab === 'cal' ? calScreen : notiScreen}
+          </div>
+          {/* 기록 버튼이 서지 않는 탭에서는 탭바가 초점의 귀환 지점을 대신 맡는다 —
+              두 자리가 같은 ref를 두고 다투지 않게 있는 쪽 하나만 잡는다 */}
+          <TabBar tab={mtab} unread={snap.unreadNotifications}
+            anchorRef={fabOn ? undefined : ctaRef}
+            onTab={(t) => {
+              setMtab(t);
+              setNotiSettings(false); // 탭을 누르면 그 탭의 첫 화면 — 설정에 갇힌 채 돌아오지 않는다
+            }} />
+          {fabOn && <Fab done={todays.some((e) => e.m === me.id)} wit={wit} onClick={openNew} btnRef={ctaRef} />}
+        </>
+      )}
       {modal.open && (
         <EntryModal modal={modal} patch={patch} close={closeModal} submit={submit} wit={wit}
           fallbackRef={ctaRef} />

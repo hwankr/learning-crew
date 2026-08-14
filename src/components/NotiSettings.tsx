@@ -160,7 +160,7 @@ export function NotiSettings({ token, meId, demo, onBack }: Props) {
 
   if (!prefs) {
     return (
-      <div className="noti-page">
+      <div>
         <div className="nset-back-row">
           <button className="icon-btn" aria-label="알림으로 돌아가기" onClick={onBack}>
             <Icon d={BACK_D} size={22} sw={2.4} />
@@ -189,7 +189,7 @@ export function NotiSettings({ token, meId, demo, onBack }: Props) {
     : '밤낮 없이 오는 대로 받아요.';
 
   return (
-    <div className="noti-page">
+    <div>
       <div className="nset-back-row">
         <button className="icon-btn" aria-label="알림으로 돌아가기" onClick={onBack}>
           <Icon d={BACK_D} size={22} sw={2.4} />

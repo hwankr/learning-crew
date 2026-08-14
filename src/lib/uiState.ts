@@ -19,8 +19,14 @@ function dayParts(value: unknown): { y: number; mo: number; d: number } | null {
   return d <= monthDays[mo - 1]! ? { y, mo, d } : null;
 }
 
+/** 좁은 화면 하단 탭 — 데스크톱 view(피드·캘린더)와 따로 산다. 하나로 합치면
+    폭이 바뀔 때마다 홈이 캘린더로, 알림이 피드로 번역되며 보던 자리가 뒤바뀐다. */
+export type MobileTab = 'home' | 'feed' | 'cal' | 'alerts';
+const MTABS: readonly string[] = ['home', 'feed', 'cal', 'alerts'];
+
 export interface UiState {
   view: 'feed' | 'cal';
+  mtab: MobileTab;
   panelOpen: boolean;
   /** 캘린더에서 고른 날 (null = 오늘) */
   selDay: string | null;
@@ -34,6 +40,7 @@ export function loadUi(): Partial<UiState> {
     if (!d || typeof d !== 'object') return {};
     const out: Partial<UiState> = {};
     if (d.view === 'feed' || d.view === 'cal') out.view = d.view;
+    if (typeof d.mtab === 'string' && MTABS.includes(d.mtab)) out.mtab = d.mtab as MobileTab;
     if (typeof d.panelOpen === 'boolean') out.panelOpen = d.panelOpen;
     const selDay = d.selDay;
     if (typeof selDay === 'string' && dayParts(selDay)) out.selDay = selDay;

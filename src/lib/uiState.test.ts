@@ -19,9 +19,19 @@ afterEach(() => {
 
 describe('loadUi', () => {
   it('유효한 화면 상태를 복원한다', () => {
-    stored(JSON.stringify({ view: 'feed', panelOpen: true, selDay: '2024-02-29' }));
-    expect(loadUi()).toEqual({ view: 'feed', panelOpen: true, selDay: '2024-02-29' });
+    stored(JSON.stringify({ view: 'feed', mtab: 'alerts', panelOpen: true, selDay: '2024-02-29' }));
+    expect(loadUi()).toEqual({ view: 'feed', mtab: 'alerts', panelOpen: true, selDay: '2024-02-29' });
   });
+
+  // 넓은 셸과 좁은 셸의 탭은 값 집합이 다르다 — 모르는 값이 통과하면 좁은 화면이
+  // 어느 탭도 아닌 상태로 열려 본문이 통째로 빈다
+  it.each(['notiset', 'noti', 'cal ', '', 42])(
+    '모르는 모바일 탭 %s는 나머지 상태와 분리해 버린다',
+    (mtab) => {
+      stored(JSON.stringify({ view: 'cal', mtab }));
+      expect(loadUi()).toEqual({ view: 'cal' });
+    },
+  );
 
   it.each(['2026-00-10', '2026-13-10', '2026-02-29', '2026-04-31', 'not-a-day'])(
     '달력에 없는 선택일 %s는 나머지 상태와 분리해 버린다',

@@ -1,6 +1,6 @@
 /* 데스크톱 상단 바 — 이동(탭)·작성·동기화·알림을 한 줄에 모은다.
    예전 브랜드 줄에 쌓여 있던 아바타 스택·CTA·상태 줄이 전부 이 한 줄로 들어왔다.
-   <900px에서는 줄바꿈으로 버티기만 한다(하단 탭바 셸은 별도 파트). */
+   ≥900px에서만 선다 — 좁은 화면은 하단 탭바(TabBar)가 이 역할을 통째로 대신한다. */
 import type { ReactNode, RefObject } from 'react';
 import type { SyncInfo } from '../local/store';
 import type { CopySet, Member } from '../lib/constants';
@@ -13,7 +13,7 @@ const PANEL_OPEN_D = 'M15 5l-7 7 7 7';
 
 export function TopBar({
   me, wit, view, onView, panelOpen, onTogglePanel, sync, unread, notiOn, onBell, bellRef,
-  hasDropdown, dropdown, onCompose, composeRef,
+  dropdown, onCompose, composeRef,
 }: {
   me: Member;
   wit: CopySet;
@@ -27,8 +27,6 @@ export function TopBar({
   notiOn: boolean;
   onBell: () => void;
   bellRef: RefObject<HTMLButtonElement | null>;
-  /** 이 벨이 드롭다운을 여는가(데스크톱) — 모바일 벨은 화면을 바꾸므로 expanded가 아니다 */
-  hasDropdown: boolean;
   /** 데스크톱 알림 드롭다운 — 열려 있을 때만 온다 */
   dropdown: ReactNode;
   onCompose: () => void;
@@ -61,8 +59,7 @@ export function TopBar({
         <div className="bell-wrap">
           <button className={'bell-btn' + (notiOn ? ' on' : '')} ref={bellRef}
             aria-label={unread > 0 ? `알림 — 안 읽음 ${unread}개` : '알림'}
-            aria-haspopup={hasDropdown ? 'dialog' : undefined}
-            aria-expanded={hasDropdown ? notiOn : undefined}
+            aria-haspopup="dialog" aria-expanded={notiOn}
             onClick={onBell}>
             <Icon d={BELL_D} size={19} sw={2} />
             {/* 열려 있어도 배지는 남는다 — 안 읽은 수는 드롭다운을 여는 것과 무관하다 */}
