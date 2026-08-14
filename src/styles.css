@@ -26,87 +26,160 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 @keyframes rc-pop-sm { from { opacity: 0; transform: translateY(6px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
 @keyframes rc-fade { from { opacity: 0; } to { opacity: 1; } }
 
+/* ---------- 셸 (상단 바 + 접히는 크루 패널) ---------- */
+/* 상단 바는 ≥900px에서만 그려진다(좁은 화면은 하단 탭바 셸) — 여기 값도 그 폭 기준이다 */
 .screen { min-height: 100vh; background: #FFFFFF; }
-.shell {
-  max-width: 480px;
-  margin: 0 auto;
-  padding: 24px 20px 44px;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  align-items: start;
+/* 스크롤해도 남는 줄 — 탭·기록 버튼이 화면 밖으로 나가면 긴 피드 한가운데서 갈 곳이 없어진다 */
+.topbar { position: sticky; top: 0; z-index: 10; background: #FFFFFF; border-bottom: 1px solid #F1F3F6; }
+.topbar-inner {
+  display: flex; align-items: center; gap: 16px;
+  max-width: 1512px; margin: 0 auto; padding: 13px 28px;
+}
+.panel-btn {
+  display: flex; align-items: center; gap: 6px; flex: none; height: 36px; padding: 0 12px;
+  border: 1px solid #E4E7EC; border-radius: 10px; background: #FFFFFF; color: #4E555F;
+  font-size: 11.5px; font-weight: 700; white-space: nowrap; cursor: pointer;
+  transition: background 160ms ease, color 160ms ease;
+}
+.panel-btn:hover { background: #F1F3F6; }
+/* 테두리 폭은 투명으로 남긴다 — 토글할 때 뒤 요소가 2px씩 흔들리지 않게 하기 위해서다 */
+.panel-btn.on { border-color: transparent; background: transparent; color: #6B7280; }
+.wordmark { font-size: 18px; font-weight: 800; letter-spacing: -0.02em; white-space: nowrap; flex: none; }
+/* 프로토타입은 워드마크와 세그먼트 사이만 기본 gap보다 6px 더 벌린다. */
+.seg { display: flex; gap: 3px; flex: none; margin-left: 6px; padding: 3px; border-radius: 11px; background: #F1F3F6; }
+.seg-btn {
+  display: grid; place-items: center; height: 32px; padding: 0 16px;
+  border: none; border-radius: 9px; background: transparent; color: #6B7280;
+  font-size: 12.5px; font-weight: 600; white-space: nowrap; cursor: pointer;
+  transition: background 140ms, color 140ms;
+}
+/* 선택되며 600→800으로 굵어져도 탭 폭이 달라지지 않도록, 보이지 않는 굵은 라벨로
+   각 버튼의 최대 너비를 계속 예약한다. 두 라벨을 고정 px로 맞추면 폰트 로딩 때 다시 흔들린다. */
+.seg-btn > span, .seg-btn::after { grid-area: 1 / 1; }
+.seg-btn::after {
+  content: attr(data-label); font-weight: 800; visibility: hidden; pointer-events: none;
+}
+.seg-btn.on { background: #FFFFFF; color: #16181D; font-weight: 800; box-shadow: 0 1px 2px rgba(22, 24, 29, 0.14); }
+.top-gap { flex: 1; }
+.top-cta {
+  display: flex; align-items: center; justify-content: center; gap: 7px; flex: none;
+  height: 38px; padding: 0 16px; border: none; border-radius: 999px;
+  background: #FFB800; color: #16181D; font-size: 13px; font-weight: 800; white-space: nowrap;
+  cursor: pointer; transition: background 140ms;
+}
+.top-cta:hover { background: #F5B000; }
+.top-cta:active { transform: scale(0.97); }
+.top-av { display: flex; flex: none; border: 2px solid #FFFFFF; border-radius: 50%; }
+
+/* 스크롤 영역 — 좁은 화면에서는 아래쪽에 탭바(66px)와 떠 있는 기록 버튼이 겹쳐 뜬다.
+   그만큼을 여백으로 비워 두지 않으면 마지막 카드가 영영 손에 안 닿는다.
+   with-fab은 좁은 셸에서만 붙는다(넓은 셸은 이 클래스를 아예 받지 않는다). */
+.body { padding: 22px 20px calc(92px + env(safe-area-inset-bottom)); }
+.body.with-fab { padding-bottom: calc(148px + env(safe-area-inset-bottom)); }
+.panel-col { min-width: 0; }
+.panel-inner { min-width: 0; }
+.main-col { min-width: 0; }
+/* 피드는 사이드바 없이 본문만 남는다 — 한 줄이 너무 길어지면 읽는 눈이 줄을 잃는다 */
+.feed-wrap { max-width: 720px; margin: 0 auto; }
+
+/* ---------- 모바일 셸 (하단 탭바 + 떠 있는 기록 버튼) ---------- */
+/* 홈 머리 — 상단 바가 없는 셸에서 여기가 유일한 이름표다.
+   아래 체크인이 스스로 16px을 띄우므로 여기서는 나머지 4px만 보탠다(합쳐서 디자인의 20px). */
+.mhome-head { margin-bottom: 4px; }
+.mhome-title { font-size: 21px; font-weight: 800; letter-spacing: -0.02em; line-height: 1.2; }
+.mhome-sub { font-size: 12.5px; color: #6B7280; margin-top: 5px; }
+
+/* 주소창이 나타났다 사라지는 브라우저·홈 화면 앱 모두에서 자리가 흔들리지 않게 fixed로 둔다.
+   테두리까지 66px인 탭 영역 아래에 안전 영역만 덧댄다(홈 인디케이터에 깔리지 않게). */
+.tabbar {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 15;
+  display: flex; align-items: stretch; height: calc(66px + env(safe-area-inset-bottom));
+  padding-bottom: env(safe-area-inset-bottom);
+  border-top: 1px solid #F1F3F6; border-radius: 16px 16px 0 0; background: #FFFFFF;
+}
+.tab {
+  flex: 1; min-width: 0; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 4px;
+  border: none; background: none; padding: 0; cursor: pointer;
+  color: #B4BAC4; transition: color 160ms ease;
+}
+.tab.on { color: #16181D; }
+.tab-label-row { display: flex; align-items: center; gap: 5px; }
+.tab-label { font-size: 11px; font-weight: 600; color: #9AA1AD; transition: color 160ms ease; }
+.tab.on .tab-label { font-weight: 800; color: #16181D; }
+.tab-badge {
+  display: flex; align-items: center; justify-content: center; flex: none;
+  min-width: 16px; height: 16px; padding: 0 4px; border-radius: 999px;
+  background: #FFB800; color: #16181D; font-size: 9.5px; font-weight: 800;
 }
 
-/* ---------- 왼쪽 패널 ---------- */
-.left { position: static; min-width: 0; padding-right: 0; }
-/* 한 줄에 브랜드(실측 126px) · 벨(38px) · 아바타 스택이 같이 선다. 인원이 늘면 가장 먼저
-   깨지는 줄이라 두 겹으로 막는다: 제목은 절대 단어 중간에서 쪼개지지 않고(nowrap),
-   그래도 자리가 없으면 통째로 줄바꿈해 오른쪽 묶음이 아랫줄로 내려간다(wrap). */
-.brand-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
-.brand { font-size: 23px; font-weight: 800; letter-spacing: -0.02em; color: #16181D; line-height: 1.2; white-space: nowrap; }
-/* 아바타 스택 — 폭을 --stack-w로 고정하고, 늘어나는 인원은 겹침이 흡수한다.
-   폭 = av + (n-1) * (av - 겹침)이므로 겹침을 av - (stack-w - av)/(n-1)로 잡으면
-   멤버가 4명이든 6명이든 스택 전체 폭이 그대로다 (--crew는 App이 심는다).
-   다만 한 명이 12px 미만으로 얇아지면 누가 누군지 알 수 없으니 거기서 멈춘다 —
-   그 뒤로는 스택이 넓어지고, 넘치면 brand-row가 줄을 바꿔 받아 준다.
-   calc 안의 나눗셈을 못 쓰는 브라우저는 앞줄(5명 기준 고정값)로 떨어진다. */
-.stack { --av: 28px; --stack-w: 92px; display: flex; flex: none; }
-.stack-av {
-  display: block; flex: none; border-radius: 50%; border: 2px solid #FFFFFF;
-  width: var(--av); height: var(--av);
+@keyframes rainbow-spin { from { background-position: 0% 50%; } to { background-position: 200% 50%; } }
+/* 그라디언트 테두리 — border로는 그라디언트를 못 주므로 2px 패딩을 두른 바깥 레이어가 맡는다 */
+.fab {
+  position: fixed; right: 18px; bottom: calc(82px + env(safe-area-inset-bottom)); z-index: 16;
+  padding: 2px; border-radius: 999px;
+  background: linear-gradient(90deg, #FFD666 0%, #FFB000 50%, #FFD666 100%);
+  box-shadow: 0 8px 20px rgba(150, 105, 0, 0.22);
 }
-.stack-av + .stack-av { margin-left: -12px; }
-.stack-av + .stack-av {
-  margin-left: calc(-1 * (var(--av) - max(12px, (var(--stack-w) - var(--av)) / (var(--crew, 5) - 1))));
+/* 오늘 몫을 끝낸 뒤 — 흐르는 무지개로 바뀌지만 눌리는 것은 그대로다(기록을 더 남길 수 있다) */
+.fab.done {
+  background: linear-gradient(90deg, #FBBF24 0%, #F472B6 35%, #FDE047 70%, #FBBF24 100%);
+  background-size: 200% 100%;
+  animation: rainbow-spin 3.5s linear infinite;
+  box-shadow: 0 8px 20px rgba(251, 191, 36, 0.34);
 }
-.sub { font-size: 13px; color: #6B7280; margin-top: 6px; }
+.fab-btn {
+  display: flex; align-items: center; gap: 8px; height: 46px; padding: 0 20px;
+  border: none; border-radius: 999px; background: #FFFFFF; color: #16181D;
+  font-size: 13px; font-weight: 800; letter-spacing: -0.01em; cursor: pointer;
+  transition: transform 120ms ease;
+}
+.fab-btn:active { transform: scale(0.95); }
+.fab-ico {
+  display: flex; align-items: center; justify-content: center; flex: none;
+  font-size: 15px; line-height: 1; color: #E8A100; transition: transform 160ms ease;
+}
+.fab-btn:hover .fab-ico { transform: scale(1.2); }
+.fab.done .fab-btn:hover .fab-ico { transform: scale(1.25); }
+.fab-label { white-space: nowrap; }
 
-/* 강조를 한 번만 준다 — 장소 칩·알림 버튼과 같은 1.5px 라인, 상태 카드와 같은 14px 라운드를 쓰고
-   옐로는 연필 아이콘에만 남긴다(검정 알약·옐로 원·그림자가 겹쳐 이 버튼만 화면에서 떠 보였다). */
-.cta {
-  display: flex; align-items: center; justify-content: center; gap: 8px;
-  width: 100%; height: 52px; margin-top: 22px; padding: 0 20px;
-  border: 1.5px solid #E4E7EC; border-radius: 14px;
-  background: #FFFFFF; color: #16181D;
-  font-size: 15px; font-weight: 800; cursor: pointer;
-  transition: background 140ms, border-color 140ms;
+/* ---------- 체크인 (지금 상태) ---------- */
+.chk-cap { display: flex; align-items: center; gap: 7px; margin-top: 16px; margin-bottom: 9px; }
+.chk-cap-dot { display: block; flex: none; width: 7px; height: 7px; border-radius: 50%; background: #D6DAE0; }
+.chk-cap-text { font-size: 12.5px; color: #6B7280; }
+.chk-places { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.chk-tile {
+  display: flex; align-items: center; gap: 9px; min-width: 0; height: 46px; padding: 0 13px;
+  border: 1.5px solid #E4E7EC; border-radius: 12px; background: #FFFFFF;
+  color: #363B45; font-size: 13px; font-weight: 700; text-align: left; cursor: pointer;
+  transition: border-color 150ms, background 150ms;
 }
-.cta:hover { background: #F8F9FB; border-color: #CDD2DB; }
-.cta:active { transform: scale(0.98); }
-/* 박스는 없애고 색만 나른다 — Icon이 stroke="currentColor"라 이 색이 연필에 그대로 적용된다. */
-.cta-ico {
-  display: flex; align-items: center; justify-content: center;
-  flex: none; color: #FFB800;
-}
-.cta-cap {
-  display: flex; align-items: center; justify-content: center; gap: 6px;
-  font-size: 12.5px; color: #9AA1AD; margin-top: 11px;
-}
-.cta-cap-dot { display: block; width: 5px; height: 5px; border-radius: 50%; background: #FFB800; flex: none; }
+.chk-tile:hover { border-color: #FFD666; background: #FFFDF4; }
+.chk-tile:active { transform: scale(0.98); }
+.chk-tile-ico { font-size: 15px; line-height: 1; flex: none; }
+.chk-tile-label { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 
-/* ---------- 지금 상태 (라이브 체크인) ---------- */
-.status-bar { margin-top: 16px; padding: 12px 14px 13px; border-radius: 14px; background: #F6F7F9; transition: background 200ms; }
-.status-bar.on { background: #E6F9F0; }
-.status-line { display: flex; align-items: center; gap: 7px; min-height: 24px; }
-.status-ask { font-size: 12.5px; color: #6B7280; }
-.status-live { font-size: 13.5px; font-weight: 700; color: #0A6E42; }
-.status-elapsed { font-size: 12px; font-weight: 600; color: #12B76A; flex: 1; }
-.status-end {
-  flex: none; border: none; border-radius: 999px; padding: 5px 12px;
-  background: #FFFFFF; color: #0A6E42; font-size: 12px; font-weight: 700; cursor: pointer;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+@keyframes chk-enter { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+.chk-card {
+  margin-top: 16px; padding: 15px 16px 14px; border: 1.5px solid #C9F2DE; border-radius: 16px; background: #F4FBF7;
+  animation: chk-enter 260ms cubic-bezier(0.4, 0, 0.2, 1) both;
 }
-.status-end:active { transform: scale(0.96); }
-.status-places { display: flex; gap: 6px; margin-top: 10px; }
-.status-chip {
-  display: flex; align-items: center; justify-content: center; gap: 4px;
-  flex: 1; height: 34px; padding: 0 6px; white-space: nowrap;
-  border: 1.5px solid #E4E7EC; border-radius: 999px; background: #FFFFFF;
-  color: #4E555F; font-size: 12.5px; font-weight: 600; cursor: pointer;
-  transition: border-color 150ms, background 150ms, color 150ms;
+.chk-head { display: flex; align-items: center; gap: 8px; }
+/* 카드 안의 점은 한 치수 작다 — 옆 글자(12.5px)와 크기가 겹치면 문장처럼 안 읽힌다 */
+.chk-head .live-dot { width: 8px; height: 8px; }
+.chk-on { font-size: 12.5px; font-weight: 800; letter-spacing: 0.01em; color: #0A6E42; white-space: nowrap; }
+.chk-place-ico { font-size: 15px; line-height: 1; flex: none; margin-left: auto; }
+.chk-time { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; row-gap: 2px; margin-top: 10px; }
+.chk-elapsed { font-size: 19px; font-weight: 800; letter-spacing: -0.02em; color: #0A5C38; white-space: nowrap; }
+.chk-place { font-size: 12.5px; font-weight: 600; color: #3F8A64; white-space: nowrap; }
+.chk-end {
+  width: 100%; height: 40px; margin-top: 13px;
+  border: 1.5px solid #A8E4C6; border-radius: 999px; background: #FFFFFF;
+  color: #0A6E42; font-size: 13px; font-weight: 800; white-space: nowrap; cursor: pointer;
+  transition: background 150ms, border-color 150ms;
 }
-.status-chip:active { transform: scale(0.97); }
-.status-chip.sel { border-color: #12B76A; background: #12B76A; color: #FFFFFF; }
-.status-chip-ico { font-size: 13px; }
+.chk-end:hover { background: #EEF9F3; border-color: #8ED9B2; }
+.chk-end:active { transform: scale(0.98); }
 
 @keyframes live-pulse {
   0% { box-shadow: 0 0 0 0 rgba(18, 183, 106, 0.45); }
@@ -137,16 +210,16 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 .notify-btn.on { border-color: #12B76A; color: #0A6E42; background: #E6F9F0; }
 .notify-btn:active { transform: scale(0.96); }
 
-/* ---------- 동기화 상태 ---------- */
-.sync-row {
-  display: flex; align-items: center; gap: 7px;
-  margin-top: 7px; padding: 0 4px;
-  font-size: 12px; color: #9AA1AD;
-}
+/* ---------- 동기화 상태 (상단 바 · 크루 패널 바닥) ---------- */
+.sync-row { display: flex; align-items: center; gap: 7px; font-size: 11.5px; color: #9AA1AD; }
+/* 상단 바에서는 다른 요소를 밀지 않고 이 줄이 먼저 줄어든다(오류 문구가 길다) */
+.sync-top { flex: 0 1 auto; min-width: 0; max-width: 300px; }
+.sync-top .sync-label { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.sync-panel { margin-top: 20px; padding-top: 13px; border-top: 1px solid #F5F6F8; }
 .sync-row.busy { color: #6B7280; }
 .sync-row.warn { color: #B54708; }
-.sync-label { flex: 1; line-height: 1.4; }
-.sync-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: #C9E8D4; }
+.sync-label { flex: 1; min-width: 0; line-height: 1.4; }
+.sync-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: #C9E8D4; }
 .sync-dot.busy { background: #FFB800; }
 .sync-dot.warn { background: #F79009; }
 .sync-btn {
@@ -155,57 +228,35 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 }
 .sync-btn:active { transform: scale(0.96); }
 
-/* ---------- 오늘의 크루 보드 ---------- */
+/* ---------- 크루 패널 (오늘의 크루 · 이번 달 요약) ---------- */
+.crew { margin-top: 24px; }
 /* "N명 중 n명 도장 찍음"이 인원과 함께 길어진다 — 제목과 한 줄에 못 서면 줄을 바꾼다 */
-.board-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 4px 8px; margin: 30px 0 4px; }
-.board-title { font-size: 16px; font-weight: 800; letter-spacing: -0.01em; color: #16181D; }
-.board-meta { display: flex; align-items: center; gap: 7px; }
-.board-dots { display: flex; flex-wrap: wrap; gap: 4px; }
-.board-dot { display: block; width: 8px; height: 8px; border-radius: 50%; transition: background 200ms; }
-.board-count { font-size: 12.5px; font-weight: 600; color: #6B7280; }
+.crew-head { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 2px 10px; margin-bottom: 4px; }
+.crew-title { font-size: 14px; font-weight: 800; letter-spacing: -0.01em; color: #16181D; white-space: nowrap; }
+.crew-count { font-size: 12px; font-weight: 600; color: #9AA1AD; }
+.crew-row { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-top: 1px solid #F1F3F6; }
+.crew-row > svg { flex: none; }
+/* 오늘 안 온 사람은 흐리게 — 켜지거나 기록이 오면 그 자리에서 또렷해진다 */
+.crew-av { transition: opacity 260ms ease; }
+.crew-main { flex: 1; min-width: 0; }
+/* 이름 + 나 배지 + 태그 칩: 268px 패널에서 다 못 서면 태그가 아랫줄로 내려간다 */
+.crew-name { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; row-gap: 4px; }
+.crew-nm { flex: none; font-size: 14px; font-weight: 700; color: #16181D; white-space: nowrap; }
+.crew-extra { flex: none; font-size: 11px; color: #9AA1AD; }
+.crew-sub { font-size: 12.5px; color: #9AA1AD; line-height: 1.4; margin-top: 2px; overflow-wrap: break-word; transition: color 260ms ease; }
+.crew-sub.has { color: #4E555F; }
+.crew-sub.live { color: #0A6E42; font-weight: 600; }
 
-/* 열 수는 멤버 수를 그대로 따른다(--crew는 Board가 심는다) — 고정 4열이면 5번째가
-   혼자 다음 줄에 남는다. 줄바꿈(auto-fit) 대신 한 줄을 고집하는 이유가 그것이다:
-   "오늘의 크루"는 전원을 한눈에 보는 줄이고, 남는 칸이 생기면 그게 더 어색하다.
-   최소 셀 폭이 없어서 인원이 늘수록 칸이 그냥 좁아진다(5명 = 320px에서 52.8px,
-   6명이면 43px). 6명부터는 이름도 태그 라벨도 말줄임이 되므로, 크루가 더 늘면
-   최소 셀 폭과 줄바꿈(예: 3+3)을 여기서 다시 설계해야 한다. */
-.board { display: grid; grid-template-columns: repeat(var(--crew, 5), minmax(0, 1fr)); gap: 4px; }
-.board-cell { min-width: 0; }
-/* 5열이면 320px 화면에서 셀 하나가 53px밖에 안 된다 — 아바타·별점은 셀 폭을 따라 줄고
-   이름은 말줄임으로 접힌다. 고정 px로 두면 셀 밖으로 새어 옆 사람을 덮는다. */
-/* 좌우 패딩 0 — 셀 사이는 그리드 gap 4px이 이미 벌려 준다. 320px에서 태그 라벨이
-   들어갈 자리를 2px 벌기 위해 뺐다(칸 안쪽 50.8 → 52.8px). */
-.board-strip {
-  display: flex; flex-direction: column; align-items: center; gap: 6px;
-  padding: 12px 0 6px; text-align: center; min-width: 0;
-}
-.board-strip > .av-wrap { width: 100%; max-width: clamp(34px, 12vw, 46px); }
-.board-strip > .av-wrap > svg { width: 100%; height: auto; }
-.board-strip-name {
-  display: flex; align-items: center; justify-content: center; gap: 3px;
-  max-width: 100%; min-width: 0;
-  font-size: 12.5px; font-weight: 700; color: #16181D;
-}
-.board-strip-nm { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.board-strip-entry { display: flex; flex-direction: column; align-items: center; gap: 4px; width: 100%; }
-/* 별점 SVG(viewBox 120×24)는 폭만 주면 비율대로 낮아진다 — 55px 고정이면 53px 셀을 넘는다 */
-.board-strip-entry > svg { width: 100%; max-width: 55px; height: auto; }
-.board-strip-off { font-size: 10.5px; color: #9AA1AD; }
-.board-strip-empty { font-size: 10.5px; color: #9AA1AD; line-height: 1.4; word-break: keep-all; }
-.board-strip-live { font-size: 10.5px; font-weight: 700; color: #0A6E42; line-height: 1.35; word-break: keep-all; }
-.board-row { display: none; align-items: center; gap: 12px; padding: 13px 0; border-top: 1px solid transparent; }
-.board-cell + .board-cell .board-row { border-top-color: #F1F3F6; }
-.board-row-main { flex: 1; min-width: 0; }
-.board-row-name { display: flex; align-items: center; gap: 5px; }
-.board-row-nm { font-size: 14px; font-weight: 700; color: #16181D; }
-.board-row-extra { font-size: 11px; color: #9AA1AD; }
-.board-row-sub { font-size: 12.5px; color: #9AA1AD; margin-top: 3px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.board-row-sub.live { color: #0A6E42; font-weight: 600; }
-.board-row-right { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; flex: none; }
+/* 이번 달 요약 — 캘린더 머리에 있던 카드가 여기로 왔다(늘 이번 달, 달 이동과 무관) */
+.mon { margin-top: 22px; }
+.mon-title { font-size: 14px; font-weight: 800; letter-spacing: -0.01em; color: #16181D; margin-bottom: 4px; }
+.mon-row { display: flex; align-items: center; gap: 8px; padding: 7px 0; border-top: 1px solid #F5F6F8; }
+.mon-row > svg { flex: none; }
+.mon-nm { min-width: 0; font-size: 12.5px; font-weight: 700; color: #16181D; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+/* 숫자는 줄이지 않는다 — 이름이 먼저 말줄임되는 쪽이 읽기에 낫다 */
+.mon-line { flex: none; margin-left: auto; font-size: 11px; color: #9AA1AD; white-space: nowrap; }
 
-.me-badge { font-size: 9px; font-weight: 800; background: #16181D; color: #FFFFFF; border-radius: 999px; padding: 1.5px 5px; }
-.me-badge.sm { font-size: 9.5px; padding: 1.5px 6px; }
+.me-badge { flex: none; font-size: 9.5px; font-weight: 800; background: #16181D; color: #FFFFFF; border-radius: 999px; padding: 1.5px 6px; }
 
 /* ---------- 태그 칩 ---------- */
 .chip { display: flex; align-items: center; border-radius: 999px; font-weight: 700; white-space: nowrap; }
@@ -220,67 +271,51 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 .board-tags { display: flex; align-items: center; gap: 3px; min-width: 0; max-width: 100%; }
 .board-tags .chip { min-width: 0; overflow: hidden; }
 .board-tags .chip-label { overflow: hidden; text-overflow: ellipsis; }
-/* 보드 스트립 전용 칩 — 태그 이름이 글자로 보이는 게 우선이다.
-   320px에서 셀은 52.8px이고 "코딩테스트"는 10.5px에서 약 47px다. chip-xs의 오버헤드
-   (좌우 패딩 16 + 아이콘 10 + gap 3 = 29px)를 그대로 두면 라벨이 들어갈 자리가 없어
-   "코…"가 된다 — 그래서 여기서만 아이콘을 접고 패딩을 3px로 깎았다.
-   아이콘까지 넣으려면 최소 60px(라벨 47 + gap 3 + 아이콘 10)이 필요해 52.8px 셀에서는
-   둘 다 못 넣는다. 아이콘은 장식이고 태그 색은 남으니, 명세대로 라벨을 택했다.
-   라벨은 축약하지 않는다(자격증→자격 같은 변형은 다른 화면과 태그 이름을 갈라놓는다) —
-   대신 +N이 자리에 못 서면 아랫줄로 내려간다(flex-wrap).
-   폰트는 아주 좁은 폭에서만 조금 줄인다: 320px에서 9.6px → 칩 50.2px(칸 52.8px),
-   350px 이상은 10.5px로 54.3px(칸 56.8px 이상). 어느 폭에서도 말줄임되지 않는다. */
-.board-strip .board-tags { justify-content: center; flex-wrap: wrap; gap: 2px 3px; }
-.board-strip .chip-xs { gap: 0; padding: 2px 3px; font-size: clamp(9.6px, 3vw, 10.5px); }
-.board-strip .chip-xs > svg { display: none; }
-.board-strip .chip-more { padding: 2px 4px; font-size: clamp(9.6px, 3vw, 10.5px); }
+/* ---------- 피드 · 캘린더 본문 ---------- */
+/* 좁은 화면은 제목 없이 메타 한 줄만 — 어디를 보고 있는지는 하단 탭바가 말해 준다 */
+.feed-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.feed-title { display: none; font-size: 22px; font-weight: 800; letter-spacing: -0.02em; }
+.feed-meta { font-size: 12px; font-weight: 600; color: #9AA1AD; white-space: nowrap; flex: none; }
+.feed-empty { text-align: center; padding: 60px 20px; }
+.feed-empty-title { font-size: 14px; font-weight: 700; color: #6B7280; }
+.feed-empty-sub { font-size: 12.5px; color: #9AA1AD; margin-top: 6px; }
 
-/* ---------- 오른쪽(피드/캘린더) 컬럼 ---------- */
-.feed-col { min-width: 0; padding-left: 0; border-left: none; margin-top: 32px; }
-.tabs { display: flex; gap: 20px; border-bottom: 1px solid #F1F3F6; }
-.tab {
-  background: none; border: none; cursor: pointer;
-  padding: 10px 2px 12px; font-size: 15px; font-weight: 800; letter-spacing: -0.01em;
-  color: #9AA1AD; border-bottom: 2.5px solid transparent; margin-bottom: -1px;
-  transition: color 140ms, border-color 140ms;
-}
-.tab.on { color: #16181D; border-bottom-color: #16181D; }
-
-.group-head { display: flex; align-items: center; gap: 10px; margin: 18px 0 2px; }
-.group-label { font-size: 12px; font-weight: 800; color: #9AA1AD; letter-spacing: 0.02em; flex: none; }
+.group-head { display: flex; align-items: center; gap: 10px; margin: 20px 0 4px; }
+.group-label { font-size: 11.5px; font-weight: 800; color: #9AA1AD; letter-spacing: 0.04em; flex: none; white-space: nowrap; }
 .group-line { flex: 1; height: 1px; background: #F1F3F6; }
 
 /* ---------- 피드 엔트리 ---------- */
 .entry {
-  display: flex; gap: 11px; padding: 14px 10px; margin: 0 -10px;
-  border-radius: 14px; border-top: 1px solid transparent; background: transparent;
+  display: flex; gap: 12px; padding: 16px 10px; margin: 0 -10px;
+  border-radius: 14px; border-top: 1px solid #F5F6F8; background: transparent;
   transition: background 160ms;
 }
-.entry + .entry { border-top-color: #F5F6F8; }
 .entry.editing { background: #FFF9E6; }
 .entry-main { flex: 1; min-width: 0; }
 .entry-head { display: flex; align-items: center; gap: 7px; }
 /* 별점은 줄지 않는다 — 좁아질 때 줄어드는 쪽은 태그 라벨이어야 한다 */
 .entry-head > svg { flex: none; }
-.entry-name { font-size: 14px; font-weight: 800; color: #16181D; }
-.entry-time { font-size: 11.5px; color: #9AA1AD; }
+.entry-name { font-size: 14.5px; font-weight: 800; color: #16181D; white-space: nowrap; }
+.entry-time { font-size: 11.5px; color: #9AA1AD; white-space: nowrap; }
 .spacer { flex: 1; }
-.entry-actions { display: flex; gap: 2px; margin: -9px -8px -9px 0; }
-.entry-act { background: none; border: none; font-size: 12px; font-weight: 700; cursor: pointer; padding: 10px 8px; border-radius: 8px; }
+.entry-actions { display: flex; flex: none; gap: 0; margin: -9px 0 -9px auto; }
+.entry-act { background: none; border: none; font-size: 12px; font-weight: 700; cursor: pointer; padding: 10px 6px; border-radius: 8px; white-space: nowrap; }
 .entry-act.edit { color: #6B7280; }
 .entry-act.edit:hover { background: #F1F3F6; }
 .entry-act.del { color: #D3352A; }
 .entry-act.del:hover { background: #FEECEB; }
-.entry-tags { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; margin-top: 6px; }
+.entry-tags { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
 /* 컴팩트 카드의 머리 한 줄 — 이름·시각·별점과 폭을 나눠 쓰므로 태그가 밀어내지 않게 줄어든다 */
 .entry-head-tags { display: flex; align-items: center; gap: 5px; min-width: 0; }
 .entry-head-tags .chip { min-width: 0; overflow: hidden; }
 .entry-head-tags .chip-label { overflow: hidden; text-overflow: ellipsis; }
-.todo-count { font-size: 11px; font-weight: 700; color: #B37F00; background: #FFF9E6; border-radius: 999px; padding: 3.5px 9px; }
-.entry-memo { font-size: 14px; color: #23262E; margin-top: 6px; line-height: 1.55; overflow-wrap: break-word; }
+.todo-count { font-size: 11px; font-weight: 700; color: #B37F00; background: #FFF9E6; border-radius: 999px; padding: 3.5px 9px; white-space: nowrap; }
+.entry-memo { font-size: 14.5px; font-weight: 700; color: #16181D; margin-top: 9px; line-height: 1.5; overflow-wrap: break-word; }
 .entry-body { font-size: 13.5px; color: #4E555F; margin-top: 5px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: break-word; }
-.entry-todos { display: flex; flex-direction: column; gap: 3px; margin-top: 7px; }
-.todo-line { display: flex; align-items: center; gap: 8px; }
+/* 제목이 없는 기록은 본문이 제목 자리로 올라온다 — 한 줄 기록이 잔글씨로 깔리지 않게 */
+.entry-body.lead { font-size: 14.5px; color: #23262E; margin-top: 9px; }
+.entry-todos { display: flex; flex-direction: column; gap: 4px; margin-top: 9px; }
+.todo-line { display: flex; align-items: center; gap: 9px; }
 .todo-check {
   display: flex; align-items: center; justify-content: center;
   width: 19px; height: 19px; flex: none; border-radius: 6px;
@@ -294,12 +329,13 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 .todo-text { font-size: 13.5px; color: #23262E; line-height: 1.5; overflow-wrap: break-word; min-width: 0; }
 .todo-text.done { color: #9AA1AD; text-decoration: line-through; }
 
-/* 캘린더 하단 목록의 컴팩트 엔트리 */
-.entry.compact { padding: 13px 10px; }
+/* 캘린더 선택일 패널의 컴팩트 엔트리 */
+.entry.compact { gap: 10px; margin: 0; padding: 14px 0; border-radius: 0; }
 .entry.compact .entry-name { font-size: 13.5px; }
 .entry.compact .entry-time { font-size: 11px; }
 .entry.compact .entry-memo { font-size: 13.5px; margin-top: 5px; line-height: 1.5; }
-.entry.compact .entry-body { font-size: 13px; margin-top: 4px; line-height: 1.6; }
+/* 선택일 패널은 요약이라 본문 승격(.lead)을 따르지 않는다 — 색까지 눌러 둔다 */
+.entry.compact .entry-body { font-size: 13px; color: #4E555F; margin-top: 4px; line-height: 1.6; }
 .entry.compact .entry-todos { margin-top: 6px; }
 .entry.compact .todo-check { width: 18px; height: 18px; }
 .entry.compact .todo-text { font-size: 13px; }
@@ -310,20 +346,20 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 /* 수정 바로 옆에 붙는 삭제 — 촘촘한 목록에서 오탭하지 않게 두 버튼을 벌려 두고
    탭 영역도 피드와 크게 다르지 않게 남긴다(피드 35px / 여기 31px).
    잘못 눌러도 확인창이 한 번 더 막는다. */
-.entry.compact .entry-actions { gap: 6px; margin: 0 -8px 0 auto; }
+.entry.compact .entry-actions { gap: 6px; margin: 0 0 0 auto; }
 .entry.compact .entry-act { padding: 8px; }
 
 /* ---------- 카드 소셜 블록 (리액션 + 댓글) ---------- */
 .entry-social {
-  display: flex; flex-direction: column; gap: 11px;
-  margin-top: 11px; padding-top: 11px; border-top: 1px solid #F5F6F8;
+  display: flex; flex-direction: column; gap: 12px;
+  margin-top: 13px; padding-top: 12px; border-top: 1px solid #F5F6F8;
 }
 /* 팝오버의 컨테이닝 블록은 + 버튼이 아니라 줄 전체다 — 버튼을 감싸면 190px짜리 피커가
    칩이 늘어난 좁은 카드에서 오른쪽으로 새어 가로 스크롤을 만든다. 대신 left를 열릴 때
    버튼 위치에서 재어 인라인으로 준다(clampPopoverLeft) — 여기 left:0은 못 쟀을 때의 폴백. */
 .react-row { position: relative; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .react-chip {
-  display: flex; align-items: center; gap: 5px; height: 27px; padding: 0 10px;
+  display: flex; align-items: center; gap: 5px; height: 28px; padding: 0 11px;
   border: 1.5px solid #E4E7EC; border-radius: 999px; background: #FFFFFF;
   color: #4E555F; font-size: 11.5px; font-weight: 700; cursor: pointer;
   transition: background 120ms, border-color 120ms, color 120ms;
@@ -335,31 +371,32 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 .react-pick-wrap { display: flex; flex: none; }
 .react-add {
   display: flex; align-items: center; justify-content: center; flex: none;
-  width: 27px; height: 27px; padding: 0;
+  width: 28px; height: 28px; padding: 0;
   border: 1.5px solid #E4E7EC; border-radius: 999px; background: #FFFFFF;
   color: #9AA1AD; cursor: pointer;
   transition: background 120ms, border-color 120ms, color 120ms;
 }
-.react-add:hover, .react-add.open { border-color: #CDD2DB; background: #F8F9FB; color: #6B7280; }
-/* bottom은 줄 전체 위로 앵커한다(컨테이닝 블록 = .react-row). 고정 34px이면 칩이
-   두 줄로 접히는 320px에서 첫 칩 줄을 26px 덮는다 — 한 줄일 때(27px)는 100%+7 = 34px로
-   지금과 같은 자리다. left만 열릴 때 재서 인라인으로 준다(clampPopoverLeft). */
+.react-add:hover, .react-add.open { border-color: #CDD2DB; background: #F1F3F6; color: #6B7280; }
+/* 디자인의 가로 알약 픽커. bottom은 줄 전체 위로 앵커한다(컨테이닝 블록 = .react-row) —
+   고정값이면 칩이 두 줄로 접히는 320px에서 첫 칩 줄을 덮는다. left만 열릴 때 재서
+   인라인으로 준다(clampPopoverLeft). 디자인과 달리 떠 있으므로 그림자는 남긴다. */
 .react-pick {
   position: absolute; left: 0; bottom: calc(100% + 7px); z-index: 20;
-  display: flex; align-items: center; gap: 2px; padding: 6px;
-  background: #FFFFFF; border: 1px solid #F1F3F6; border-radius: 14px;
-  box-shadow: 0 12px 40px rgba(22, 24, 29, 0.18);
+  display: flex; align-items: center; gap: 3px; padding: 3px;
+  background: #FFFFFF; border: 1.5px solid #E4E7EC; border-radius: 999px;
+  box-shadow: 0 10px 28px rgba(22, 24, 29, 0.16);
   animation: rc-pop-sm 180ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 .react-pick-btn {
-  width: 34px; height: 34px; padding: 0; border: none; border-radius: 10px;
-  background: none; font-size: 17px; line-height: 1; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; padding: 0; border: none; border-radius: 50%;
+  background: none; font-size: 14px; line-height: 1; cursor: pointer;
   transition: background 120ms;
 }
 .react-pick-btn:hover { background: #F1F3F6; }
 .react-pick-btn.on { background: #F1F3F6; }
 
-.comment-list { display: flex; flex-direction: column; gap: 9px; }
+.comment-list { display: flex; flex-direction: column; gap: 10px; }
 .comment { display: flex; gap: 8px; align-items: flex-start; }
 .comment-main { flex: 1; min-width: 0; }
 .comment-head { display: flex; align-items: center; gap: 6px; }
@@ -377,165 +414,163 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 .comment-del:hover { color: #D3352A; background: #FEECEB; }
 @media (hover: none) { .comment-del { opacity: 1; } }
 .comment-body {
-  font-size: 13px; color: #23262E; line-height: 1.55; margin-top: 2px;
+  font-size: 13px; color: #23262E; line-height: 1.6; margin-top: 2px;
   overflow-wrap: break-word; white-space: pre-wrap;
 }
 
 .comment-form { display: flex; align-items: center; gap: 8px; }
-.comment-pill {
-  flex: 1; min-width: 0; height: 34px; padding: 0 14px; text-align: left;
-  border: 1.5px solid #E4E7EC; border-radius: 999px; background: #FFFFFF;
-  font-size: 12.5px; color: #9AA1AD; cursor: text;
+.comment-input {
+  flex: 1; min-width: 0; height: 34px; padding: 0 14px;
+  border: 1.5px solid #E4E7EC; border-radius: 999px; background: #FFFFFF; outline: none;
+  font-size: 12.5px; color: #16181D; caret-color: #FFB800;
   transition: border-color 120ms;
 }
-.comment-pill:hover { border-color: #CDD2DB; }
-.comment-input-wrap {
-  flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px;
-  height: 34px; padding: 0 5px 0 14px;
-  border: 1.5px solid #CDD2DB; border-radius: 999px; background: #FFFFFF;
+.comment-input:hover { border-color: #CDD2DB; }
+.comment-input:focus { border-color: #FFB800; }
+.comment-input::placeholder { color: #B4BAC4; }
+/* 쓸 내용이 있을 때만 나타난다 — 빈 입력 옆의 죽은 버튼을 두지 않는다 */
+.comment-send {
+  flex: none; height: 34px; padding: 0 14px; border: none; border-radius: 999px;
+  background: #16181D; color: #FFFFFF; font-size: 12px; font-weight: 800;
+  white-space: nowrap; cursor: pointer;
 }
-.comment-input {
-  flex: 1; min-width: 0; padding: 0; border: none; outline: none; background: none;
-  font-size: 12.5px; color: #23262E; caret-color: #FFB800;
-}
-.comment-submit {
-  flex: none; height: 26px; padding: 0 12px; border: none; border-radius: 999px;
-  background: #16181D; color: #FFFFFF; font-size: 12px; font-weight: 800; cursor: pointer;
-}
-.comment-submit:disabled { background: #F1F3F6; color: #9AA1AD; cursor: default; }
+.comment-send:active { transform: scale(0.97); }
 
 .entry.compact .entry-social { gap: 10px; margin-top: 10px; padding-top: 10px; }
 .entry.compact .comment-name { font-size: 12px; }
 .entry.compact .comment-body { font-size: 12.5px; }
-.entry.compact .comment-pill, .entry.compact .comment-input { font-size: 12px; }
+.entry.compact .comment-input { font-size: 12px; }
 
 /* ---------- 캘린더 ---------- */
-.cal-head { display: flex; align-items: center; justify-content: space-between; margin: 18px 0 12px; }
-.cal-head-left { display: flex; align-items: center; gap: 10px; }
-.cal-title { font-size: 17px; font-weight: 800; letter-spacing: -0.01em; color: #16181D; }
+.cal-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 14px; }
+/* 좁은 화면은 제목·메타 두 줄, 와이드는 baseline 한 줄 (아래 미디어 쿼리) */
+.cal-head-text { min-width: 0; }
+.cal-title { font-size: 17px; font-weight: 800; letter-spacing: -0.02em; color: #16181D; white-space: nowrap; }
+.cal-meta { font-size: 12px; color: #9AA1AD; white-space: nowrap; flex: none; }
+.cal-meta-crew { display: none; }
+.cal-head-actions { display: flex; align-items: center; gap: 8px; flex: none; }
+/* nowrap/flex:none이 없으면 "오늘"이 음절 단위로 쪼개져 두 줄이 된다 */
 .cal-today-btn {
+  flex: none; white-space: nowrap;
   background: none; border: 1px solid #E4E7EC; border-radius: 999px; cursor: pointer;
-  padding: 4px 11px; font-size: 11.5px; font-weight: 700; color: #6B7280;
+  padding: 6px 13px; font-size: 12px; font-weight: 700; color: #4E555F;
 }
 .cal-today-btn:hover { background: #F1F3F6; }
 .cal-nav { display: flex; gap: 2px; }
+.cal-nav .icon-btn { width: 36px; height: 36px; }
 
-/* 멤버별 월 요약 카드 — 카드 폭은 모든 줄에서 같고(grow 없음), 남는 마지막 줄은 가운데로
-   모은다. grow로 채우면 마지막 줄에 남은 카드가 그 줄을 통째로 늘려 줄마다 카드 폭이
-   달라지고, 4명 와이드에서는 3 + 1(마지막 한 장이 한 줄 전체)이 된다.
-   열 수(--sc)는 모바일·좁은 와이드에서 2열 고정이고, 넓은 와이드에서만 CalendarView가
-   인원에 맞춰 심은 --cols를 쓴다 — 900px에서는 피드 열이 467px뿐이라 3열이면 카드가
-   150px로 눌린다(아래 min-width:1040px 참고). */
-.cal-stats {
-  --sc: 2;
-  display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-bottom: 16px;
-}
-.cal-stat {
-  display: flex; align-items: center; gap: 9px; padding: 10px 12px;
-  border: 1px solid #F1F3F6; border-radius: 12px; min-width: 0;
-  flex: 0 0 calc((100% - (var(--sc) - 1) * 8px) / var(--sc));
-}
-.cal-stat-main { min-width: 0; }
-.cal-stat-name { display: flex; align-items: center; gap: 4px; font-size: 12.5px; font-weight: 700; color: #16181D; }
-/* 320px 2열에서 카드 안쪽은 73px뿐이라 "이번 달 21일 · 연속 7일"(약 108px)이 한 줄에
-   안 들어간다. 말줄임이면 연속일이 통째로 사라지므로 줄을 바꿔 받는다 — keep-all이라
-   낱글자로 쪼개지지 않고 "이번 달 21일 · / 연속 7일"이 된다. */
-.cal-stat-line { font-size: 11px; color: #9AA1AD; line-height: 1.4; word-break: keep-all; margin-top: 1px; }
 .icon-btn {
   display: flex; align-items: center; justify-content: center;
   width: 38px; height: 38px; background: none; border: none; border-radius: 10px;
   cursor: pointer; color: #6B7280;
 }
 .icon-btn:hover { background: #F1F3F6; }
-.cal-week { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; margin-bottom: 4px; }
-.cal-wd { text-align: center; font-size: 11.5px; font-weight: 700; color: #9AA1AD; padding: 4px 0; }
+/* 격자 간격은 디자인이 6px이지만 좁은 화면에서는 3px로 둔다 — 320px에서 6px 간격이면
+   셀 트랙이 34.9px까지 좁아져 아래 색 점 5개(33px)가 한 줄에 못 선다 */
+.cal-week { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 3px; margin-bottom: 6px; }
+.cal-wd { text-align: center; font-size: 11.5px; font-weight: 700; color: #9AA1AD; padding: 2px 0; }
 .cal-wd.sun { color: #D3352A; }
-.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; }
+.cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 3px; }
 .cal-cell {
-  /* min-width: 0 — 그리드 항목의 기본 최소 크기는 내용 크기라, 태그를 여러 개 이어 붙인
-     긴 알약 라벨이 셀을 밀어 넓혀 달력 격자 전체를 넘치게 한다 (라벨은 말줄임으로 처리) */
-  height: 54px; min-width: 0; background: transparent; border: 1.5px solid transparent; border-radius: 12px;
+  /* min-width: 0 — 그리드 항목의 기본 최소 크기는 내용 크기라, 긴 알약 라벨이 셀을 밀어
+     넓혀 달력 격자 전체를 넘치게 한다 (라벨은 말줄임으로 처리) */
+  height: 54px; min-width: 0; overflow: hidden;
+  background: #FFFFFF; border: 1px solid #F1F3F6; border-radius: 12px;
   cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 4px; padding: 0;
-  transition: background 140ms, border-color 140ms;
+  gap: 6px; padding: 4px 2px; text-align: center;
+  transition: background 140ms, border-color 140ms, box-shadow 140ms;
 }
-.cal-cell.sel { background: #FFF9E6; border-color: #FFB800; }
-.cal-cell:hover { background: #F8F9FB; }
+/* 선택은 테두리 색만 바꾼다 — 배경까지 덮으면 "오늘이면서 선택"인 흔한 상태에서
+   오늘 표시(#FFFDF4)가 사라진다 */
+.cal-cell.today { background: #FFFDF4; border-width: 1.5px; border-color: #FFD666; }
+.cal-cell.sel { border-width: 1.5px; border-color: #16181D; box-shadow: 0 2px 8px rgba(22, 24, 29, 0.08); }
+.cal-cell:not(.sel):not(.today):hover { background: #F8F9FB; }
+/* 42칸을 채우는 앞뒤 빈 칸 — 높이만 차지하고 읽히지도 눌리지도 않는다 */
+.cal-cell.blank { visibility: hidden; }
 .cal-num {
-  display: flex; align-items: center; justify-content: center;
+  display: flex; align-items: center; justify-content: center; flex: none;
   width: 22px; height: 22px; border-radius: 50%;
   font-size: 12.5px; font-weight: 600; color: #363B45; background: transparent;
 }
 .cal-cell.future .cal-num { color: #CDD2DB; }
 .cal-cell.sel .cal-num { font-weight: 800; }
 .cal-cell.today .cal-num { background: #FFB800; color: #16181D; font-weight: 800; }
-/* 하루에 전원이 기록하면 점이 인원 수만큼 선다. 320px에서 셀 안쪽은 34.4px뿐이라
-   (37.4px 트랙 - 좌우 1.5px 보더) 간격 2.5px로는 5개째가 다음 줄로 밀려 그 날짜만
-   위로 들려 보인다 — 2px로 좁히면 5개가 33px에 들어간다.
-   6명부터는 줄을 바꿔 받는다(셀 높이 54px 안에서 소화된다). 점이 없는 날도 높이가
-   같아야 격자가 흔들리지 않으므로 최소 높이는 남긴다. */
-.cal-day-dots { display: flex; flex-wrap: wrap; justify-content: center; gap: 2px; min-height: 5px; max-width: 100%; }
-.cal-day-dot { display: block; width: 5px; height: 5px; border-radius: 50%; }
+/* 디자인 폭(375px)에서는 6px 점을 그대로 쓴다. 그보다 좁으면 현재 다섯 명도 한 줄에
+   못 서므로 점·간격을 1px씩 줄이고, 여섯 명부터는 셀 높이 안에서 줄을 바꿔 받는다.
+   점이 없는 날도 높이가 같아야 격자가 흔들리지 않으므로 최소 높이는 남긴다. */
+.cal-day-dots { display: flex; flex-wrap: wrap; justify-content: center; gap: 2px; min-height: 6px; max-width: 100%; }
+.cal-day-dot { display: block; width: 6px; height: 6px; border-radius: 50%; }
+@media (max-width: 374px) {
+  .cal-day-dots { gap: 1px; min-height: 5px; }
+  .cal-day-dot { width: 5px; height: 5px; }
+}
 
 /* 셀 안 멤버·태그 알약 — 모바일에서는 점으로 대신한다 (와이드 미디어에서 전환) */
-.cal-pills { display: none; flex-direction: column; gap: 3px; min-width: 0; }
-.cal-pill { display: flex; align-items: center; gap: 4px; border-radius: 6px; padding: 2.5px 5px; min-width: 0; }
-.cal-pill-dot { display: block; width: 6px; height: 6px; border-radius: 50%; flex: none; }
+.cal-pills { display: none; flex-direction: column; gap: 3px; min-width: 0; width: 100%; }
+.cal-pill { display: flex; align-items: center; gap: 3px; border-radius: 6px; padding: 3px 5px; min-width: 0; }
+.cal-pill-dot { display: block; width: 5px; height: 5px; border-radius: 50%; flex: none; }
 .cal-pill-label { font-size: 10px; font-weight: 700; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.cal-more { font-size: 10px; font-weight: 700; color: #9AA1AD; padding: 0 5px; text-align: left; }
+.cal-more { font-size: 10px; font-weight: 700; color: #9AA1AD; padding: 0 5px; text-align: left; white-space: nowrap; }
 
-/* 선택한 날 헤더 — 아바타가 최대 인원까지 늘어난다(5명 = 88px). 가운데 선이 먼저
-   0까지 줄고, 그래도 모자라면 날짜 라벨이 말줄임된다: flex:none으로 두면 넘친다. */
-.sel-head { display: flex; align-items: center; gap: 10px; margin: 26px 0 2px; }
-.sel-label {
-  font-size: 13px; font-weight: 800; color: #16181D;
-  flex: 0 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
-}
+/* 선택한 날 패널 — 좁은 화면에선 격자 아래로 흐르고, 와이드에선 우측 340px 열로 선다.
+   min-height는 기록이 없는 날에도 격자 옆이 허전하지 않게 자리를 잡아 둔다. */
+.cal-layout { display: block; }
+.cal-grid-col { min-width: 0; }
+.cal-sel { min-width: 0; margin-top: 26px; min-height: 220px; }
+/* 아바타는 최대 인원까지 늘어난다 — flex:none인 라벨과 부딪히면 줄을 바꿔 받는다(말줄임 대신) */
+.sel-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; row-gap: 6px; margin: 0 0 2px; }
+.sel-label { font-size: 14px; font-weight: 800; color: #16181D; flex: none; white-space: nowrap; }
 .sel-count { font-size: 12px; font-weight: 600; color: #9AA1AD; flex: none; }
 .sel-avatars { display: flex; flex: none; }
 .sel-av { display: block; flex: none; border-radius: 50%; border: 2px solid #FFFFFF; }
-.sel-av + .sel-av { margin-left: -8px; }
-.sel-empty { text-align: center; font-size: 13px; color: #9AA1AD; padding: 26px 0 10px; }
+.sel-av + .sel-av { margin-left: -7px; }
+/* 첫 항목에도 윗줄을 둬 패널 머리와 목록을 가른다 (피드는 카드 사이만 가른다) */
+.sel-list .entry { border-top-color: #F1F3F6; }
+.sel-empty { text-align: center; font-size: 13px; color: #9AA1AD; padding: 28px 0 8px; }
 
 .footer { text-align: center; font-size: 12.5px; color: #9AA1AD; margin-top: 34px; }
 .demo-note { font-size: 11.5px; color: #C3C9D2; margin-top: 8px; }
 
-/* ---------- 기록 모달 ---------- */
+/* ---------- 기록 작성/수정 시트 ---------- */
 .overlay {
   position: fixed; inset: 0; background: rgba(22, 24, 29, 0.45);
   backdrop-filter: blur(4px); z-index: 50;
   display: flex; align-items: flex-end; justify-content: center;
   animation: rc-fade 160ms cubic-bezier(0.16, 1, 0.3, 1);
 }
+.compose-overlay { background: rgba(22, 24, 29, 0.32); backdrop-filter: none; }
+/* 시트는 통째로 하나가 굴러간다 — 머리·바닥을 고정하고 가운데만 굴리면 460px 시트에서
+   정작 굴러가는 자리가 얼마 안 남는다(단계가 사라지면서 내용이 한 장으로 길어졌다). */
 .sheet {
-  width: 100%; max-width: 540px; background: #FFFFFF;
-  border-radius: 20px 20px 0 0; padding: 0; margin: 0;
-  box-shadow: 0 28px 64px rgba(22, 24, 29, 0.16);
-  /* 짧은 화면(가로 폰)에서 min-height가 뷰포트를 넘으면 상단·닫기 버튼이 밀려난다 —
-     뷰포트에 맞춰 낮아지게 min()으로 묶는다 (dvh 미지원 브라우저는 vh 폴백) */
-  min-height: min(460px, calc(100vh - 14px));
+  width: 100%; max-width: 100%; background: #FFFFFF;
+  border-radius: 20px 20px 0 0; padding: 20px; margin: 0;
+  box-shadow: 0 24px 60px rgba(22, 24, 29, 0.28);
+  /* dvh 미지원 브라우저는 vh 폴백 */
   max-height: calc(100vh - 14px);
-  min-height: min(460px, calc(100dvh - 14px));
   max-height: calc(100dvh - 14px);
-  display: flex; flex-direction: column; overflow: hidden; position: relative;
+  overflow-y: auto; position: relative;
   animation: rc-pop 220ms cubic-bezier(0.16, 1, 0.3, 1);
 }
-.sheet-head { flex: none; position: relative; padding: 18px 26px 6px; }
-.sheet-head-row { display: flex; align-items: center; justify-content: space-between; }
+.sheet-head-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.sheet-title {
+  margin: 0; font-size: 18px; font-weight: 800; letter-spacing: -0.02em; color: #16181D;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.sheet-close { width: 34px; height: 34px; flex: none; border-radius: 50%; margin: -6px -6px -6px 0; }
+.sheet-close:hover { background: #F1F3F6; color: #16181D; }
+.sheet-date-wrap { position: relative; margin-top: 2px; }
 .sheet-date-btn {
   display: flex; align-items: center; gap: 6px; background: none; border: none;
-  cursor: pointer; padding: 6px 10px; margin: -6px 0 0 -10px; border-radius: 10px;
+  cursor: pointer; padding: 6px 10px; margin-left: -10px; border-radius: 10px;
   color: #9AA1AD;
 }
 .sheet-date-btn:hover { background: #F1F3F6; }
-.sheet-date-main { font-size: 14px; font-weight: 800; color: #16181D; letter-spacing: -0.01em; }
-.sheet-date-suffix { font-size: 12.5px; font-weight: 700; color: #9AA1AD; }
-.sheet-close { color: #9AA1AD; margin: -6px -8px 0 0; }
-.sheet-close:hover { background: #F1F3F6; color: #16181D; }
+.sheet-date-main { font-size: 13px; font-weight: 700; color: #4E555F; letter-spacing: -0.01em; }
+.sheet-date-suffix { font-size: 12px; font-weight: 700; color: #9AA1AD; }
 
-/* 날짜 선택 팝오버 */
+/* 날짜 선택 팝오버 — 시트가 아니라 날짜 줄을 기준으로 뜬다 */
 .cal-pop {
-  position: absolute; top: 50px; left: 26px; width: 300px;
+  position: absolute; top: calc(100% + 2px); left: 0; width: 300px; max-width: 100%;
   background: #FFFFFF; border: 1px solid #F1F3F6; border-radius: 16px;
   box-shadow: 0 12px 40px rgba(22, 24, 29, 0.18); padding: 14px; z-index: 20;
   animation: rc-pop 180ms cubic-bezier(0.16, 1, 0.3, 1);
@@ -543,6 +578,7 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 .cal-pop-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
 .cal-pop-title { font-size: 13.5px; font-weight: 800; color: #16181D; }
 .icon-btn.sm { width: 30px; height: 30px; border-radius: 8px; }
+.cal-nav .icon-btn:disabled { color: #CDD2DB; cursor: default; }
 .cal-pop-week { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; margin-bottom: 2px; }
 .cal-pop-wd { text-align: center; font-size: 11px; font-weight: 700; color: #9AA1AD; padding: 3px 0; }
 .cal-pop-wd.sun { color: #D3352A; }
@@ -563,29 +599,68 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 .cal-pop-day.today .cal-pop-num { background: #FFB800; color: #16181D; font-weight: 800; }
 .cal-pop-day.future .cal-pop-num { color: #CDD2DB; }
 
-/* 1단계 — 쓰기 */
-.sheet-scroll { flex: 1; overflow: auto; padding: 0 26px 8px; }
+/* 섹션 라벨 — 오른쪽에 곁들이는 버튼(할 일 접기)이 붙는 줄은 -row */
+.sheet-label {
+  display: block; font-size: 12px; font-weight: 800; color: #9AA1AD;
+  letter-spacing: 0.02em; margin-top: 20px;
+}
+.sheet-label-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 20px;
+}
+.sheet-label-row .sheet-label { margin-top: 0; }
+
+.tag-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
+.tag-chip {
+  display: flex; align-items: center; height: 36px; padding: 0 14px;
+  border-radius: 999px; font-size: 13px; font-weight: 700; cursor: pointer;
+  border: 1.5px solid #E4E7EC; background: #FFFFFF; color: #6B7280;
+  transition: background 120ms, color 120ms, border-color 120ms;
+}
+.tag-chip:active { transform: scale(0.97); }
+
+.star-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
+.star-btn {
+  display: flex; align-items: center; justify-content: center; width: 34px; height: 34px;
+  background: none; border: none; border-radius: 10px; cursor: pointer; padding: 0;
+  transition: background 120ms;
+}
+.star-btn:hover { background: #FFF9E6; }
+.star-btn:active { transform: scale(0.9); }
+.star-btn path { transition: fill 120ms; }
+.star-count { font-size: 12px; font-weight: 700; color: #9AA1AD; margin-left: 4px; white-space: nowrap; }
+.off-note { display: block; font-size: 13px; color: #6B7280; margin-top: 9px; }
+
 .modal-diary {
-  width: 100%; border: none; outline: none; resize: none; background: none; display: block;
-  font-size: 17px; line-height: 1.8; letter-spacing: -0.01em; color: #23262E;
-  min-height: 190px; padding: 8px 0 4px; caret-color: #FFB800;
+  display: block; width: 100%; margin-top: 9px; padding: 12px 14px;
+  border: 1.5px solid #E4E7EC; border-radius: 12px; background: #FFFFFF;
+  font-size: 14px; line-height: 1.6; color: #23262E;
+  /* 높이는 내용에 맞춰 스크립트가 다시 잡는다 — 여기 min-height는 빈 칸의 바닥이다 */
+  min-height: 104px; resize: none; overflow: hidden; outline: none; caret-color: #FFB800;
+  transition: border-color 120ms;
 }
-/* 짧은 화면(가로 폰): 본문 최소 높이를 줄이고 날짜 팝오버가 시트 안에서 스크롤되게 */
+.modal-diary:focus { border-color: #FFB800; }
+/* 짧은 화면(가로 폰): 빈 본문 칸을 낮추고, 날짜 팝오버는 제 안에서 굴러가게 */
 @media (max-height: 480px) {
-  .modal-diary { min-height: 96px; }
-  .cal-pop { max-height: calc(100dvh - 90px); overflow: auto; }
+  .modal-diary { min-height: 88px; }
+  .cal-pop { max-height: calc(100dvh - 130px); overflow: auto; }
 }
+
 .todo-toggle {
-  display: flex; align-items: center; gap: 7px; background: none; border: none; cursor: pointer;
-  padding: 8px 0; font-size: 13px; font-weight: 700; color: #9AA1AD; width: fit-content;
+  background: none; border: none; cursor: pointer; padding: 4px 8px; margin-right: -8px;
+  border-radius: 8px; font-size: 12px; font-weight: 700; color: #6B7280;
 }
-.todo-toggle:hover { color: #16181D; }
-.modal-todos { display: flex; flex-direction: column; gap: 1px; padding-bottom: 10px; }
+.todo-toggle:hover { background: #F1F3F6; color: #16181D; }
+/* 본문 칸과 같은 테두리로 묶는다 — 줄 하나짜리 입력이 여럿이라 테두리가 없으면
+   어디까지가 할 일 목록인지가 안 보인다 */
+.modal-todos {
+  display: flex; flex-direction: column; margin-top: 9px; padding: 4px 10px 6px;
+  border: 1.5px solid #E4E7EC; border-radius: 12px;
+}
 .modal-todo-row { display: flex; align-items: center; gap: 9px; }
-.modal-check { width: 21px; height: 21px; border-radius: 7px; cursor: pointer; }
+.modal-check { width: 21px; height: 21px; flex: none; border-radius: 7px; cursor: pointer; }
 .modal-todo-input {
   flex: 1; min-width: 0; border: none; outline: none; background: none;
-  font-size: 14px; padding: 8px 0; color: #23262E; caret-color: #FFB800;
+  font-size: 13.5px; padding: 9px 0; color: #23262E; caret-color: #FFB800;
 }
 .modal-todo-input.done { color: #9AA1AD; text-decoration: line-through; }
 .modal-todo-remove {
@@ -596,71 +671,30 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 .modal-todo-remove:hover { background: #F1F3F6; color: #6B7280; }
 .add-todo {
   display: flex; align-items: center; gap: 7px; background: none; border: none; cursor: pointer;
-  padding: 8px 0; font-size: 13px; font-weight: 700; color: #9AA1AD; width: fit-content;
+  padding: 7px 0 3px; font-size: 12.5px; font-weight: 700; color: #9AA1AD; width: fit-content;
 }
 .add-todo:hover { color: #16181D; }
 
-.sheet-foot {
-  flex: none; display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  padding: 12px 26px 18px; border-top: 1px solid #F1F3F6; background: #FFFFFF;
+.sheet-foot { display: flex; align-items: center; gap: 8px; margin-top: 20px; }
+/* 좁은 폭에서는 잔글씨가 먼저 줄어든다 — 저장 버튼이 눌리는 폭을 잃는 것보다 낫다 */
+.draft-note {
+  flex: 0 1 auto; min-width: 0; font-size: 11.5px; font-weight: 600; color: #C3C9D2;
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis; transition: color 160ms;
 }
-.draft-note { font-size: 11.5px; color: #C3C9D2; transition: opacity 240ms; }
-.next-btn {
-  display: flex; align-items: center; gap: 6px; height: 46px; padding: 0 24px;
-  border: none; border-radius: 999px; background: #F1F3F6; color: #9AA1AD;
-  font-size: 14.5px; font-weight: 800; cursor: pointer;
-  transition: background 160ms, color 160ms;
+.draft-note.warn { color: #D3352A; }
+.cancel-btn {
+  flex: none; height: 46px; padding: 0 18px; border: 1.5px solid #E4E7EC; border-radius: 12px;
+  background: #FFFFFF; color: #4E555F; font-size: 14px; font-weight: 700; cursor: pointer;
+  white-space: nowrap; transition: background 120ms;
 }
-.next-btn.ready { background: #16181D; color: #FFFFFF; }
-.next-btn:active { transform: scale(0.98); }
-
-/* 2단계 — 태그·만족도 패널 */
-.meta-panel {
-  position: absolute; inset: 0; background: #FFFFFF;
-  display: flex; flex-direction: column; z-index: 30;
-  transform: translateY(102%);
-  transition: transform 300ms cubic-bezier(0.16, 1, 0.3, 1);
-}
-.meta-panel.on { transform: translateY(0); }
-.meta-head { flex: none; display: flex; align-items: center; justify-content: space-between; padding: 18px 26px 6px; }
-.back-btn {
-  display: flex; align-items: center; gap: 6px; background: none; border: none; cursor: pointer;
-  padding: 6px 10px; margin: -6px 0 0 -10px; border-radius: 10px;
-  font-size: 13.5px; font-weight: 700; color: #6B7280;
-}
-.back-btn:hover { background: #F1F3F6; color: #16181D; }
-.meta-scroll { flex: 1; overflow: auto; padding: 6px 26px 8px; }
-.meta-excerpt {
-  font-size: 13.5px; color: #9AA1AD; line-height: 1.5;
-  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
-  padding-bottom: 14px; border-bottom: 1px solid #F1F3F6;
-}
-.meta-label { display: flex; align-items: center; gap: 6px; font-size: 13px; color: #9AA1AD; }
-.meta-label.tags { margin: 18px 0 10px; }
-.meta-hint { font-size: 11.5px; color: #B6BCC6; font-weight: 600; }
-.meta-label.stars { margin: 22px 0 6px; }
-.tag-chips { display: flex; flex-wrap: wrap; gap: 8px; }
-.tag-chip {
-  display: flex; align-items: center; gap: 6px; height: 42px; padding: 0 15px;
-  border-radius: 999px; font-size: 13.5px; font-weight: 700; cursor: pointer;
-  border: 1.5px solid #E4E7EC; background: #FFFFFF; color: #6B7280;
-  transition: background 120ms, color 120ms, border-color 120ms;
-}
-.tag-chip:active { transform: scale(0.97); }
-.tag-chip svg { flex: none; display: block; }
-.star-row { display: flex; align-items: center; min-width: 0; }
-.star-btn { display: flex; align-items: center; justify-content: center; width: 48px; height: 48px; background: none; border: none; cursor: pointer; padding: 0; }
-.star-btn:active { transform: scale(0.85); }
-.star-btn path { transition: fill 120ms; }
-.off-note { display: block; font-size: 13px; color: #6B7280; padding: 14px 0; }
-.meta-foot { flex: none; padding: 12px 26px 18px; border-top: 1px solid #F1F3F6; }
+.cancel-btn:hover { background: #F8F9FB; }
 .submit {
-  width: 100%; height: 52px; border: none; border-radius: 14px;
-  background: #F1F3F6; color: #9AA1AD; font-size: 15.5px; font-weight: 800; cursor: pointer;
-  box-shadow: none;
-  transition: background 160ms, color 160ms, box-shadow 160ms;
+  flex: 1; min-width: 0; height: 46px; border: none; border-radius: 12px;
+  background: #F1F3F6; color: #9AA1AD; font-size: 14px; font-weight: 800; cursor: pointer;
+  white-space: nowrap; transition: background 160ms, color 160ms;
 }
-.submit.ready { background: #FFB800; color: #16181D; box-shadow: 0 8px 24px rgba(255, 184, 0, 0.32); }
+.submit.ready { background: #FFB800; color: #16181D; }
+.submit.ready:hover { background: #F5B000; }
 .submit:active { transform: scale(0.98); }
 
 /* ---------- 삭제 확인 ---------- */
@@ -698,9 +732,8 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 .confirm-btn:active { transform: scale(0.98); }
 
 /* ---------- 알림 (벨 버튼 · 내역 · 설정) ---------- */
-/* margin-left:auto — brand-row가 줄을 바꿔야 할 만큼 좁아졌을 때도 오른쪽에 붙는다
-   (space-between은 한 줄에 혼자 남은 항목을 왼쪽으로 보낸다) */
-.brand-side { display: flex; align-items: center; gap: 8px; flex: none; margin-left: auto; }
+/* 드롭다운(별도 파트)이 이 자리를 기준으로 뜬다 — 벨이 아니라 이 래퍼가 기준점이다 */
+.bell-wrap { position: relative; display: flex; flex: none; }
 .bell-btn {
   position: relative; display: flex; align-items: center; justify-content: center;
   width: 38px; height: 38px; flex: none; padding: 0;
@@ -717,11 +750,73 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
   font-size: 9.5px; font-weight: 800; line-height: 12px; box-sizing: content-box;
   display: flex; align-items: center; justify-content: center;
 }
+/* 테두리는 벨의 배경색과 같아야 한다 — 다른 색이면 배지 둘레에 흰 링이 남는다 */
+.bell-btn.on .bell-badge { border-color: #F1F3F6; }
 
-.noti-page { padding-top: 4px; }
-.noti-head { display: flex; align-items: center; gap: 12px; padding-top: 8px; }
-.noti-title { flex: 1; min-width: 0; font-size: 27px; font-weight: 800; letter-spacing: -0.02em; }
-.noti-head .icon-btn { width: 44px; height: 44px; border-radius: 50%; color: #4E555F; }
+/* 데스크톱 알림 드롭다운 — 벨 래퍼(.bell-wrap)를 기준으로 뜬다 */
+.noti-drop {
+  position: absolute; top: 48px; right: -6px; width: 352px; z-index: 30;
+  background: #FFFFFF; border: 1px solid #E4E7EC; border-radius: 16px;
+  box-shadow: 0 16px 40px rgba(22, 24, 29, 0.16); overflow: hidden;
+  animation: rc-pop-sm 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.noti-drop-head {
+  display: flex; align-items: center; gap: 7px;
+  padding: 14px 16px 12px; border-bottom: 1px solid #F1F3F6;
+}
+.noti-drop-title { font-size: 14px; font-weight: 800; color: #16181D; white-space: nowrap; }
+.noti-drop-badge {
+  display: flex; align-items: center; justify-content: center; flex: none;
+  min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px;
+  background: #FFF9E6; color: #B37F00; font-size: 10.5px; font-weight: 800;
+}
+.noti-drop-mark {
+  flex: none; white-space: nowrap; cursor: pointer; border: none; background: none;
+  padding: 6px 8px; border-radius: 8px; font-size: 11.5px; font-weight: 700; color: #6B7280;
+  transition: background 120ms, color 120ms;
+}
+.noti-drop-mark:hover { background: #F1F3F6; color: #16181D; }
+.noti-drop-head .icon-btn { width: 30px; height: 30px; border-radius: 8px; margin-right: -6px; }
+/* 목록만 스크롤한다 — "모두 읽음"·설정은 늘 손 닿는 자리에 남는다 */
+.noti-drop-list { max-height: min(60vh, 520px); overflow-y: auto; }
+.noti-drop-empty { text-align: center; font-size: 12.5px; color: #9AA1AD; padding: 44px 16px; }
+
+/* 드롭다운 행 — 전체 화면 내역과 같은 줄을 치수만 줄여 쓴다(NotiRowView) */
+.noti-row.compact {
+  gap: 10px; padding: 13px 16px;
+  border-top: none; border-bottom: 1px solid #F5F6F8;
+}
+.noti-row.compact.unread { background: #FFFDF4; }
+.noti-row.compact .noti-dot-col { width: 6px; padding-top: 14px; }
+.noti-row.compact .noti-dot { width: 6px; height: 6px; }
+.noti-row.compact .noti-text { font-size: 13px; line-height: 1.55; }
+.noti-row.compact.unread .noti-rest { color: #23262E; }
+/* 인용은 두 줄에서 끊는다 — 352px 상자에서 긴 댓글 하나가 목록을 다 먹으면 안 된다 */
+.noti-row.compact .noti-quote {
+  font-size: 12.5px; line-height: 1.5; padding: 8px 10px; border-radius: 10px; margin-top: 6px;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.noti-row.compact .noti-ctx {
+  font-size: 11.5px; margin-top: 3px;
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+.noti-row.compact .noti-meta { gap: 7px; margin-top: 6px; }
+.noti-row.compact .noti-why { font-size: 10px; padding: 3px 7px; }
+.noti-row.compact .noti-time { font-size: 11px; }
+.noti-row.compact .noti-sub { margin-top: 8px; padding-left: 10px; }
+.noti-row.compact .noti-sub-line, .noti-row.compact .noti-sub-quote { font-size: 12px; }
+.noti-row.compact .noti-expand { height: 22px; font-size: 11px; }
+
+/* 전체 화면 내역은 좁은 화면(알림 탭) 전용이다 — 데스크톱은 벨 드롭다운이 대신한다.
+   제목은 모바일 홈 머리(21px)와 같은 치수로 맞춘다: 탭마다 머리 크기가 튀면 안 된다. */
+.noti-page { margin: 0 -6px; }
+.noti-page .noti-head,
+.noti-page .noti-summary,
+.noti-page .noti-group-label,
+.noti-page .noti-foot-note { margin-left: 6px; margin-right: 6px; }
+.noti-head { display: flex; align-items: center; gap: 12px; }
+.noti-title { flex: 1; min-width: 0; font-size: 21px; font-weight: 800; letter-spacing: -0.02em; }
+.noti-head .icon-btn { border-radius: 50%; color: #4E555F; }
 .noti-summary { display: flex; align-items: center; gap: 10px; margin-top: 2px; }
 .noti-summary-text { flex: 1; min-width: 0; font-size: 12.5px; color: #6B7280; }
 .noti-readall {
@@ -733,6 +828,7 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
   display: flex; gap: 7px; overflow-x: auto; scrollbar-width: none;
   padding: 12px 0 4px; margin: 0 -20px; padding-left: 20px; padding-right: 20px;
 }
+.noti-page .noti-filters { margin-left: -14px; margin-right: -14px; }
 .noti-filters::-webkit-scrollbar { display: none; }
 .noti-chip {
   display: flex; align-items: center; flex: none; height: 40px; cursor: pointer;
@@ -747,7 +843,7 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 .noti-group { margin-top: 14px; }
 .noti-group-label { font-size: 12px; font-weight: 800; color: #9AA1AD; padding-bottom: 2px; }
 .noti-row {
-  display: flex; gap: 11px; width: 100%; text-align: left; cursor: pointer;
+  display: flex; align-items: flex-start; gap: 11px; width: 100%; text-align: left; cursor: pointer;
   border: none; border-top: 1px solid #F5F6F8; padding: 15px 2px;
   background: #FFFFFF; transition: background 140ms;
 }
@@ -899,42 +995,87 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 .login-name { font-size: 14.5px; font-weight: 700; color: #16181D; }
 .login-error { font-size: 12.5px; color: #D3352A; margin-top: 14px; }
 
+/* ---------- 토스트 ---------- */
+@keyframes toast-in { from { opacity: 0; transform: translate(-50%, 8px); } to { opacity: 1; transform: translate(-50%, 0); } }
+/* 모달 오버레이(z 50)보다 위 — 시트 안에서 낸 토스트도 가려지면 안 된다.
+   좁은 화면에서는 탭바(66px) 위로 띄운다: 바닥에 붙으면 탭 라벨을 덮는다. */
+.toast {
+  position: fixed; left: 50%; bottom: calc(84px + env(safe-area-inset-bottom));
+  transform: translateX(-50%); z-index: 60;
+  max-width: calc(100vw - 32px); padding: 10px 16px; border-radius: 999px;
+  background: #16181D; color: #FFFFFF; font-size: 12.5px; font-weight: 700;
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  box-shadow: 0 10px 24px rgba(22, 24, 29, 0.28);
+  animation: toast-in 180ms ease-out;
+}
+
 /* ---------- 와이드(≥900px) 레이아웃 ---------- */
 @media (min-width: 900px) {
-  /* 왼쪽 열 300 → 308px, 안쪽 여백 28 → 24px: 브랜드 줄에 5명 스택(92px)이 들어갈
-     자리를 12px 벌어 준다(126 + 10 + 38 + 8 + 92 = 274 ≤ 284). 피드 열은 그만큼만 준다. */
-  .shell { max-width: 1280px; padding: 44px 40px 64px; grid-template-columns: 308px minmax(0, 1fr); }
-  .left { position: sticky; top: 36px; padding-right: 24px; }
-  .feed-col { padding-left: 44px; border-left: 1px solid #F1F3F6; margin-top: 0; }
-  .board { display: flex; flex-direction: column; }
-  .board-strip { display: none; }
-  .board-row { display: flex; }
-  /* 캘린더 — 알약이 들어가는 큰 셀 */
-  .cal-title { font-size: 19px; }
-  .cal-cell {
-    height: auto; min-height: 96px;
-    align-items: stretch; justify-content: flex-start; gap: 3px;
-    padding: 6px 5px; border-color: #F5F6F8;
+  /* 피드가 짧고 캘린더가 길어도 루트 너비를 그대로 둔다. 스크롤바가 탭 전환 때
+     생겼다 사라지며 가운데 정렬된 상단 바 전체를 좌우로 미는 현상을 막는다. */
+  html { scrollbar-gutter: stable; }
+  /* 탭바가 없으니 바닥 여백도, 그 위로 띄우던 토스트도 원래 자리로 돌아온다 */
+  .toast { bottom: 28px; padding: 11px 18px; font-size: 13px; }
+  /* 패널 열은 접혀도 마운트를 유지하고 폭만 0으로 닫는다 — 열 때마다 다시 그리면
+     체크인 카드의 등장 애니메이션이 매번 처음부터 돈다.
+     안쪽 래퍼는 296px 고정: 열 폭을 따라 줄어들면 애니메이션 내내 내용이 찌그러진다. */
+  .body {
+    display: grid; align-items: start; max-width: 1512px; margin: 0 auto; padding: 30px 36px 44px;
+    grid-template-columns: 0 minmax(0, 1fr);
+    transition: grid-template-columns 300ms cubic-bezier(0.4, 0, 0.2, 1);
   }
-  .cal-cell.sel { border-color: #FFB800; }
-  .cal-num { width: 21px; height: 21px; font-size: 12px; margin: 0 auto 2px; }
+  .body.open { grid-template-columns: 296px minmax(0, 1fr); }
+  /* visibility로 닫는다 — opacity만 0이면 안 보이는 버튼이 탭 순서에 그대로 남는다.
+     닫힐 때는 전환이 끝난 뒤(300ms) 감추고, 열 때는 즉시 드러낸다. */
+  .panel-col {
+    min-width: 0; overflow: hidden;
+    opacity: 0; transform: translateX(-10px); pointer-events: none; visibility: hidden;
+    transition: opacity 220ms ease, transform 300ms cubic-bezier(0.4, 0, 0.2, 1), visibility 0s 300ms;
+  }
+  .body.open .panel-col {
+    opacity: 1; transform: none; pointer-events: auto; visibility: visible;
+    transition: opacity 220ms ease 80ms, transform 300ms cubic-bezier(0.4, 0, 0.2, 1), visibility 0s;
+  }
+  .panel-inner { width: 296px; padding-right: 28px; }
+  .main-col {
+    padding-left: 0; border-left: 1px solid transparent;
+    transition: padding-left 300ms cubic-bezier(0.4, 0, 0.2, 1), border-color 300ms ease;
+  }
+  .body.open .main-col { padding-left: 36px; border-left-color: #F1F3F6; }
+  /* 피드 — 제목이 서고 메타는 그 옆의 잔글씨로 물러난다 */
+  .feed-title { display: block; }
+  .feed-meta { font-size: 12.5px; font-weight: 400; }
+  /* 캘린더 — 알약이 들어가는 큰 셀 + 우측 선택일 패널 */
+  .cal-head { margin-bottom: 18px; }
+  .cal-head-text { display: flex; align-items: baseline; gap: 12px; }
+  .cal-title { font-size: 22px; }
+  .cal-meta-crew { display: inline; }
+  .cal-week, .cal-grid { gap: 6px; }
+  /* 142px 고정 — 알약을 3개로 끊는 규칙과 짝이다. 늘어나게 두면 기록이 몰린 주만 키가 커진다 */
+  .cal-cell {
+    height: 142px; align-items: stretch; justify-content: flex-start; gap: 5px;
+    padding: 7px 5px; text-align: left;
+  }
+  .cal-num { margin: 0 auto 2px; }
   .cal-pills { display: flex; }
   .cal-day-dots { display: none; }
-  .overlay { align-items: center; }
-  /* 와이드 규칙이 모바일의 뷰포트 제한을 소스 순서로 덮으므로 여기서도 높이를 뷰포트로
-     묶는다 — min-height: 540px 그대로면 900×480(가로 태블릿)에서 시트가 540px로 서서
-     top=-30/bottom=510이 되고 닫기 버튼과 푸터가 화면 밖으로 나간다.
-     min-height를 max-height와 같은 식(88vh)으로 잡아 둘이 서로 싸우지 않게 했다. */
+  .cal-layout { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 32px; align-items: start; }
+  /* 격자를 훑는 동안 선택일이 따라 붙는다. 상단 바가 sticky라 그 아래(65px)부터 24px 띄운다 —
+     디자인의 top:24는 자체 스크롤 프레임 기준이라 그대로 쓰면 바 뒤로 들어간다. */
+  .cal-sel { position: sticky; top: 89px; margin-top: 0; min-height: 520px; }
+  /* 시트는 화면 가운데 뜬다. 높이는 오버레이 안쪽(패딩 24px 뺀 자리)까지만 — 900×480
+     (가로 태블릿)처럼 낮은 화면에서 시트가 제 키대로 서면 닫기 버튼과 저장 줄이
+     화면 밖으로 나간다. */
+  .compose-overlay { align-items: center; padding: 24px; }
   .sheet {
-    max-width: 640px; border-radius: 24px; margin: 20px;
-    min-height: min(540px, 88vh); max-height: min(88vh, 760px);
-    min-height: min(540px, 88dvh); max-height: min(88dvh, 760px);
+    width: 460px; max-width: 100%; border-radius: 20px; padding: 26px;
+    max-height: 100%;
   }
 }
 
-/* 넓은 와이드에서만 통계 카드를 인원에 맞춘 열 수로 편다(CalendarView가 --cols를 심는다).
-   900px에서는 피드 열이 467px이라 3열이면 카드가 150px(요약 문구 자리 87px)로 눌린다 —
-   1040px부터 피드 열이 607px이 되어 3열에서도 카드가 197px(문구 자리 134px)로 넉넉하다. */
-@media (min-width: 1040px) {
-  .cal-stats { --sc: var(--cols, 3); }
+/* 900px 셸에서 크루 패널까지 열면 고정 340px 선택일 열이 격자를 108px까지 누른다.
+   본문이 다시 넉넉해질 때까지 선택일만 아래로 받아, 데스크톱 셀·알약은 그대로 유지한다. */
+@media (min-width: 900px) and (max-width: 1399px) {
+  .body.open .cal-layout { display: block; }
+  .body.open .cal-sel { position: static; margin-top: 26px; min-height: 220px; }
 }

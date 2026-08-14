@@ -2,9 +2,9 @@
    행 문구·배지·그룹핑은 전부 스냅샷(Notification[])에서 파생한다 — 여기서 쓰기는
    "읽음 처리"뿐이고, 같은 날의 크루 전체 댓글(why=all)은 표시할 때만 한 줄로 접는다. */
 import { useEffect, useMemo, useState } from 'react';
-import type { NotifKind, NotifWhy, Notification } from '../../shared/types';
+import type { MemberId, NotifKind, NotifWhy, Notification } from '../../shared/types';
 import { W, dayKey, memberName, memberOf, pad2 } from '../lib/constants';
-import { Avatar, BELL_D, Icon } from './icons';
+import { Avatar, BELL_D, GearIcon, Icon } from './icons';
 
 /* ---------- 표시 규칙 (순수 — 테스트가 직접 부른다) ---------- */
 
@@ -129,6 +129,18 @@ export function groupDayRows(items: Notification[], dayId: string): NotiRow[] {
   return out;
 }
 
+/** 행 하나를 읽음 처리 — 접힌 줄은 안에 든 알림 전부가 대상이다. */
+export function readRow(row: NotiRow, onRead: (id: string) => void): void {
+  for (const x of row.group) if (x.readAt === null) onRead(x.id);
+}
+
+/** 행 앞에 세울 사람 — 하루 요약은 actor 대신 actors에 참여자를 담아 오므로 첫 사람을 쓴다.
+    system만 사람 아바타가 아닌 벨이고, 모르는 id는 이후 memberOf의 중립 표시로 간다. */
+export function displayActorOf(n: Notification): MemberId | null {
+  if (n.kind === 'system') return null;
+  return n.actor ?? (n.why === 'react_daily' ? n.actors[0] ?? null : null);
+}
+
 /* ---------- 컴포넌트 ---------- */
 
 function BellCircle({ size }: { size: number }) {
@@ -136,6 +148,94 @@ function BellCircle({ size }: { size: number }) {
     <span className="noti-bell-av" style={{ width: size, height: size }}>
       <Icon d={BELL_D} size={Math.round(size * 0.5)} sw={2.2} />
     </span>
+  );
+}
+
+/** 알림 한 줄 — 전체 화면(모바일 내역)과 벨 드롭다운(데스크톱)이 같은 줄을 쓴다.
+    다른 것은 치수·여백뿐이라 compact 한 장으로 가른다(EntryCard와 같은 방식). */
+export function NotiRowView({
+  row, compact, expanded, onExpand, onActivate,
+}: {
+  row: NotiRow;
+  compact: boolean;
+  expanded: boolean;
+  onExpand: () => void;
+  onActivate: () => void;
+}) {
+  const n = row.head;
+  const grouped = row.group.length > 1;
+  const anyUnread = row.group.some((x) => x.readAt === null);
+  const badge = WHY_BADGE[n.why];
+  // 하루 요약은 actor=null이어도 actors[0]이 있다 — 벨을 세우면 사람이 보낸 응원이
+  // 시스템 알림처럼 읽힌다. 모르는 id는 memberOf가 중립 아바타로 받는다.
+  const displayActor = displayActorOf(n);
+  const member = displayActor ? memberOf(displayActor) : undefined;
+  const actorCount = new Set(row.group.map((x) => x.actor)).size;
+  const name = grouped
+    ? `${nameOf(n)}${actorCount > 1 ? ` 외 ${actorCount - 1}명` : ''}`
+    : nameOf(n);
+  const rest = grouped
+    ? `님이 크루 기록에 댓글 ${row.group.length}개를 남겼어요`
+    : restOf(n);
+  const ctx = grouped ? '' : ctxOf(n);
+  const av = compact ? 30 : 38;
+  // 드롭다운의 행은 읽음 처리에서 끝나지 않고 피드로 데려간다 — 라벨도 그 결과를 말한다
+  const label = compact ? '읽고 피드로 이동' : anyUnread ? '읽음으로 표시' : undefined;
+
+  // 행 자체는 role=button div — 안에 진짜 <button>(펼치기)이 서야 해서
+  // button 안에 button을 중첩하는 무효 HTML을 피한다
+  return (
+    <div className={'noti-row' + (compact ? ' compact' : '') + (anyUnread ? ' unread' : '')}
+      role="button" tabIndex={0}
+      aria-label={label}
+      onClick={onActivate}
+      onKeyDown={(e) => {
+        if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) {
+          e.preventDefault();
+          onActivate();
+        }
+      }}>
+      <span className="noti-dot-col">
+        <span className="noti-dot" style={{ background: anyUnread ? '#FFB800' : 'transparent' }} />
+      </span>
+      {member ? <Avatar m={member} size={av} /> : <BellCircle size={av} />}
+      <span className="noti-main">
+        <span className="noti-text">
+          {name && <span className="noti-name">{name}</span>}
+          <span className="noti-rest">{rest}</span>
+        </span>
+        {!grouped && n.quote && <span className="noti-quote">{n.quote}</span>}
+        {ctx && <span className="noti-ctx">{ctx}</span>}
+        {grouped && expanded && (
+          <span className="noti-sub">
+            {row.group.map((x) => (
+              <span key={x.id} className="noti-sub-item">
+                <span className="noti-sub-line">
+                  <span className="noti-sub-name">{nameOf(x)}</span>
+                  {`님 → ${x.ctx.split(' · ')[0] || '크루 기록'}`}
+                </span>
+                {x.quote && <span className="noti-sub-quote">{x.quote}</span>}
+              </span>
+            ))}
+          </span>
+        )}
+        <span className="noti-meta">
+          <span className="noti-why" style={{ background: badge.bg, color: badge.fg }}>
+            {badge.label}
+          </span>
+          <span className="noti-time">{fmtTime(displayAt(n))}</span>
+          {grouped && (
+            <button type="button" className="noti-expand" aria-expanded={expanded}
+              onClick={(e) => {
+                e.stopPropagation();
+                onExpand();
+              }}>
+              {expanded ? '접기' : `댓글 ${row.group.length}개 보기`}
+            </button>
+          )}
+        </span>
+      </span>
+    </div>
   );
 }
 
@@ -189,11 +289,7 @@ export function NotiPage({ notifications, onRead, onReadAll, onOpenSettings }: P
       <div className="noti-head">
         <div className="noti-title">알림</div>
         <button className="icon-btn" title="알림 설정" aria-label="알림 설정" onClick={onOpenSettings}>
-          <svg width={21} height={21} viewBox="0 0 24 24" fill="none" stroke="currentColor"
-            strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" style={{ display: 'block' }}>
-            <circle cx={12} cy={12} r={3.2} />
-            <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-2.87 1.2V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-2.87-1.2l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 2.6 15H2.5a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.2-2.87l-.06-.06A2 2 0 1 1 6.57 5.24l.06.06A1.7 1.7 0 0 0 9.5 4.1V4a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 2.87 1.2l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 21.4 11h.1a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.53 1z" />
-          </svg>
+          <GearIcon size={21} />
         </button>
       </div>
       <div className="noti-summary">
@@ -217,81 +313,12 @@ export function NotiPage({ notifications, onRead, onReadAll, onOpenSettings }: P
         <div key={g.id} className="noti-group">
           <div className="noti-group-label">{g.label}</div>
           <div>
-            {g.rows.map((row) => {
-              const n = row.head;
-              const grouped = row.group.length > 1;
-              const anyUnread = row.group.some((x) => x.readAt === null);
-              const badge = WHY_BADGE[n.why];
-              // 행위자가 없는 행(system)만 벨 아이콘이다 — 모르는 id는 중립 아바타로 세운다
-              // (벨을 세우면 사람이 한 일이 시스템 알림처럼 읽힌다)
-              const member = n.actor ? memberOf(n.actor) : undefined;
-              const actorCount = new Set(row.group.map((x) => x.actor)).size;
-              const name = grouped
-                ? `${nameOf(n)}${actorCount > 1 ? ` 외 ${actorCount - 1}명` : ''}`
-                : nameOf(n);
-              const rest = grouped
-                ? `님이 크루 기록에 댓글 ${row.group.length}개를 남겼어요`
-                : restOf(n);
-              const ctx = grouped ? '' : ctxOf(n);
-              const isOpen = !!open[row.key];
-              const read = (): void => row.group.forEach((x) => x.readAt === null && onRead(x.id));
-              // 행 자체는 role=button div — 안에 진짜 <button>(펼치기)이 서야 해서
-              // button 안에 button을 중첩하는 무효 HTML을 피한다
-              return (
-                <div key={row.key}
-                  className={'noti-row' + (anyUnread ? ' unread' : '')}
-                  role="button" tabIndex={0}
-                  aria-label={anyUnread ? '읽음으로 표시' : undefined}
-                  onClick={read}
-                  onKeyDown={(e) => {
-                    if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) {
-                      e.preventDefault();
-                      read();
-                    }
-                  }}>
-                  <span className="noti-dot-col">
-                    <span className="noti-dot" style={{ background: anyUnread ? '#FFB800' : 'transparent' }} />
-                  </span>
-                  {member ? <Avatar m={member} size={38} /> : <BellCircle size={38} />}
-                  <span className="noti-main">
-                    <span className="noti-text">
-                      {name && <span className="noti-name">{name}</span>}
-                      <span className="noti-rest">{rest}</span>
-                    </span>
-                    {!grouped && n.quote && <span className="noti-quote">{n.quote}</span>}
-                    {ctx && <span className="noti-ctx">{ctx}</span>}
-                    {grouped && isOpen && (
-                      <span className="noti-sub">
-                        {row.group.map((x) => (
-                          <span key={x.id} className="noti-sub-item">
-                            <span className="noti-sub-line">
-                              <span className="noti-sub-name">{nameOf(x)}</span>
-                              {`님 → ${x.ctx.split(' · ')[0] || '크루 기록'}`}
-                            </span>
-                            {x.quote && <span className="noti-sub-quote">{x.quote}</span>}
-                          </span>
-                        ))}
-                      </span>
-                    )}
-                    <span className="noti-meta">
-                      <span className="noti-why" style={{ background: badge.bg, color: badge.fg }}>
-                        {badge.label}
-                      </span>
-                      <span className="noti-time">{fmtTime(displayAt(n))}</span>
-                      {grouped && (
-                        <button type="button" className="noti-expand" aria-expanded={isOpen}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setOpen((p) => ({ ...p, [row.key]: !p[row.key] }));
-                          }}>
-                          {isOpen ? '접기' : `댓글 ${row.group.length}개 보기`}
-                        </button>
-                      )}
-                    </span>
-                  </span>
-                </div>
-              );
-            })}
+            {g.rows.map((row) => (
+              <NotiRowView key={row.key} row={row} compact={false}
+                expanded={!!open[row.key]}
+                onExpand={() => setOpen((p) => ({ ...p, [row.key]: !p[row.key] }))}
+                onActivate={() => readRow(row, onRead)} />
+            ))}
           </div>
         </div>
       ))}

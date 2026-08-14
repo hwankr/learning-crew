@@ -1,4 +1,6 @@
-/* 지금 상태 체크인 — 장소 칩을 탭하면 켜지고, 켜진 칩을 다시 탭하면 꺼진다. */
+/* 지금 상태 체크인 — 꺼져 있으면 장소 타일 2×2, 켜면 경과 시간을 세는 초록 카드.
+   끄기는 카드의 "공부 종료" 하나뿐이다(장소 타일을 다시 눌러 끄던 예전 규칙은
+   켜진 동안 타일이 아예 안 보이므로 사라졌다). */
 import { PLACES, isStatusActive, type MemberStatus, type Place } from '../../shared/types';
 import { PLACE_ICON, fmtElapsed, type CopySet } from '../lib/constants';
 
@@ -10,32 +12,36 @@ export function StatusBar({
   now: number;
   onSet: (on: boolean, place: Place | null) => void;
 }) {
-  const active = isStatusActive(status, now);
-  return (
-    <div className={'status-bar' + (active ? ' on' : '')}>
-      <div className="status-line">
-        {active ? (
-          <>
-            <span className="live-dot" />
-            <span className="status-live">{wit.statusLive(status.place ?? '기타')}</span>
-            <span className="status-elapsed">{status.since ? fmtElapsed(status.since, now) : ''}</span>
-            <button className="status-end" onClick={() => onSet(false, null)}>{wit.statusEnd}</button>
-          </>
-        ) : (
-          <span className="status-ask">{wit.statusAsk}</span>
-        )}
+  if (isStatusActive(status, now)) {
+    const place = status.place ?? '기타';
+    return (
+      <div className="chk-card">
+        <div className="chk-head">
+          <span className="live-dot" />
+          <span className="chk-on">{wit.statusOn}</span>
+          <span className="chk-place-ico">{PLACE_ICON[place]}</span>
+        </div>
+        <div className="chk-time">
+          <span className="chk-elapsed">{status.since ? fmtElapsed(status.since, now) : ''}</span>
+          <span className="chk-place">{wit.placeAt(place)}</span>
+        </div>
+        <button className="chk-end" onClick={() => onSet(false, null)}>{wit.statusEnd}</button>
       </div>
-      <div className="status-places">
-        {PLACES.map((p) => {
-          const sel = active && status.place === p;
-          return (
-            <button key={p} className={'status-chip' + (sel ? ' sel' : '')}
-              onClick={() => onSet(!sel, sel ? null : p)}>
-              <span className="status-chip-ico">{PLACE_ICON[p]}</span>
-              {p}
-            </button>
-          );
-        })}
+    );
+  }
+  return (
+    <div>
+      <div className="chk-cap">
+        <span className="chk-cap-dot" />
+        <span className="chk-cap-text">{wit.statusAsk}</span>
+      </div>
+      <div className="chk-places">
+        {PLACES.map((p) => (
+          <button key={p} className="chk-tile" onClick={() => onSet(true, p)}>
+            <span className="chk-tile-ico">{PLACE_ICON[p]}</span>
+            <span className="chk-tile-label">{p}</span>
+          </button>
+        ))}
       </div>
     </div>
   );

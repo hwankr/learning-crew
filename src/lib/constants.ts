@@ -113,42 +113,59 @@ export function fmtElapsed(sinceISO: string, now: number): string {
 }
 
 export interface CopySet {
-  greeting: string;
+  greeting: string; // 좁은 화면 홈의 인사 줄
   cta: string;
-  ctaNone: string;
+  ctaDone: string; // 오늘 이미 기록한 뒤의 떠 있는 버튼 — 눌러서 한 번 더 쓸 수 있다
   diaryPh: string;
   todoPh: string;
   submit: string;
   editSubmit: string;
   empty: string;
   emptyMe: string;
+  feedEmpty: string; // 피드에 기록이 하나도 없을 때
+  feedEmptyHint: string;
+  notiReadAll: string; // 알림 모두 읽음 토스트
   offNote: string;
+  savedToday: string; // 기록 저장 토스트 — 오늘 날짜
+  savedPast: string; // 기록 저장 토스트 — 지난 날짜
+  edited: string; // 기록 수정 토스트
+  deleted: string; // 기록 삭제 토스트
   delAsk: string; // 기록 삭제 확인 물음
   delNote: string; // 되돌릴 수 없다는 안내
   footer: string;
   count: (n: number) => string;
   calEmpty: string;
-  statusAsk: string; // 상태 off일 때 안내
-  statusLive: (place: string) => string; // 내 상태 on 문구
+  statusAsk: string; // 체크인 꺼짐 안내
+  statusOn: string; // 체크인 켜짐 머리
   statusEnd: string; // 끄기 버튼
-  statusPeer: (place: string) => string; // 보드에서 남의 상태 한 줄
+  placeAt: (place: string) => string; // "{장소}에서" — 체크인 카드와 크루 행이 함께 쓴다
+  statusStarted: (place: string) => string; // 체크인 시작 토스트
+  statusEnded: string; // 체크인 종료 토스트
 }
 
 export const COPY: CopySet = {
   greeting: '오늘도 조용히 성장 중',
-  cta: '오늘 기록 남기기', ctaNone: '아직 오늘 기록이 없어요',
+  cta: '기록 남기기',
+  ctaDone: '오늘 기록 완료!',
   diaryPh: '오늘 하루 기록하기', todoPh: '할 일 내용',
-  submit: '기록 남기기', editSubmit: '수정 저장',
+  // 시트를 여는 버튼(cta)과 시트 안에서 저장하는 버튼은 같은 말이면 안 된다
+  submit: '기록 저장', editSubmit: '수정 저장',
   empty: '아직 안 옴', emptyMe: '오늘 첫 기록을 남겨보세요',
+  feedEmpty: '아직 기록이 없어요', feedEmptyHint: '오늘 기록 남기기로 첫 줄을 시작해보세요',
+  notiReadAll: '알림을 모두 읽음으로 표시했어요',
   offNote: '쉬는 날은 별점 없이 기록돼요.',
+  savedToday: '오늘 기록을 남겼어요', savedPast: '기록을 남겼어요',
+  edited: '기록을 수정했어요', deleted: '기록을 삭제했어요',
   delAsk: '이 기록을 지울까요?', delNote: '지운 기록은 되돌릴 수 없어요.',
   footer: '오늘도 크루 중 누군가는 공부를 합니다.',
   count: (n) => `${MEMBERS.length}명 중 ${n}명 도장 찍음`,
-  calEmpty: '이 날은 다들 조용했네요.',
+  calEmpty: '이 날은 기록이 없어요',
   statusAsk: '공부 시작하면 켜주세요',
-  statusLive: (p) => `${p}에서 공부 중`,
-  statusEnd: '마침',
-  statusPeer: (p) => `지금 ${p}에서 공부 중`,
+  statusOn: '공부 중',
+  statusEnd: '공부 종료',
+  placeAt: (p) => `${p}에서`,
+  statusStarted: (p) => `${p}에서 공부 시작 — 크루에게 보였어요`,
+  statusEnded: '공부를 종료했어요',
 };
 
 export const W = ['일', '월', '화', '수', '목', '금', '토'];

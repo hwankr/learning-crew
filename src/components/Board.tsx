@@ -1,4 +1,3 @@
-import type { CSSProperties } from 'react';
 import {
   entryTags,
   isOffTags,
@@ -12,8 +11,8 @@ import { MEMBERS, fmtElapsed, type CopySet, type Member } from '../lib/constants
 import { Avatar, StarsRow } from './icons';
 import { Chip, MoreChip } from './Chip';
 
-function MeBadge({ sm }: { sm?: boolean }) {
-  return <span className={'me-badge' + (sm ? ' sm' : '')}>나</span>;
+export function MeBadge() {
+  return <span className="me-badge">나</span>;
 }
 
 /** 아바타 + 우하단 라이브 점. */
@@ -26,7 +25,7 @@ function LiveAvatar({ live, ...av }: { live: boolean } & Parameters<typeof Avata
   );
 }
 
-function BoardCell({
+function CrewRow({
   m, todays, status, now, meId, wit,
 }: {
   m: Member;
@@ -39,69 +38,46 @@ function BoardCell({
   const mine = todays.filter((e) => e.m === m.id).sort((a, b) => b.time.localeCompare(a.time));
   const latest = mine[0];
   const isMe = m.id === meId;
-  const ring = latest ? m.color : '#CDD2DB';
-  const dash = latest ? '0' : '5 4';
-  const opacity = latest ? undefined : 0.55;
+  const live = isStatusActive(status, now);
+  // 오늘 기록도 없고 지금 켜 두지도 않은 사람만 흐리게 — "아직 안 온 자리"가 한눈에 구분된다
+  const active = live || !!latest;
   const tags = latest ? entryTags(latest) : [];
   const isOff = isOffTags(tags);
   const hasStars = !!latest && !isOff && (latest.stars ?? 0) > 0;
   const firstTodo = latest && latest.todos.length > 0 ? latest.todos[0]!.t : '';
-  const live = isStatusActive(status, now);
-  const liveLine = live
-    ? `${wit.statusPeer(status.place ?? '기타')}${status.since ? ` · ${fmtElapsed(status.since, now)}` : ''}`
-    : '';
-  const subLine = latest
-    ? latest.memo || firstTodo || (latest.body || '').split('\n')[0] || (isOff ? '오늘은 휴식' : '')
-    : isMe
-      ? wit.emptyMe
-      : wit.empty;
+  const firstBody = latest ? (latest.body || '').split('\n')[0] ?? '' : '';
+  const subLine = live
+    ? `${wit.placeAt(status.place ?? '기타')} ${status.since ? fmtElapsed(status.since, now) : ''}`.trim()
+    : latest
+      // 항목 요약은 기록 본문을 먼저 보여 준다 — 할 일은 본문까지 빈 기록의 대체문이다
+      ? latest.memo || firstBody || firstTodo || (isOff ? '오늘은 휴식' : '')
+      : isMe
+        ? wit.emptyMe
+        : wit.empty;
   const extra = mine.length > 1 ? `외 ${mine.length - 1}개` : '';
 
   return (
-    <div className="board-cell">
-      <div className="board-strip">
-        <LiveAvatar live={live} m={m} size={46} ring={ring} dash={dash} opacity={live ? undefined : opacity} />
-        <div className="board-strip-name">
-          <span className="board-strip-nm">{m.name}</span>
+    <div className="crew-row">
+      <LiveAvatar live={live} m={m} size={38} className="crew-av"
+        ring={active ? m.color : '#CDD2DB'} dash={active ? '0' : '5 4'}
+        opacity={active ? undefined : 0.5} />
+      <div className="crew-main">
+        <div className="crew-name">
+          <span className="crew-nm">{m.name}</span>
           {isMe && <MeBadge />}
-        </div>
-        {live && <span className="board-strip-live">{status.place ?? '기타'} 공부 중</span>}
-        {latest ? (
-          <div className="board-strip-entry">
-            {/* 대표 태그는 이름을 글자로 보여준다 — 아이콘만 남기면 태그를 외운 사람만
-                읽을 수 있다. 스트립은 인원 수만큼 나눠 가진 좁은 칸이라 칩 하나가 겨우
-                들어가므로(styles.css에서 오버헤드를 깎는다) 나머지는 +N으로 접는다. */}
-            <span className="board-tags">
-              <Chip tag={primaryTag(tags)} variant="xs" />
-              {tags.length > 1 && <MoreChip n={tags.length - 1} variant="xs" />}
-            </span>
-            {hasStars && <StarsRow n={latest.stars ?? 0} w={55} h={11} />}
-            {isOff && <span className="board-strip-off">오늘은 휴식</span>}
-          </div>
-        ) : (
-          !live && <span className="board-strip-empty">{wit.empty}</span>
-        )}
-      </div>
-      <div className="board-row">
-        <LiveAvatar live={live} m={m} size={40} ring={ring} dash={dash} opacity={live ? undefined : opacity} />
-        <div className="board-row-main">
-          <div className="board-row-name">
-            <span className="board-row-nm">{m.name}</span>
-            {isMe && <MeBadge sm />}
-            {extra && <span className="board-row-extra">{extra}</span>}
-          </div>
-          <div className={'board-row-sub' + (live ? ' live' : '')}>{live ? liveLine : subLine}</div>
-        </div>
-        {latest && (
-          <div className="board-row-right">
+          {latest && (
+            // 대표 태그 하나만 이름 옆에 세우고 나머지는 +N으로 접는다 — 268px 패널에서
+            // 태그를 다 펴면 이름 줄이 통째로 아래로 밀린다
             <span className="board-tags">
               <Chip tag={primaryTag(tags)} variant="sm" />
               {tags.length > 1 && <MoreChip n={tags.length - 1} variant="sm" />}
             </span>
-            {hasStars && <StarsRow n={latest.stars ?? 0} w={60} h={12} />}
-          </div>
-        )}
+          )}
+          {extra && <span className="crew-extra">{extra}</span>}
+        </div>
+        <div className={'crew-sub' + (live ? ' live' : latest ? ' has' : '')}>{subLine}</div>
       </div>
+      {hasStars && <StarsRow n={latest.stars ?? 0} w={60} h={12} />}
     </div>
   );
 }
@@ -115,11 +91,20 @@ export function Board({
   meId: MemberId;
   wit: CopySet;
 }) {
+  // 도장은 기록만이 아니라 "지금 켜 둔 사람"도 찍는다 — 켜 놓고 아직 안 쓴 사람이
+  // 0명 쪽에 세어지면 패널의 라이브 점과 숫자가 서로 다른 말을 한다
+  const done = MEMBERS.filter(
+    (m) => todays.some((e) => e.m === m.id) || isStatusActive(statuses[m.id], now),
+  ).length;
+
   return (
-    // 열 수는 크루 인원을 그대로 따른다 — 하드코딩한 4열이면 5번째가 혼자 다음 줄에 남았다
-    <div className="board" style={{ '--crew': MEMBERS.length } as CSSProperties}>
+    <div className="crew">
+      <div className="crew-head">
+        <div className="crew-title">오늘의 크루</div>
+        <div className="crew-count">{wit.count(done)}</div>
+      </div>
       {MEMBERS.map((m) => (
-        <BoardCell key={m.id} m={m} todays={todays} status={statuses[m.id]} now={now} meId={meId} wit={wit} />
+        <CrewRow key={m.id} m={m} todays={todays} status={statuses[m.id]} now={now} meId={meId} wit={wit} />
       ))}
     </div>
   );
