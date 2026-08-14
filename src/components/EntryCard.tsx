@@ -1,6 +1,6 @@
 import type { Comment, Entry, MemberId, ReactionEmoji, ReactionSet } from '../../shared/types';
 import { entryTags, isOffTags } from '../../shared/types';
-import { BY_ID, MEMBERS } from '../lib/constants';
+import { memberOf } from '../lib/constants';
 import { Avatar, CheckMark, StarsRow } from './icons';
 import { Chip, MoreChip } from './Chip';
 import { EntrySocial } from './EntrySocial';
@@ -30,7 +30,8 @@ export function EntryCard({
   reactions: ReactionSet[];
   actions: EntryActions;
 }) {
-  const mm = BY_ID[e.m] ?? MEMBERS[0]!;
+  // 모르는 멤버 id는 중립 표시로 — 구버전 번들이 새 멤버의 기록을 남의 이름으로 붙이면 안 된다
+  const mm = memberOf(e.m);
   // 구버전 IDB 행(tags 없음)도 대표 태그에서 되살아난다 — 항상 1개 이상이다
   const tags = entryTags(e);
   const hasStars = !isOffTags(tags) && (e.stars ?? 0) > 0;

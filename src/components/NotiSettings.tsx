@@ -49,18 +49,6 @@ const TOS = ['06:00', '07:00', '08:00', '09:00'];
 const cycle = (list: string[], cur: string): string =>
   list[(Math.max(0, list.indexOf(cur)) + 1) % list.length]!;
 
-/** 하루 예상 알림 수 — 디자인의 어림 공식 그대로. 정확한 예측이 아니라 감을 주는 숫자다. */
-export function estimateDaily(p: Draft, me: MemberId): { start: number; cm: number; react: number } {
-  const crew = MEMBER_IDS.filter((m) => m !== me);
-  const start = crew.reduce((n, m) => {
-    const r = p.perMember[m] ?? p.startMode;
-    return n + (r === 'live' ? 3 : r === 'daily' ? 1 : 0);
-  }, 0);
-  const cm = (p.cmMine ? 3 : 0) + (p.cmReply ? 2 : 0) + (p.cmAll ? 12 : 0) + 1;
-  const react = p.reactMode === 'live' ? 5 : p.reactMode === 'daily' ? 1 : 0;
-  return { start, cm, react };
-}
-
 function Seg({ opts, cur, onPick }: {
   opts: { id: NotifMode; label: string }[];
   cur: NotifMode;
@@ -196,7 +184,6 @@ export function NotiSettings({ token, meId, demo, onBack }: Props) {
   }
 
   const crew = MEMBER_IDS.filter((m) => m !== meId);
-  const est = estimateDaily(prefs, meId);
   const quietNote = prefs.quietEnabled
     ? `${prefs.quietFrom}~${prefs.quietTo} 사이 알림은 모아서 ${prefs.quietTo}에 한 번 도착해요.`
     : '밤낮 없이 오는 대로 받아요.';

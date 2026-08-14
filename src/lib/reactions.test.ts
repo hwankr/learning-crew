@@ -39,7 +39,7 @@ describe('tallyReactions', () => {
     expect(tallyReactions(sets, 'jj').every((t) => !t.mine)).toBe(true);
   });
 
-  it('names는 멤버 고정 순서(sh·wg·th·jj)의 표시 이름이다', () => {
+  it('names는 멤버 고정 순서(MEMBER_IDS)의 표시 이름이다', () => {
     const out = tallyReactions([set('jj', ['👏']), set('sh', ['👏']), set('th', ['👏'])], 'sh');
     expect(out[0]?.names).toEqual(['승환', '태현', '진주']);
   });

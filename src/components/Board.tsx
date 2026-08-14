@@ -1,3 +1,4 @@
+import type { CSSProperties } from 'react';
 import {
   entryTags,
   isOffTags,
@@ -41,7 +42,6 @@ function BoardCell({
   const ring = latest ? m.color : '#CDD2DB';
   const dash = latest ? '0' : '5 4';
   const opacity = latest ? undefined : 0.55;
-  // 보드는 4열이라 폭이 아주 좁다 — 첫 칩 하나만 놓고 나머지는 +N으로 접는다
   const tags = latest ? entryTags(latest) : [];
   const isOff = isOffTags(tags);
   const hasStars = !!latest && !isOff && (latest.stars ?? 0) > 0;
@@ -62,12 +62,15 @@ function BoardCell({
       <div className="board-strip">
         <LiveAvatar live={live} m={m} size={46} ring={ring} dash={dash} opacity={live ? undefined : opacity} />
         <div className="board-strip-name">
-          <span>{m.name}</span>
+          <span className="board-strip-nm">{m.name}</span>
           {isMe && <MeBadge />}
         </div>
         {live && <span className="board-strip-live">{status.place ?? '기타'} 공부 중</span>}
         {latest ? (
           <div className="board-strip-entry">
+            {/* 대표 태그는 이름을 글자로 보여준다 — 아이콘만 남기면 태그를 외운 사람만
+                읽을 수 있다. 스트립은 인원 수만큼 나눠 가진 좁은 칸이라 칩 하나가 겨우
+                들어가므로(styles.css에서 오버헤드를 깎는다) 나머지는 +N으로 접는다. */}
             <span className="board-tags">
               <Chip tag={primaryTag(tags)} variant="xs" />
               {tags.length > 1 && <MoreChip n={tags.length - 1} variant="xs" />}
@@ -113,7 +116,8 @@ export function Board({
   wit: CopySet;
 }) {
   return (
-    <div className="board">
+    // 열 수는 크루 인원을 그대로 따른다 — 하드코딩한 4열이면 5번째가 혼자 다음 줄에 남았다
+    <div className="board" style={{ '--crew': MEMBERS.length } as CSSProperties}>
       {MEMBERS.map((m) => (
         <BoardCell key={m.id} m={m} todays={todays} status={statuses[m.id]} now={now} meId={meId} wit={wit} />
       ))}

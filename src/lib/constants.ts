@@ -1,4 +1,4 @@
-import { MEMBER_IDS, MEMBER_NAMES, primaryTag } from '../../shared/types';
+import { MEMBER_IDS, MEMBER_NAMES, isOffTags, normalizeTags, primaryTag } from '../../shared/types';
 import type {
   Comment,
   Entry,
@@ -28,12 +28,64 @@ export const MEMBERS: Member[] = [
     hair: 'M11.5 27a12.5 12.5 0 0 1 25 0c-1.3-4.2-3-6.8-5.7-7.9-3.8 2.2-9.2 2.1-12.6-.2-3.4 1.6-5.5 4.3-6.7 8.1z' },
   { id: 'jj', name: MEMBER_NAMES.jj, color: '#F79009', soft: '#FCE1BD', hairC: '#363B45',
     hair: 'M11.5 27a12.5 12.5 0 0 1 25 0c-3.5-6-7-8.5-12.5-8.5s-9 2.5-12.5 8.5zM7.5 18a3.2 3.2 0 1 0 6.4 0 3.2 3.2 0 1 0-6.4 0zM34.1 18a3.2 3.2 0 1 0 6.4 0 3.2 3.2 0 1 0-6.4 0z' },
+  // 경진 — 윗머리 반원 + 얼굴 양옆으로 턱 아래까지 흘러내리는 긴 생머리.
+  // 안쪽 가장자리는 x≈14.8/33.2에서 시작해 눈(19.5·28.5)·입(20.5~27.5)을 덮지 않고,
+  // 바깥쪽은 아바타 원(cx24 cy24 r21.5) 안에 머문다(최대 반경 ≈20.2).
+  { id: 'kj', name: MEMBER_NAMES.kj, color: '#9E77ED', soft: '#E9D7FE', hairC: '#3B2F45',
+    hair: 'M11.5 27a12.5 12.5 0 0 1 25 0c1.4 4.5 1.1 9-.5 13.2-1.4.6-2.7.2-3.6-.8 1.2-3.8 1.5-8 .8-12-1.6-4.4-4.8-6.8-9.2-6.8s-7.6 2.4-9.2 6.8c-.7 4-.4 8.2.8 12-.9 1-2.2 1.4-3.6.8-1.6-4.2-1.9-8.7-.5-13.2z' },
 ];
 
 export const BY_ID: Record<MemberId, Member> = Object.fromEntries(MEMBERS.map((m) => [m.id, m])) as Record<
   MemberId,
   Member
 >;
+
+/** 모르는 멤버 id의 중립 표시 이름 — 사람 이름 자리에 들어가도 어색하지 않은 총칭. */
+export const UNKNOWN_MEMBER_NAME = '크루원';
+
+/* 크루에 사람이 늘면, 배포 직후에도 열려 있는 구버전 번들은 그 사람을 모른 채 20초마다
+   그 사람의 기록·댓글을 계속 받는다(내비게이션은 네트워크 우선이라 새로고침만 하면 새
+   번들이 되지만, 열어 둔 탭은 그 사이 계속 폴링한다). 그때 MEMBERS[0]으로 폴백하면
+   남의 기록이 승환의 이름·색·아바타로 표시된다 — 잘못된 사람에게 귀속시키는 것보다
+   "모른다"고 말하는 쪽이 안전하다. 회색은 크루 다섯 색(옐로·그린·블루·오렌지·보라)
+   어느 것과도 겹치지 않아서 누구의 색도 주장하지 않는다. */
+const UNKNOWN_LOOK: Omit<Member, 'id'> = {
+  name: UNKNOWN_MEMBER_NAME,
+  color: '#9AA1AD',
+  soft: '#F1F3F6',
+  hairC: '#6B7280',
+  // 특징 없는 반원 — 다섯 명의 머리 모양 중 어느 것으로도 안 읽혀야 한다
+  hair: 'M11.5 27a12.5 12.5 0 0 1 25 0z',
+};
+
+/** 표시용 멤버 조회 — BY_ID는 타입만 완전하고(`as Record`) 런타임은 그렇지 않다.
+    화면에 사람을 그리는 자리는 전부 이걸 지나야 한다. */
+export function memberOf(id: MemberId): Member {
+  return BY_ID[id] ?? { id, ...UNKNOWN_LOOK };
+}
+
+/** 표시용 이름 조회 — MEMBER_NAMES도 같은 이유로 런타임에 빈칸이 될 수 있다. */
+export function memberName(id: MemberId): string {
+  return MEMBER_NAMES[id] ?? UNKNOWN_MEMBER_NAME;
+}
+
+/** 이 기록들을 남긴 멤버 목록 — 명부가 아니라 기록에서 뽑는다.
+    명부(MEMBERS)에서 출발해 거르면 이 번들이 모르는 멤버의 기록은 통째로 탈락한다.
+    캘린더 월간 셀은 그 날에 기록이 있다는 유일한 표시가 색 점이라, 모르는 멤버만
+    기록한 날이 "아무도 기록 안 한 날"로 읽힌다(같은 셀의 알약은 memberOf로 보이므로
+    같은 데이터가 알약에는 있고 점에는 없는 불일치까지 생긴다).
+    순서: 아는 멤버가 MEMBER_IDS 고정 순서로 먼저, 모르는 id는 그 뒤에 처음 등장한
+    순서로. 화면에서 사람을 찾는 기준이 크루 순서라 그 앞부분은 흔들리면 안 된다. */
+export function membersOfEntries(list: readonly { m: MemberId }[]): Member[] {
+  const seen = new Set<MemberId>();
+  const unknown: MemberId[] = [];
+  for (const e of list) {
+    if (seen.has(e.m)) continue; // 같은 사람의 기록이 여럿이어도 한 번만
+    seen.add(e.m);
+    if (!MEMBER_IDS.includes(e.m)) unknown.push(e.m);
+  }
+  return [...MEMBER_IDS.filter((id) => seen.has(id)), ...unknown].map(memberOf);
+}
 
 export const TAGMETA: Record<Tag, { icon: string; bg: string; fg: string }> = {
   '자격증': { icon: 'M12 3a5 5 0 1 1 0 10 5 5 0 0 1 0-10zm-3.5 9.5L7 21l5-3 5 3-1.5-8.5', bg: '#FFF9E6', fg: '#B37F00' },
@@ -91,7 +143,7 @@ export const COPY: CopySet = {
   offNote: '쉬는 날은 별점 없이 기록돼요.',
   delAsk: '이 기록을 지울까요?', delNote: '지운 기록은 되돌릴 수 없어요.',
   footer: '오늘도 크루 중 누군가는 공부를 합니다.',
-  count: (n) => `4명 중 ${n}명 도장 찍음`,
+  count: (n) => `${MEMBERS.length}명 중 ${n}명 도장 찍음`,
   calEmpty: '이 날은 다들 조용했네요.',
   statusAsk: '공부 시작하면 켜주세요',
   statusLive: (p) => `${p}에서 공부 중`,
@@ -115,17 +167,26 @@ export function seedEntries(): Entry[] {
   const base: Pick<Entry, 'body' | 'todos' | 'v' | 'updatedAt' | 'deletedAt'> = {
     body: '', todos: [], v: 0, updatedAt: now, deletedAt: null,
   };
-  // tag는 tags의 파생값(대표 태그)이라 직접 쓰지 않고 여기서 한 번에 맞춘다
-  const seed = (e: Omit<Entry, 'tag'>): Entry => ({ ...e, tag: primaryTag(e.tags) });
+  // tag·stars는 tags의 파생값이라 직접 쓰지 않고 여기서 한 번에 맞춘다. tags도 여기서
+  // 정규화한다 — 리터럴이 TAGS 순서가 아니면 시드가 만든 tag와 화면이 entryTags로 다시
+  // 계산한 대표 태그가 갈라져서, 같은 기록인데 삭제 확인창과 카드의 칩이 달라진다.
+  const seed = (e: Omit<Entry, 'tag'>): Entry => {
+    const tags = normalizeTags(e.tags);
+    return { ...e, tags, tag: primaryTag(tags), stars: isOffTags(tags) ? null : e.stars };
+  };
   return [
     seed({ ...base, id: 's1', m: 'wg', day: t, time: '09:40', tags: ['코딩테스트'], stars: 4, memo: '오전 스퍼트 완료',
       todos: [{ t: '그리디 3문제', done: true }, { t: 'DP 복습 1문제', done: true }, { t: '오답노트 정리', done: false }] }),
     seed({ ...base, id: 's2', m: 'jj', day: t, time: '13:12', tags: ['영어', '기타'], stars: 3, memo: '쉐도잉 20분',
       body: '혀가 먼저 퇴근했다.\n내일은 발음 교정 영상 보고 재도전. 그래도 오늘 표현 3개는 건짐 — at stake, for good, hold up.' }),
+    seed({ ...base, id: 's10', m: 'kj', day: t, time: '07:50', tags: ['자격증', '영어'], stars: 4, memo: '남들 자는 시간에 몰래 30분',
+      todos: [{ t: 'LC 1세트', done: true }, { t: '단어장 Day 12', done: true }, { t: '오답 다시 듣기', done: false }] }),
     seed({ ...base, id: 's3', m: 'sh', day: y, time: '22:05', tags: ['자격증'], stars: 5, memo: '기출 1회분 클리어. 오늘만큼은 천재' }),
     seed({ ...base, id: 's4', m: 'jj', day: y, time: '21:47', tags: ['자격증', '코딩테스트'], stars: 4, memo: 'DFS가 드디어 손에 붙음' }),
     seed({ ...base, id: 's5', m: 'wg', day: y, time: '20:11', tags: ['영어'], stars: 2, memo: '단어 데이',
       todos: [{ t: '단어 30개 암기', done: true }, { t: '복습 테스트', done: false }] }),
+    seed({ ...base, id: 's11', m: 'kj', day: y, time: '19:05', tags: ['코딩테스트'], stars: 3, memo: '이분탐색이 나를 이분했다',
+      body: '경계 조건 하나 틀려서 40분을 헌납했다. mid 계산은 이제 손이 먼저 기억하기로 약속함.' }),
     seed({ ...base, id: 's6', m: 'th', day: y, time: '11:30', tags: ['OFF'], stars: null, memo: '재충전의 날. 침대와 물아일체' }),
     seed({ ...base, id: 's7', m: 'sh', day: b, time: '23:59', tags: ['코딩테스트'], stars: 2, memo: 'DP는 대체 누가 만들었을까' }),
     seed({ ...base, id: 's8', m: 'th', day: b, time: '19:02', tags: ['자격증', '영어', '기타'], stars: 4, memo: '자막 없이 미드 완주',
@@ -153,6 +214,9 @@ export function seedComments(): Comment[] {
     c('c4', 's3', 'jj', y, '22:31', '천재 인정. 저는 아직 3회분 남았어요'),
     c('c5', 's3', 'th', y, '22:48', '기출 회차 뭐 푸는지 알려주세요'),
     c('c6', 's6', 'wg', y, '12:04', '쉬는 것도 일정입니다'),
+    c('c7', 's10', 'sh', t, '09:05', '7시 50분이라니. 저는 그 시간에 알람과 싸우는 중'),
+    c('c8', 's2', 'kj', t, '15:20', '쉐도잉 3일차에서 도망친 사람이 여기 있습니다'),
+    c('c9', 's5', 'kj', y, '20:40', '복습 테스트가 진짜 본체인데'),
   ];
 }
 
@@ -165,7 +229,9 @@ export function seedReactionSets(): ReactionSet[] {
   });
   return [
     r('s2', 'sh', ['👏'], 180), r('s2', 'wg', ['👏'], 165), r('s2', 'th', ['🔥'], 150),
-    r('s1', 'jj', ['👏'], 300),
+    r('s2', 'kj', ['👏', '🔥'], 140),
+    r('s1', 'jj', ['👏'], 300), r('s1', 'kj', ['💪'], 290),
+    r('s10', 'wg', ['💪'], 250), r('s10', 'jj', ['👏'], 240), r('s10', 'th', ['👀'], 230),
     r('s3', 'wg', ['👏', '💪'], 700), r('s3', 'th', ['👏'], 690), r('s3', 'jj', ['👏'], 680),
     r('s6', 'sh', ['😴'], 800), r('s6', 'wg', ['😴'], 790),
   ];
@@ -176,7 +242,10 @@ export function seedReactionSets(): ReactionSet[] {
 export function seedNotifications(me: MemberId): Notification[] {
   const now = Date.now();
   const ago = (min: number): string => new Date(now - min * 60_000).toISOString();
-  const [a, b, c] = MEMBER_IDS.filter((m) => m !== me) as [MemberId, MemberId, MemberId];
+  // 본인을 뺀 크루에서 순환해 고른다 — 멤버 수가 몇이든(1명이어도) 시드가 깨지지 않는다.
+  const others = MEMBER_IDS.filter((m) => m !== me);
+  const who = (i: number): MemberId => others[i % others.length] ?? me;
+  const [a, b, c, d] = [who(0), who(1), who(2), who(3)];
   const n = (
     id: string,
     min: number,
@@ -211,6 +280,9 @@ export function seedNotifications(me: MemberId): Notification[] {
       ctx: `오전 1:10 ${MEMBER_NAMES[b]} 시작 · 오전 2:40 ${MEMBER_NAMES[c]} 댓글`,
       readAt: ago(60 * 3) }),
     n('n7', 60 * 31, { kind: 'start', why: 'daily', actor: c, ctx: '카페 · 오후 1:45', readAt: ago(60 * 4) }),
+    n('n8', 60 * 34, { kind: 'comment', why: 'mine', actor: d,
+      quote: '이 페이스면 다음 주엔 저를 앞지르겠는데요',
+      ctx: '내 기록 · 영어', readAt: ago(60 * 5) }),
   ];
 }
 
@@ -221,5 +293,6 @@ export function seedStatuses(): MemberStatus[] {
   return [
     { m: 'wg', on: true, place: '도서관', since: ago(95), updatedAt: ago(95) },
     { m: 'jj', on: true, place: '카페', since: ago(20), updatedAt: ago(20) },
+    { m: 'kj', on: true, place: '집', since: ago(48), updatedAt: ago(48) },
   ];
 }

@@ -1,11 +1,23 @@
+import type { CSSProperties } from 'react';
 import type { Comment, Entry, MemberId, ReactionSet } from '../../shared/types';
 import { entryTags, primaryTag } from '../../shared/types';
-import { BY_ID, MEMBERS, TAGMETA, W, dayKey, pad2, shiftKey, type CopySet } from '../lib/constants';
+import {
+  MEMBERS, TAGMETA, W, dayKey, memberOf, membersOfEntries, pad2, shiftKey, type CopySet,
+} from '../lib/constants';
 import { Avatar, Icon } from './icons';
 import { EntryCard, type EntryActions } from './EntryCard';
 
 /** 셀 하나에 보여줄 최대 알약 수 — 넘치면 "+N개 더". */
 const MAX_PILLS = 3;
+
+/** 넓은 와이드에서 월 요약 카드의 열 수 — 마지막 줄에 한 장만 남지 않는 배치를 고른다.
+    (좁은 폭은 CSS가 2열로 고정한다. 카드는 grow하지 않으므로 열 수가 곧 카드 폭이다.)
+    4명 이하는 한 줄에 다 서고, 5·6명은 3열(3+2 / 3+3), 3열이면 마지막이 한 장 남는
+    7·10명만 4열로 간다. */
+function statCols(n: number): number {
+  if (n <= 4) return Math.max(1, n);
+  return n % 3 === 1 ? 4 : 3;
+}
 
 /** 오늘부터 거꾸로 센 연속 기록일. 오늘 아직 안 남긴 건 봐준다(어제까지 이어짐). */
 function streakOf(m: MemberId, byDay: Map<string, Entry[]>): number {
@@ -67,7 +79,9 @@ export function CalendarView({
     const isSel = k === selDay;
     const isFuture = k > todayKey;
     const dayEntries = (byDay.get(k) ?? []).slice().sort((a, b) => a.time.localeCompare(b.time));
-    const dots = MEMBERS.filter((m) => dayEntries.some((e) => e.m === m.id));
+    // 점은 기록에서 뽑는다 — 명부로 거르면 모르는 멤버만 기록한 날에 점이 하나도 안 찍혀
+    // "아무도 기록 안 한 날"이 된다 (알약은 이미 memberOf라 그 셀 안에서도 어긋난다)
+    const dots = membersOfEntries(dayEntries);
     cells.push(
       <button key={k}
         className={'cal-cell' + (isSel ? ' sel' : '') + (isToday ? ' today' : '') + (isFuture ? ' future' : '')}
@@ -76,7 +90,8 @@ export function CalendarView({
         {/* 와이드: 멤버·태그 알약 / 모바일: 색 점 (CSS로 전환) */}
         <span className="cal-pills">
           {dayEntries.slice(0, MAX_PILLS).map((e) => {
-            const mm = BY_ID[e.m] ?? MEMBERS[0]!;
+            // 모르는 멤버 id는 중립 표시로 — 알약의 점 색·이름이 남의 것이 되면 안 된다
+            const mm = memberOf(e.m);
             // 알약은 한 줄이라 색은 대표 태그 하나로 정하고, 나머지는 라벨에만 이어 붙인다
             const tags = entryTags(e);
             const tm = TAGMETA[primaryTag(tags)];
@@ -103,7 +118,7 @@ export function CalendarView({
   }
 
   const selList = (byDay.get(selDay) ?? []).slice().sort((a, b) => b.time.localeCompare(a.time));
-  const selMembers = MEMBERS.filter((m) => selList.some((e) => e.m === m.id));
+  const selMembers = membersOfEntries(selList); // 헤더 아바타도 같은 규칙 — 아래 카드와 인원이 맞아야 한다
   const selD = new Date(selDay + 'T12:00:00');
 
   return (
@@ -124,7 +139,7 @@ export function CalendarView({
           </button>
         </div>
       </div>
-      <div className="cal-stats">
+      <div className="cal-stats" style={{ '--cols': statCols(stats.length) } as CSSProperties}>
         {stats.map(({ m, line }) => (
           <div key={m.id} className="cal-stat">
             <Avatar m={m} size={30} />

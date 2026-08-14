@@ -1,7 +1,7 @@
 {
   "name": "러닝 크루",
   "short_name": "러닝 크루",
-  "description": "4인 스터디 크루의 공부 기록과 지금 상태",
+  "description": "스터디 크루의 공부 기록과 지금 상태",
   "lang": "ko",
   "start_url": "/",
   "scope": "/",

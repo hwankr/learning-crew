@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { Comment, MemberId, ReactionSet } from '../../shared/types';
 import { PUSH_LIMITS, REACTIONS } from '../../shared/types';
-import { BY_ID, MEMBERS, pad2 } from '../lib/constants';
+import { memberOf, pad2 } from '../lib/constants';
 import { tallyReactions } from '../lib/reactions';
 import { Avatar, Icon, PLUS_D, X_D } from './icons';
 import type { EntryActions } from './EntryCard';
@@ -66,7 +66,7 @@ export function EntrySocial({
 
   const tally = tallyReactions(sets, meId);
   const myEmojis = sets.find((s) => s.m === meId)?.emojis ?? [];
-  const me = BY_ID[meId] ?? MEMBERS[0]!;
+  const me = memberOf(meId);
 
   // 열린 직후 한 번 재서 팝오버 위치를 잡는다 — 버튼 위치는 칩 개수에 따라 매 카드 다르니
   // CSS만으로는 못 맞춘다(동적 위치라 인라인 style이 맞다). 그리기 전에 끝내야 팝오버가
@@ -139,7 +139,8 @@ export function EntrySocial({
       {comments.length > 0 && (
         <div className="comment-list">
           {comments.map((c) => {
-            const cm = BY_ID[c.m] ?? MEMBERS[0]!;
+            // 모르는 멤버 id는 중립 표시로 — 남의 이름으로 서명된 댓글이 되면 안 된다
+            const cm = memberOf(c.m);
             return (
               <div className="comment" key={c.id}>
                 <Avatar m={cm} size={24} />

@@ -1,6 +1,7 @@
 /* 리액션 칩 집계 — 렌더와 분리된 순수 함수라 테스트가 UI 없이 규칙을 붙든다. */
-import { MEMBER_IDS, MEMBER_NAMES, REACTIONS } from '../../shared/types';
+import { MEMBER_IDS, REACTIONS } from '../../shared/types';
 import type { MemberId, ReactionEmoji, ReactionSet } from '../../shared/types';
+import { memberName } from './constants';
 
 export interface ReactionTally {
   emoji: ReactionEmoji;
@@ -23,7 +24,8 @@ export function tallyReactions(sets: ReactionSet[], me: MemberId): ReactionTally
       emoji,
       n: hit.length,
       mine: hit.some((s) => s.m === me),
-      names: hit.map((s) => MEMBER_NAMES[s.m]),
+      // 이 번들이 모르는 멤버(구버전 탭 + 새 멤버)도 title이 빈칸이 되지 않게 중립 총칭으로
+      names: hit.map((s) => memberName(s.m)),
     });
   }
   return out;

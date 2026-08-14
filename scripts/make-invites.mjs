@@ -3,7 +3,9 @@
    Worker의 AUTH_SECRET과 반드시 같은 값이어야 한다. */
 import { createHmac } from 'node:crypto';
 
-const MEMBERS = { sh: '승환', wg: '웅', th: '태현', jj: '진주' };
+/* 순수 node 스크립트라 shared/types.ts를 import 할 수 없어 이름표가 복제돼 있다 —
+   멤버가 늘거나 이름이 바뀌면 shared/types.ts의 MEMBER_IDS·MEMBER_NAMES와 함께 고쳐야 한다. */
+const MEMBERS = { sh: '승환', wg: '웅', th: '태현', jj: '진주', kj: '경진' };
 
 const secret = process.env.AUTH_SECRET;
 if (!secret) {
