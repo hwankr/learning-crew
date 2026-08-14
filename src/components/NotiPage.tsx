@@ -285,7 +285,7 @@ export function NotiPage({ notifications, onRead, onReadAll, onOpenSettings }: P
   }, [notifications, filter, todayId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-    <div>
+    <div className="noti-page">
       <div className="noti-head">
         <div className="noti-title">알림</div>
         <button className="icon-btn" title="알림 설정" aria-label="알림 설정" onClick={onOpenSettings}>

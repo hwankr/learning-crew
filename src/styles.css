@@ -84,12 +84,11 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 .mhome-sub { font-size: 12.5px; color: #6B7280; margin-top: 5px; }
 
 /* 주소창이 나타났다 사라지는 브라우저·홈 화면 앱 모두에서 자리가 흔들리지 않게 fixed로 둔다.
-   높이는 66px 그대로 두고 안전 영역만 아래로 덧대 준다(탭이 홈 인디케이터에 깔리지 않게). */
+   테두리까지 66px인 탭 영역 아래에 안전 영역만 덧댄다(홈 인디케이터에 깔리지 않게). */
 .tabbar {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 15;
-  display: flex; align-items: stretch; height: 66px;
+  display: flex; align-items: stretch; height: calc(66px + env(safe-area-inset-bottom));
   padding-bottom: env(safe-area-inset-bottom);
-  box-sizing: content-box;
   border-top: 1px solid #F1F3F6; border-radius: 16px 16px 0 0; background: #FFFFFF;
 }
 .tab {
@@ -490,13 +489,15 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 .cal-cell.future .cal-num { color: #CDD2DB; }
 .cal-cell.sel .cal-num { font-weight: 800; }
 .cal-cell.today .cal-num { background: #FFB800; color: #16181D; font-weight: 800; }
-/* 하루에 전원이 기록하면 점이 인원 수만큼 선다. 320px에서 셀 안쪽은 34.4px뿐이라
-   (37.4px 트랙 - 좌우 1.5px 보더) 간격 2.5px로는 5개째가 다음 줄로 밀려 그 날짜만
-   위로 들려 보인다 — 2px로 좁히면 5개가 33px에 들어간다.
-   6명부터는 줄을 바꿔 받는다(셀 높이 54px 안에서 소화된다). 점이 없는 날도 높이가
-   같아야 격자가 흔들리지 않으므로 최소 높이는 남긴다. */
-.cal-day-dots { display: flex; flex-wrap: wrap; justify-content: center; gap: 2px; min-height: 5px; max-width: 100%; }
-.cal-day-dot { display: block; width: 5px; height: 5px; border-radius: 50%; }
+/* 디자인 폭(375px)에서는 6px 점을 그대로 쓴다. 그보다 좁으면 현재 다섯 명도 한 줄에
+   못 서므로 점·간격을 1px씩 줄이고, 여섯 명부터는 셀 높이 안에서 줄을 바꿔 받는다.
+   점이 없는 날도 높이가 같아야 격자가 흔들리지 않으므로 최소 높이는 남긴다. */
+.cal-day-dots { display: flex; flex-wrap: wrap; justify-content: center; gap: 2px; min-height: 6px; max-width: 100%; }
+.cal-day-dot { display: block; width: 6px; height: 6px; border-radius: 50%; }
+@media (max-width: 374px) {
+  .cal-day-dots { gap: 1px; min-height: 5px; }
+  .cal-day-dot { width: 5px; height: 5px; }
+}
 
 /* 셀 안 멤버·태그 알약 — 모바일에서는 점으로 대신한다 (와이드 미디어에서 전환) */
 .cal-pills { display: none; flex-direction: column; gap: 3px; min-width: 0; width: 100%; }
@@ -802,6 +803,11 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 
 /* 전체 화면 내역은 좁은 화면(알림 탭) 전용이다 — 데스크톱은 벨 드롭다운이 대신한다.
    제목은 모바일 홈 머리(21px)와 같은 치수로 맞춘다: 탭마다 머리 크기가 튀면 안 된다. */
+.noti-page { margin: 0 -6px; }
+.noti-page .noti-head,
+.noti-page .noti-summary,
+.noti-page .noti-group-label,
+.noti-page .noti-foot-note { margin-left: 6px; margin-right: 6px; }
 .noti-head { display: flex; align-items: center; gap: 12px; }
 .noti-title { flex: 1; min-width: 0; font-size: 21px; font-weight: 800; letter-spacing: -0.02em; }
 .noti-head .icon-btn { border-radius: 50%; color: #4E555F; }
@@ -816,6 +822,7 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
   display: flex; gap: 7px; overflow-x: auto; scrollbar-width: none;
   padding: 12px 0 4px; margin: 0 -20px; padding-left: 20px; padding-right: 20px;
 }
+.noti-page .noti-filters { margin-left: -14px; margin-right: -14px; }
 .noti-filters::-webkit-scrollbar { display: none; }
 .noti-chip {
   display: flex; align-items: center; flex: none; height: 40px; cursor: pointer;

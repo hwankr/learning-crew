@@ -349,6 +349,13 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
         showToast(on && place ? wit.statusStarted(place) : wit.statusEnded);
       }} />
   );
+  // 설정은 두 셸이 공유하는 알림 하위 화면이다 — 데스크톱에서 연 뒤 폭이 좁아져도
+  // 기억해 둔 홈 뒤에 숨지 않도록, 대응하는 모바일 탭도 함께 알림으로 맞춘다.
+  const openNotiSettings = () => {
+    setNotiOpen(false);
+    setMtab('alerts');
+    setNotiSettings(true);
+  };
   // 설정은 내역의 하위 화면이라 같은 자리에 선다 — 데스크톱은 본문, 모바일은 알림 탭
   const notiScreen = notiSettings ? (
     <NotiSettings token={cfg.token} meId={me.id} demo={cfg.demo}
@@ -358,7 +365,7 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
     <NotiPage notifications={snap.notifications}
       onRead={(id) => store.markNotificationRead(id)}
       onReadAll={() => store.markAllNotificationsRead()}
-      onOpenSettings={() => { setNotiOpen(false); setNotiSettings(true); }} />
+      onOpenSettings={openNotiSettings} />
   );
 
   // 떠 있는 기록 버튼은 홈·피드에만 선다 — 캘린더·알림은 아래 여백도 그만큼 줄어든다
@@ -389,7 +396,7 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
                 bellRef={bellRef}
                 onRead={(id) => store.markNotificationRead(id)}
                 onReadAll={() => { store.markAllNotificationsRead(); showToast(wit.notiReadAll); }}
-                onOpenSettings={() => { setNotiOpen(false); setNotiSettings(true); }}
+                onOpenSettings={openNotiSettings}
                 onOpenFeed={() => { setNotiOpen(false); setView('feed'); }}
                 onClose={closeNoti} />
             ) : null}
