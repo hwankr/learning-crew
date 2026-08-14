@@ -1,21 +1,20 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import type { CSSProperties } from 'react';
 import type { Entry, ReactionEmoji, Tag, Todo } from '../shared/types';
 import { PUSH_LIMITS, entryTags, isOffTags, normalizeTags, primaryTag } from '../shared/types';
 import { contentEqual } from './local/store';
-import { BY_ID, COPY, MEMBERS, W, dayKey, pad2, shiftKey } from './lib/constants';
+import { BY_ID, COPY, MEMBERS, dayKey, pad2, shiftKey } from './lib/constants';
 import type { AppConfig } from './lib/config';
 import type { CrewStore } from './local/store';
-import { Avatar, BELL_D, Icon, PENCIL_D } from './components/icons';
-import { Board } from './components/Board';
-import { StatusBar } from './components/StatusBar';
-import { SyncStatus } from './components/SyncStatus';
+import { calOffOf, loadUi, saveUi } from './lib/uiState';
+import { TopBar } from './components/TopBar';
+import { CrewPanel } from './components/CrewPanel';
 import { Feed } from './components/Feed';
 import { CalendarView } from './components/CalendarView';
 import { NotiPage } from './components/NotiPage';
 import { NotiSettings } from './components/NotiSettings';
 import { EMPTY_MODAL, EntryModal, type ModalState } from './components/EntryModal';
 import { ConfirmDelete } from './components/ConfirmDelete';
+import { Toast } from './components/Toast';
 
 /* ---------- 초안 — "초안 저장됨"이 진짜가 되도록 localStorage에 실제로 저장한다 ----------
    슬롯은 기록별(수정 중인 기록의 id, 신규는 'new')로, 데모/실계정도 접두사로 분리한다 —
@@ -132,11 +131,20 @@ function modalFromDraft(d: Draft, editingId: string | null, fallbackDay: string)
 
 export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
   const snap = useSyncExternalStore(store.subscribe, store.getSnapshot);
-  const [view, setView] = useState<'feed' | 'cal' | 'noti'>(cfg.initialView);
+  // 저장된 화면 상태는 첫 렌더에서 한 번만 읽는다 — 이후엔 아래 state가 원본이다
+  const [ui] = useState(loadUi);
+  const urlView = cfg.viewFromUrl ? cfg.initialView : null;
+  const [view, setView] = useState<'feed' | 'cal'>(
+    urlView === 'feed' || urlView === 'cal' ? urlView : ui.view ?? 'cal',
+  );
+  // 알림은 탭이 아니라 벨로 잠깐 들르는 화면이라 view와 따로 둔다(저장하지도 않는다)
+  const [noti, setNoti] = useState(urlView === 'noti');
   // 알림 뷰의 하위 화면 — 내역에서 톱니로 들어가는 설정
   const [notiSettings, setNotiSettings] = useState(cfg.initialNotiSettings);
-  const [calOff, setCalOff] = useState(0);
-  const [selDay, setSelDay] = useState<string | null>(null);
+  const [panelOpen, setPanelOpen] = useState(ui.panelOpen ?? false);
+  const [selDay, setSelDay] = useState<string | null>(ui.selDay ?? null);
+  // 선택일이 속한 달을 열어야 한다 — 안 그러면 8월 격자 아래 9월 목록이 붙는다
+  const [calOff, setCalOff] = useState(() => calOffOf(ui.selDay ?? null, new Date()));
   const [modal, setModal] = useState<ModalState>(EMPTY_MODAL);
   // 삭제 확인 대기 중인 기록 — 스냅샷에서 다시 찾으므로, 그 사이 다른 기기에서
   // 지워졌다면 물음도 함께 사라진다(이미 없는 걸 두고 물을 이유가 없다)
@@ -144,6 +152,21 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
   // 삭제를 확정하면 눌렀던 카드가 사라진다 — 초점이 문서 맨 앞으로 떨어지지 않게 여기로 되돌린다
   const ctaRef = useRef<HTMLButtonElement>(null);
   const patch = useCallback((p: Partial<ModalState>) => setModal((m) => ({ ...m, ...p })), []);
+
+  // 토스트 — 같은 문구가 연달아 와도 다시 튀어야 하므로 번호를 붙여 노드를 갈아 끼운다
+  const [toast, setToast] = useState<{ id: number; text: string } | null>(null);
+  const toastTimer = useRef<number | null>(null);
+  const showToast = useCallback((text: string) => {
+    setToast((t) => ({ id: (t?.id ?? 0) + 1, text }));
+    if (toastTimer.current !== null) clearTimeout(toastTimer.current);
+    toastTimer.current = window.setTimeout(() => setToast(null), 2200);
+  }, []);
+  useEffect(() => () => {
+    if (toastTimer.current !== null) clearTimeout(toastTimer.current);
+  }, []);
+
+  // 보던 탭·패널·날짜를 남긴다 — 새로고침이 화면을 처음으로 되돌리면 안 된다
+  useEffect(() => saveUi({ view, panelOpen, selDay }), [view, panelOpen, selDay]);
 
   // "n분째" 경과 표시를 위한 분 단위 재렌더
   const [nowTick, setNowTick] = useState(() => Date.now());
@@ -159,8 +182,6 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
   const yKey = shiftKey(-1);
   const entries = snap.entries;
   const todays = entries.filter((e) => e.day === todayKey);
-  const doneSet = new Set(todays.map((e) => e.m));
-  const myToday = todays.filter((e) => e.m === me.id).length;
 
   // 초안: 열려 있는 동안 짧게 모아 저장하고, 닫는 순간에도 즉시 저장한다(마지막 타이핑 유실 방지)
   const draftKey = useCallback(
@@ -274,75 +295,29 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
 
   return (
     <div className="screen">
-      <div className="shell">
-        <div className="left">
-          <div className="brand-row">
-            <div className="brand">러닝 크루 👟</div>
-            <div className="brand-side">
-              <button
-                className={'bell-btn' + (view === 'noti' ? ' on' : '')}
-                aria-label={
-                  snap.unreadNotifications > 0
-                    ? `알림 — 안 읽음 ${snap.unreadNotifications}개`
-                    : '알림'
-                }
-                onClick={() => {
-                  setNotiSettings(false);
-                  setView((v) => (v === 'noti' ? 'cal' : 'noti'));
-                }}>
-                <Icon d={BELL_D} size={19} sw={2} />
-                {snap.unreadNotifications > 0 && (
-                  <span className="bell-badge">
-                    {snap.unreadNotifications > 9 ? '9+' : snap.unreadNotifications}
-                  </span>
-                )}
-              </button>
-              {/* 스택 폭은 CSS가 --crew로 고정한다 — 인원이 늘어도 브랜드 줄을 밀지 않게
-                  겹침이 커진다(size는 CSS가 다시 잡으므로 여기 값은 초기 렌더용) */}
-              <div className="stack" style={{ '--crew': MEMBERS.length } as CSSProperties}>
-                {MEMBERS.map((m) => (
-                  <Avatar key={m.id} m={m} size={28} className="stack-av" bg={m.soft} />
-                ))}
-              </div>
-            </div>
+      <TopBar me={me} wit={wit} view={view} onView={(v) => { setView(v); setNoti(false); }}
+        panelOpen={panelOpen} onTogglePanel={() => setPanelOpen((o) => !o)}
+        sync={cfg.token ? snap.sync : null}
+        unread={snap.unreadNotifications} notiOn={noti}
+        onBell={() => { setNotiSettings(false); setNoti((n) => !n); }}
+        onCompose={openNew} composeRef={ctaRef} />
+      {/* 패널 열은 접혀 있어도 마운트를 유지한다 — 열 폭만 300ms로 오가고 안쪽 래퍼는
+          296px에 고정돼 있어서, 접히는 동안 내용이 찌그러지지 않는다(CSS가 맡는다) */}
+      <div className={'body' + (panelOpen ? ' open' : '')}>
+        <div className="panel-col">
+          <div className="panel-inner">
+            <CrewPanel entries={entries} todays={todays} statuses={snap.statuses} meId={me.id}
+              now={nowTick} today={now} wit={wit} sync={cfg.token ? snap.sync : null}
+              onSetStatus={(on, place) => {
+                store.setMyStatus(on, place);
+                setNowTick(Date.now());
+                // 패널이 접혀 있으면 이 변화가 화면 어디에도 안 남는다 — 토스트가 유일한 확인이다
+                showToast(on && place ? wit.statusStarted(place) : wit.statusEnded);
+              }} />
           </div>
-          <div className="sub">
-            {now.getMonth() + 1}월 {now.getDate()}일 {W[now.getDay()]}요일 · {wit.greeting}
-          </div>
-          <button className="cta" ref={ctaRef} onClick={openNew}>
-            <span className="cta-ico">
-              <Icon d={PENCIL_D} size={16} sw={2.2} />
-            </span>
-            <span>{wit.cta}</span>
-          </button>
-          {myToday === 0 && (
-            <div className="cta-cap">
-              <span className="cta-cap-dot" />
-              <span>{wit.ctaNone}</span>
-            </div>
-          )}
-          <StatusBar status={snap.statuses[me.id]} wit={wit} now={nowTick}
-            onSet={(on, place) => {
-              store.setMyStatus(on, place);
-              setNowTick(Date.now());
-            }} />
-          {cfg.token && <SyncStatus sync={snap.sync} />}
-          <div className="board-head">
-            <div className="board-title">오늘의 크루</div>
-            <div className="board-meta">
-              <div className="board-dots">
-                {MEMBERS.map((m) => (
-                  <span key={m.id} className="board-dot"
-                    style={{ background: doneSet.has(m.id) ? m.color : '#E4E7EC' }} />
-                ))}
-              </div>
-              <span className="board-count">{wit.count(doneSet.size)}</span>
-            </div>
-          </div>
-          <Board todays={todays} statuses={snap.statuses} now={nowTick} meId={me.id} wit={wit} />
         </div>
-        <div className="feed-col">
-          {view === 'noti' ? (
+        <div className="main-col">
+          {noti ? (
             notiSettings ? (
               <NotiSettings token={cfg.token} meId={me.id} demo={cfg.demo}
                 onBack={() => setNotiSettings(false)} />
@@ -352,22 +327,22 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
                 onReadAll={() => store.markAllNotificationsRead()}
                 onOpenSettings={() => setNotiSettings(true)} />
             )
+          ) : view === 'feed' ? (
+            <div className="feed-wrap">
+              <Feed entries={entries} todayKey={todayKey} yKey={yKey} meId={me.id}
+                editingId={modal.editingId} comments={snap.comments} reactions={snap.reactions}
+                actions={actions} />
+              <div className="footer">
+                {wit.footer}
+                {cfg.demo && <div className="demo-note">데모 모드 — 초대 링크로 접속하면 크루와 동기화됩니다.</div>}
+              </div>
+            </div>
           ) : (
             <>
-              <div className="tabs">
-                <button className={'tab' + (view === 'cal' ? ' on' : '')} onClick={() => setView('cal')}>캘린더</button>
-                <button className={'tab' + (view === 'feed' ? ' on' : '')} onClick={() => setView('feed')}>피드</button>
-              </div>
-              {view === 'feed' ? (
-                <Feed entries={entries} todayKey={todayKey} yKey={yKey} meId={me.id}
-                  editingId={modal.editingId} comments={snap.comments} reactions={snap.reactions}
-                  actions={actions} />
-              ) : (
-                <CalendarView entries={entries} calOff={calOff} setCalOff={setCalOff}
-                  selDay={selDay ?? todayKey} setSelDay={setSelDay} todayKey={todayKey}
-                  meId={me.id} editingId={modal.editingId} comments={snap.comments}
-                  reactions={snap.reactions} wit={wit} actions={actions} />
-              )}
+              <CalendarView entries={entries} calOff={calOff} setCalOff={setCalOff}
+                selDay={selDay ?? todayKey} setSelDay={setSelDay} todayKey={todayKey}
+                meId={me.id} editingId={modal.editingId} comments={snap.comments}
+                reactions={snap.reactions} wit={wit} actions={actions} />
               <div className="footer">
                 {wit.footer}
                 {cfg.demo && <div className="demo-note">데모 모드 — 초대 링크로 접속하면 크루와 동기화됩니다.</div>}
@@ -393,6 +368,7 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
           }}
         />
       )}
+      {toast && <Toast key={toast.id} text={toast.text} />}
     </div>
   );
 }

@@ -1,35 +1,13 @@
-import type { CSSProperties } from 'react';
 import type { Comment, Entry, MemberId, ReactionSet } from '../../shared/types';
 import { entryTags, primaryTag } from '../../shared/types';
 import {
-  MEMBERS, TAGMETA, W, dayKey, memberOf, membersOfEntries, pad2, shiftKey, type CopySet,
+  TAGMETA, W, dayKey, memberOf, membersOfEntries, type CopySet,
 } from '../lib/constants';
 import { Avatar, Icon } from './icons';
 import { EntryCard, type EntryActions } from './EntryCard';
 
 /** 셀 하나에 보여줄 최대 알약 수 — 넘치면 "+N개 더". */
 const MAX_PILLS = 3;
-
-/** 넓은 와이드에서 월 요약 카드의 열 수 — 마지막 줄에 한 장만 남지 않는 배치를 고른다.
-    (좁은 폭은 CSS가 2열로 고정한다. 카드는 grow하지 않으므로 열 수가 곧 카드 폭이다.)
-    4명 이하는 한 줄에 다 서고, 5·6명은 3열(3+2 / 3+3), 3열이면 마지막이 한 장 남는
-    7·10명만 4열로 간다. */
-function statCols(n: number): number {
-  if (n <= 4) return Math.max(1, n);
-  return n % 3 === 1 ? 4 : 3;
-}
-
-/** 오늘부터 거꾸로 센 연속 기록일. 오늘 아직 안 남긴 건 봐준다(어제까지 이어짐). */
-function streakOf(m: MemberId, byDay: Map<string, Entry[]>): number {
-  let streak = 0;
-  for (let i = 0; i <= 366; i++) {
-    const has = (byDay.get(shiftKey(-i)) ?? []).some((e) => e.m === m);
-    if (has) streak++;
-    else if (i === 0) continue;
-    else break;
-  }
-  return streak;
-}
 
 export function CalendarView({
   entries, calOff, setCalOff, selDay, setSelDay, todayKey, meId, editingId, comments, reactions,
@@ -58,16 +36,6 @@ export function CalendarView({
     if (!byDay.has(e.day)) byDay.set(e.day, []);
     byDay.get(e.day)!.push(e);
   }
-
-  // 멤버별 월 요약 — 연속일은 항상 오늘 기준이라 다른 달 요약에는 어울리지 않는다 (이번 달에만 표시)
-  const monthPrefix = `${calBase.getFullYear()}-${pad2(calBase.getMonth() + 1)}-`;
-  const stats = MEMBERS.map((m) => {
-    const days = new Set(entries.filter((e) => e.m === m.id && e.day.startsWith(monthPrefix)).map((e) => e.day)).size;
-    const line = calOff === 0
-      ? `이번 달 ${days}일 · 연속 ${streakOf(m.id, byDay)}일`
-      : `${calBase.getMonth() + 1}월 ${days}일`;
-    return { m, line };
-  });
 
   const cells = [];
   for (let i = 0; i < lead; i++) {
@@ -138,20 +106,6 @@ export function CalendarView({
             <Icon d="M9 6l6 6-6 6" size={17} sw={2.4} />
           </button>
         </div>
-      </div>
-      <div className="cal-stats" style={{ '--cols': statCols(stats.length) } as CSSProperties}>
-        {stats.map(({ m, line }) => (
-          <div key={m.id} className="cal-stat">
-            <Avatar m={m} size={30} />
-            <div className="cal-stat-main">
-              <div className="cal-stat-name">
-                <span>{m.name}</span>
-                {m.id === meId && <span className="me-badge">나</span>}
-              </div>
-              <div className="cal-stat-line">{line}</div>
-            </div>
-          </div>
-        ))}
       </div>
       <div className="cal-week">
         {W.map((d, i) => (

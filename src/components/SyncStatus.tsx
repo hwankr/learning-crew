@@ -1,5 +1,6 @@
 /* 동기화 상태 표시 — "이 기기엔 저장됐는데 다른 기기엔 안 보이는" 상황을 보이게 한다.
-   평소(모두 동기화됨)에는 아주 옅게, 대기/오프라인/오류는 또렷하게, 401은 재로그인 버튼과 함께. */
+   평소(모두 동기화됨)에는 아주 옅게, 대기/오프라인/오류는 또렷하게, 401은 재로그인 버튼과 함께.
+   같은 줄이 상단 바(top)와 크루 패널 바닥(panel) 두 자리에 서므로 자리별 여백만 갈라 준다. */
 import type { SyncInfo } from '../local/store';
 import { clearToken } from '../lib/config';
 
@@ -8,10 +9,11 @@ function relogin(): void {
   location.reload();
 }
 
-export function SyncStatus({ sync }: { sync: SyncInfo }) {
+export function SyncStatus({ sync, variant }: { sync: SyncInfo; variant: 'top' | 'panel' }) {
+  const base = `sync-row sync-${variant} `;
   if (sync.phase === 'auth') {
     return (
-      <div className="sync-row warn">
+      <div className={base + 'warn'}>
         <span className="sync-dot warn" />
         <span className="sync-label">로그인이 풀렸어요 — 기록은 이 기기에 남아 있어요</span>
         <button className="sync-btn" onClick={relogin}>다시 로그인</button>
@@ -34,7 +36,7 @@ export function SyncStatus({ sync }: { sync: SyncInfo }) {
     text = `동기화 중 — 대기 ${n}개`;
   }
   return (
-    <div className={'sync-row ' + cls}>
+    <div className={base + cls}>
       <span className={'sync-dot ' + cls} />
       <span className="sync-label">{text}</span>
     </div>

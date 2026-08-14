@@ -113,9 +113,8 @@ export function fmtElapsed(sinceISO: string, now: number): string {
 }
 
 export interface CopySet {
-  greeting: string;
+  greeting: string; // 좁은 화면 홈의 인사 줄
   cta: string;
-  ctaNone: string;
   diaryPh: string;
   todoPh: string;
   submit: string;
@@ -128,15 +127,17 @@ export interface CopySet {
   footer: string;
   count: (n: number) => string;
   calEmpty: string;
-  statusAsk: string; // 상태 off일 때 안내
-  statusLive: (place: string) => string; // 내 상태 on 문구
+  statusAsk: string; // 체크인 꺼짐 안내
+  statusOn: string; // 체크인 켜짐 머리
   statusEnd: string; // 끄기 버튼
-  statusPeer: (place: string) => string; // 보드에서 남의 상태 한 줄
+  placeAt: (place: string) => string; // "{장소}에서" — 체크인 카드와 크루 행이 함께 쓴다
+  statusStarted: (place: string) => string; // 체크인 시작 토스트
+  statusEnded: string; // 체크인 종료 토스트
 }
 
 export const COPY: CopySet = {
   greeting: '오늘도 조용히 성장 중',
-  cta: '오늘 기록 남기기', ctaNone: '아직 오늘 기록이 없어요',
+  cta: '기록 남기기',
   diaryPh: '오늘 하루 기록하기', todoPh: '할 일 내용',
   submit: '기록 남기기', editSubmit: '수정 저장',
   empty: '아직 안 옴', emptyMe: '오늘 첫 기록을 남겨보세요',
@@ -146,9 +147,11 @@ export const COPY: CopySet = {
   count: (n) => `${MEMBERS.length}명 중 ${n}명 도장 찍음`,
   calEmpty: '이 날은 다들 조용했네요.',
   statusAsk: '공부 시작하면 켜주세요',
-  statusLive: (p) => `${p}에서 공부 중`,
-  statusEnd: '마침',
-  statusPeer: (p) => `지금 ${p}에서 공부 중`,
+  statusOn: '공부 중',
+  statusEnd: '공부 종료',
+  placeAt: (p) => `${p}에서`,
+  statusStarted: (p) => `${p}에서 공부 시작 — 크루에게 보였어요`,
+  statusEnded: '공부를 종료했어요',
 };
 
 export const W = ['일', '월', '화', '수', '목', '금', '토'];
