@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import type { CSSProperties } from 'react';
 import type { Entry, ReactionEmoji, Tag, Todo } from '../shared/types';
 import { PUSH_LIMITS, entryTags, isOffTags, normalizeTags, primaryTag } from '../shared/types';
 import { contentEqual } from './local/store';
@@ -296,9 +297,11 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
                   </span>
                 )}
               </button>
-              <div className="stack">
+              {/* 스택 폭은 CSS가 --crew로 고정한다 — 인원이 늘어도 브랜드 줄을 밀지 않게
+                  겹침이 커진다(size는 CSS가 다시 잡으므로 여기 값은 초기 렌더용) */}
+              <div className="stack" style={{ '--crew': MEMBERS.length } as CSSProperties}>
                 {MEMBERS.map((m) => (
-                  <Avatar key={m.id} m={m} size={34} className="stack-av" bg={m.soft} />
+                  <Avatar key={m.id} m={m} size={28} className="stack-av" bg={m.soft} />
                 ))}
               </div>
             </div>

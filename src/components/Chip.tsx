@@ -13,8 +13,10 @@ export function Chip({ tag, variant }: { tag: Tag; variant: keyof typeof VARIANT
   const v = VARIANTS[variant];
   return (
     <span className={v.cls} style={{ background: tm.bg, color: tm.fg }}>
+      {/* display·flex는 인라인이 아니라 CSS(.chip svg)가 준다 — 보드 스트립처럼 아이콘을
+          접어야 하는 자리가 있는데, 인라인 style이면 스타일시트로 덮을 수가 없다 */}
       <svg width={v.icon} height={v.icon} viewBox="0 0 24 24" fill="none" stroke="currentColor"
-        strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round" style={{ display: 'block', flex: 'none' }}>
+        strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round">
         <path d={tm.icon} />
       </svg>
       <span className="chip-label">{tag}</span>

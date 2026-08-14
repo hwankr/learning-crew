@@ -26,6 +26,7 @@ import type { PushBody } from './push';
 import {
   DEFAULT_NOTIF_PREFS,
   MEMBER_IDS,
+  MEMBER_NAMES,
   type Comment,
   type Entry,
   type MemberId,
@@ -135,6 +136,16 @@ describe('parseMentions', () => {
     expect(parseMentions('@승환 그 문제집 뭐예요')).toEqual(['sh']);
     expect(parseMentions('@승환 @진주 내일 봬요')).toEqual(['sh', 'jj']);
     expect(parseMentions('멘션 없는 문장 @지나가던사람')).toEqual([]);
+  });
+
+  it('멤버 이름끼리 서로 오검출하지 않는다 — 부분 문자열 매칭이라 이름이 겹치면 같이 잡힌다', () => {
+    // 멤버를 추가할 때 기존 이름의 부분 문자열(또는 그 반대)이면 여기서 걸린다
+    for (const m of MEMBER_IDS) {
+      expect(parseMentions(`@${MEMBER_NAMES[m]} 이거 봤어요?`)).toEqual([m]);
+    }
+    expect(parseMentions(MEMBER_IDS.map((m) => `@${MEMBER_NAMES[m]}`).join(' '))).toEqual([
+      ...MEMBER_IDS,
+    ]);
   });
 });
 
@@ -604,6 +615,98 @@ describe('read generation + push re-arm', () => {
     await runHourly(db, ENV, at20, send);
     expect(calls).toHaveLength(3);
     expect(calls[2]!.endpoints).toEqual(['https://e/jj']);
+  });
+});
+
+/* ---------- 크루 전원 커버리지 ---------- */
+
+/* 위 테스트들은 특정 멤버(sh·wg·th)로 시나리오를 확인한다. 여기서는 MEMBER_IDS를 직접 돌면서
+   "설정 행이 없어도 기본값" · "팬아웃은 본인 제외 전원"을 보증한다 — 멤버를 추가했는데
+   어딘가에서 조용히 빠지면 인원수를 박아 둔 단언 없이도 여기서 걸린다. */
+describe('크루 전원 커버리지', () => {
+  const NEWEST = MEMBER_IDS[MEMBER_IDS.length - 1]!; // 가장 최근에 합류한 멤버
+
+  beforeEach(async () => {
+    await resetNotifState();
+    await db.execute(sql`delete from comments`);
+    await db.execute(sql`delete from reactions`);
+    await db.execute(sql`delete from entries`);
+  });
+
+  it('설정 행이 없는 멤버도 전원 기본값으로 채워진다 — 팬아웃이 참조하는 prefs 맵의 전제', async () => {
+    const bare = (p: NotifPrefs) => ({ ...p, updatedAt: '' }); // 기본값의 updatedAt은 비교 대상이 아니다
+    const all = await allNotifPrefs(db);
+    expect(Object.keys(all).sort()).toEqual([...MEMBER_IDS].sort());
+    for (const m of MEMBER_IDS) {
+      expect(bare(all[m])).toEqual(bare(prefs(m)));
+      expect(bare(await getNotifPrefs(db, m))).toEqual(bare(prefs(m)));
+    }
+
+    // 한 명이 저장해도 나머지는 그대로 기본값 — 채우기가 저장된 행에만 붙지 않는다
+    await putNotifPrefs(db, NEWEST, { ...DEFAULT_NOTIF_PREFS, startMode: 'off' });
+    const after = await allNotifPrefs(db);
+    expect(after[NEWEST].startMode).toBe('off');
+    for (const m of MEMBER_IDS.filter((x) => x !== NEWEST)) {
+      expect(after[m].startMode).toBe(DEFAULT_NOTIF_PREFS.startMode);
+    }
+  });
+
+  it('댓글 수신자는 누가 쓰든 본인만 빼고 전원이다 — mine·reply·mention 전부', () => {
+    for (const actor of MEMBER_IDS) {
+      const others = MEMBER_IDS.filter((m) => m !== actor);
+      const [owner, ...rest] = others as [MemberId, ...MemberId[]];
+
+      // 기본 설정: 주인은 mine, 나머지 이전 댓글러는 reply — 한 명도 빠지지 않는다
+      expect(
+        resolveCommentRecipients(
+          { actor, entryOwner: owner, priorCommenters: rest, mentions: [] },
+          allPrefs(),
+        ),
+      ).toEqual([
+        { m: owner, kind: 'comment', why: 'mine' },
+        ...rest.map((m) => ({ m, kind: 'reply', why: 'reply' })),
+      ]);
+
+      // 멘션은 설정과 무관하게 전원이 받는다 (행위자 자신만 조용하다)
+      expect(
+        resolveCommentRecipients(
+          { actor, entryOwner: null, priorCommenters: [], mentions: [...others, actor] },
+          allPrefs(),
+        ),
+      ).toEqual(others.map((m) => ({ m, kind: 'mention', why: 'mention' })));
+    }
+  });
+
+  it('공부 시작 팬아웃은 누가 시작하든 본인 제외 전원에게 간다', async () => {
+    const noon = lastKstHour(12); // 기본 방해 금지 창(22~07) 밖 — 보류가 아니라 행이 생긴다
+    const { send } = makeSender();
+    for (const me of MEMBER_IDS) {
+      await resetNotifState();
+      await notifyStart(db, ENV, me, '도서관', new Date().toISOString(), noon, send);
+      for (const m of MEMBER_IDS) {
+        const { rows } = await pullNotifications(db, m, null);
+        expect(rows.map((r) => r.actor)).toEqual(m === me ? [] : [me]);
+      }
+    }
+  });
+
+  it('응원 팬아웃은 누가 기록 주인이어도 그 사람에게 간다', async () => {
+    const { send } = makeSender();
+    for (const [i, owner] of MEMBER_IDS.entries()) {
+      await resetNotifState();
+      await db.execute(sql`delete from entries`);
+      await pushEntries(db, [entry({ id: E1, m: owner })], owner);
+      const actor = MEMBER_IDS[(i + 1) % MEMBER_IDS.length]!;
+      await notifyCommentEvents(db, ENV, actor, [], [{ entryId: E1, added: ['🔥'] }], Date.now(), send);
+
+      const rows = (await pullNotifications(db, owner, null)).rows;
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ kind: 'react', why: 'react_daily', actors: [actor] });
+      // 주인 아닌 사람에게는 가지 않는다
+      for (const m of MEMBER_IDS.filter((x) => x !== owner)) {
+        expect((await pullNotifications(db, m, null)).rows).toHaveLength(0);
+      }
+    }
   });
 });
 

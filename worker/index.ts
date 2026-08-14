@@ -72,7 +72,7 @@ const app = new Hono<Env>();
 app.get('/api/health', (c) => c.json({ ok: true }));
 
 /* 이름 선택 로그인 — 멤버 id를 받아 서명 토큰을 발급한다.
-   신원 검증은 없다: 4인 크루 앱이라 "URL을 아는 사람 = 크루"를 전제로 한다.
+   신원 검증은 없다: 지인 몇 명뿐인 크루 앱이라 "URL을 아는 사람 = 크루"를 전제로 한다.
    문제가 생기면 AUTH_SECRET 교체로 전원 로그아웃시킬 수 있다. */
 app.post('/api/auth/claim', async (c) => {
   let body: { m?: string };

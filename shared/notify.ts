@@ -13,7 +13,10 @@ import {
 /* ---------- 멘션 ---------- */
 
 /** 댓글 본문에서 @이름 멘션을 뽑는다 — 본인 이름 사전(MEMBER_NAMES)만 인정.
-    4인 크루라 자동완성 없이 손으로 치는 걸 전제로, '@승환' 부분 문자열이면 충분하다. */
+    몇 명뿐인 크루라 자동완성 없이 손으로 치는 걸 전제로, '@승환' 부분 문자열이면 충분하다.
+    단 이름끼리 부분 문자열로 겹치면(예: '진주'와 '진주희') 한 번에 둘 다 잡히므로,
+    멤버를 추가할 때는 기존 이름의 부분 문자열이 아닌지 확인할 것 —
+    notify.test.ts의 회귀 테스트가 이 조건을 지킨다. */
 export function parseMentions(body: string): MemberId[] {
   return MEMBER_IDS.filter((m) => body.includes('@' + MEMBER_NAMES[m]));
 }

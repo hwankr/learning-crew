@@ -3,8 +3,7 @@
    "읽음 처리"뿐이고, 같은 날의 크루 전체 댓글(why=all)은 표시할 때만 한 줄로 접는다. */
 import { useEffect, useMemo, useState } from 'react';
 import type { NotifKind, NotifWhy, Notification } from '../../shared/types';
-import { MEMBER_NAMES } from '../../shared/types';
-import { BY_ID, W, dayKey, pad2 } from '../lib/constants';
+import { W, dayKey, memberName, memberOf, pad2 } from '../lib/constants';
 import { Avatar, BELL_D, Icon } from './icons';
 
 /* ---------- 표시 규칙 (순수 — 테스트가 직접 부른다) ---------- */
@@ -62,14 +61,16 @@ export function restOf(n: Notification): string {
   return '님이 내 기록에 응원을 보냈어요';
 }
 
-/** 행 앞에 서는 이름 — system은 이름 없이 문장만 쓴다. */
+/** 행 앞에 서는 이름 — system은 이름 없이 문장만 쓴다.
+    행위자 id가 있는데 이 번들이 모르는 사람이면(구버전 탭이 새 멤버의 알림을 받는 경우)
+    memberName이 중립 총칭으로 받는다 — MEMBER_NAMES를 직접 읽으면 이름이 빈칸이 된다. */
 export function nameOf(n: Notification): string {
   if (n.kind === 'system') return '';
   if (n.why === 'react_daily') {
     const first = n.actors[0];
-    return first ? MEMBER_NAMES[first] : '크루';
+    return first ? memberName(first) : '크루';
   }
-  return n.actor ? MEMBER_NAMES[n.actor] : '크루';
+  return n.actor ? memberName(n.actor) : '크루';
 }
 
 /** 부가 설명 한 줄 — 집계 행은 서버가 비워 보내므로 count로 만든다. */
@@ -221,7 +222,9 @@ export function NotiPage({ notifications, onRead, onReadAll, onOpenSettings }: P
               const grouped = row.group.length > 1;
               const anyUnread = row.group.some((x) => x.readAt === null);
               const badge = WHY_BADGE[n.why];
-              const member = n.actor ? BY_ID[n.actor] : undefined;
+              // 행위자가 없는 행(system)만 벨 아이콘이다 — 모르는 id는 중립 아바타로 세운다
+              // (벨을 세우면 사람이 한 일이 시스템 알림처럼 읽힌다)
+              const member = n.actor ? memberOf(n.actor) : undefined;
               const actorCount = new Set(row.group.map((x) => x.actor)).size;
               const name = grouped
                 ? `${nameOf(n)}${actorCount > 1 ? ` 외 ${actorCount - 1}명` : ''}`

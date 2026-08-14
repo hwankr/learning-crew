@@ -13,15 +13,19 @@ export function canonicalUuid(id: string): string {
   return id.toLowerCase();
 }
 
-export const MEMBER_IDS = ['sh', 'wg', 'th', 'jj'] as const;
+/** 크루 고정 순서 — 보드 정렬·리액션 이름 나열이 이 순서를 그대로 쓴다.
+    새 멤버는 뒤에 붙인다(기존 멤버의 상대 순서가 바뀌면 화면 순서가 통째로 흔들린다). */
+export const MEMBER_IDS = ['sh', 'wg', 'th', 'jj', 'kj'] as const;
 export type MemberId = (typeof MEMBER_IDS)[number];
 
-/** Worker가 푸시 문구에도 쓰는 표시 이름 — 클라이언트 MEMBERS도 이걸 참조한다. */
+/** Worker가 푸시 문구에도 쓰는 표시 이름 — 클라이언트 MEMBERS도 이걸 참조한다.
+    (scripts/make-invites.mjs에 같은 표가 복제돼 있다 — 함께 고칠 것) */
 export const MEMBER_NAMES: Record<MemberId, string> = {
   sh: '승환',
   wg: '웅',
   th: '태현',
   jj: '진주',
+  kj: '경진',
 };
 
 export const TAGS = ['자격증', '영어', '코딩테스트', '기타', 'OFF'] as const;
@@ -190,7 +194,7 @@ export interface PullCursor {
 export interface PullResponse {
   rows: Entry[];
   cursor: PullCursor | null;
-  /** 전 멤버의 지금 상태 — 4행뿐이라 매 pull에 통째로 실어 보낸다. */
+  /** 전 멤버의 지금 상태 — 멤버당 1행뿐이라 매 pull에 통째로 실어 보낸다. */
   statuses: MemberStatus[];
   comments?: Comment[];
   commentCursor?: PullCursor | null;
