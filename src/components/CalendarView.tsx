@@ -3,7 +3,7 @@ import { entryTags, primaryTag } from '../../shared/types';
 import {
   MEMBERS, TAGMETA, W, dayKey, memberOf, membersOfEntries, pad2, type CopySet,
 } from '../lib/constants';
-import { sameDayInMonth } from '../lib/uiState';
+import { calOffOf, sameDayInMonth } from '../lib/uiState';
 import { Avatar, Icon } from './icons';
 import { EntryCard, type EntryActions } from './EntryCard';
 
@@ -14,12 +14,10 @@ const MAX_PILLS = 3;
 const CELLS = 42;
 
 export function CalendarView({
-  entries, calOff, setCalOff, selDay, setSelDay, todayKey, meId, editingId, comments, reactions,
+  entries, selDay, setSelDay, todayKey, meId, editingId, comments, reactions,
   wit, actions,
 }: {
   entries: Entry[];
-  calOff: number;
-  setCalOff: (n: number) => void;
   selDay: string;
   setSelDay: (k: string) => void;
   todayKey: string;
@@ -31,6 +29,9 @@ export function CalendarView({
   actions: EntryActions;
 }) {
   const now = new Date();
+  // 달 이동이 선택일도 함께 옮기는 지금은 선택일이 화면 달의 단일 원본이다. calOff를 별도
+  // state로 두면 자정에 기준 달만 바뀌어 격자와 패널이 다시 서로 다른 달을 가리킨다.
+  const calOff = calOffOf(selDay, now);
   const calBase = new Date(now.getFullYear(), now.getMonth() + calOff, 1);
   const daysIn = new Date(calBase.getFullYear(), calBase.getMonth() + 1, 0).getDate();
   const lead = calBase.getDay();
@@ -39,8 +40,7 @@ export function CalendarView({
 
   // 달을 넘길 때 선택일도 같은 일(日)로 따라간다 — 격자만 넘어가면 옆 패널이 딴 달을 가리킨다
   const shiftMonth = (step: number) => {
-    const base = new Date(now.getFullYear(), now.getMonth() + calOff + step, 1);
-    setCalOff(calOff + step);
+    const base = new Date(calBase.getFullYear(), calBase.getMonth() + step, 1);
     setSelDay(sameDayInMonth(base, selDay));
   };
 
@@ -59,13 +59,16 @@ export function CalendarView({
     const isToday = k === todayKey;
     const isSel = k === selDay;
     const isFuture = k > todayKey;
-    const dayEntries = (byDay.get(k) ?? []).slice().sort((a, b) => a.time.localeCompare(b.time));
+    // 세 개만 남기므로 최신 기록부터 — 오래된 세 개를 고정하면 뒤에 온 기록은 +N에만 묻힌다
+    const dayEntries = (byDay.get(k) ?? []).slice().sort((a, b) => b.time.localeCompare(a.time));
     // 점은 기록에서 뽑는다 — 명부로 거르면 모르는 멤버만 기록한 날에 점이 하나도 안 찍혀
     // "아무도 기록 안 한 날"이 된다 (알약은 이미 memberOf라 그 셀 안에서도 어긋난다)
     const dots = membersOfEntries(dayEntries);
     cells.push(
       <button key={k}
         className={'cal-cell' + (isSel ? ' sel' : '') + (isToday ? ' today' : '') + (isFuture ? ' future' : '')}
+        aria-pressed={isSel}
+        aria-current={isToday ? 'date' : undefined}
         onClick={() => setSelDay(k)}>
         <span className="cal-num">{n}</span>
         {/* 와이드: 멤버·태그 알약 / 모바일: 색 점 (CSS로 전환) */}
@@ -118,7 +121,7 @@ export function CalendarView({
           </div>
         </div>
         <div className="cal-head-actions">
-          <button className="cal-today-btn" onClick={() => { setCalOff(0); setSelDay(todayKey); }}>
+          <button className="cal-today-btn" onClick={() => setSelDay(todayKey)}>
             오늘
           </button>
           <div className="cal-nav">

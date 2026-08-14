@@ -5,7 +5,7 @@ import { contentEqual } from './local/store';
 import { BY_ID, COPY, MEMBERS, dayKey, pad2, shiftKey } from './lib/constants';
 import type { AppConfig } from './lib/config';
 import type { CrewStore } from './local/store';
-import { calOffOf, loadUi, saveUi } from './lib/uiState';
+import { loadUi, saveUi } from './lib/uiState';
 import { TopBar } from './components/TopBar';
 import { CrewPanel } from './components/CrewPanel';
 import { Feed } from './components/Feed';
@@ -143,8 +143,6 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
   const [notiSettings, setNotiSettings] = useState(cfg.initialNotiSettings);
   const [panelOpen, setPanelOpen] = useState(ui.panelOpen ?? false);
   const [selDay, setSelDay] = useState<string | null>(ui.selDay ?? null);
-  // 선택일이 속한 달을 열어야 한다 — 안 그러면 8월 격자 아래 9월 목록이 붙는다
-  const [calOff, setCalOff] = useState(() => calOffOf(ui.selDay ?? null, new Date()));
   const [modal, setModal] = useState<ModalState>(EMPTY_MODAL);
   // 삭제 확인 대기 중인 기록 — 스냅샷에서 다시 찾으므로, 그 사이 다른 기기에서
   // 지워졌다면 물음도 함께 사라진다(이미 없는 걸 두고 물을 이유가 없다)
@@ -339,8 +337,8 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
             </div>
           ) : (
             <>
-              <CalendarView entries={entries} calOff={calOff} setCalOff={setCalOff}
-                selDay={selDay ?? todayKey} setSelDay={setSelDay} todayKey={todayKey}
+              <CalendarView entries={entries} selDay={selDay ?? todayKey}
+                setSelDay={setSelDay} todayKey={todayKey}
                 meId={me.id} editingId={modal.editingId} comments={snap.comments}
                 reactions={snap.reactions} wit={wit} actions={actions} />
               <div className="footer">

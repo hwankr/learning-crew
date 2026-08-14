@@ -250,7 +250,7 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 .todo-text.done { color: #9AA1AD; text-decoration: line-through; }
 
 /* 캘린더 선택일 패널의 컴팩트 엔트리 */
-.entry.compact { gap: 10px; padding: 14px 10px; }
+.entry.compact { gap: 10px; margin: 0; padding: 14px 0; border-radius: 0; }
 .entry.compact .entry-name { font-size: 13.5px; }
 .entry.compact .entry-time { font-size: 11px; }
 .entry.compact .entry-memo { font-size: 13.5px; margin-top: 5px; line-height: 1.5; }
@@ -265,7 +265,7 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 /* 수정 바로 옆에 붙는 삭제 — 촘촘한 목록에서 오탭하지 않게 두 버튼을 벌려 두고
    탭 영역도 피드와 크게 다르지 않게 남긴다(피드 35px / 여기 31px).
    잘못 눌러도 확인창이 한 번 더 막는다. */
-.entry.compact .entry-actions { gap: 6px; margin: 0 -8px 0 auto; }
+.entry.compact .entry-actions { gap: 6px; margin: 0 0 0 auto; }
 .entry.compact .entry-act { padding: 8px; }
 
 /* ---------- 카드 소셜 블록 (리액션 + 댓글) ---------- */
@@ -924,4 +924,11 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
     min-height: min(540px, 88vh); max-height: min(88vh, 760px);
     min-height: min(540px, 88dvh); max-height: min(88dvh, 760px);
   }
+}
+
+/* 900px 셸에서 크루 패널까지 열면 고정 340px 선택일 열이 격자를 108px까지 누른다.
+   본문이 다시 넉넉해질 때까지 선택일만 아래로 받아, 데스크톱 셀·알약은 그대로 유지한다. */
+@media (min-width: 900px) and (max-width: 1399px) {
+  .body.open .cal-layout { display: block; }
+  .body.open .cal-sel { position: static; margin-top: 26px; min-height: 220px; }
 }
