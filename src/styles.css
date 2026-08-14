@@ -460,15 +460,16 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 
 /* ---------- 기록 작성/수정 시트 ---------- */
 .overlay {
-  position: fixed; inset: 0; background: rgba(22, 24, 29, 0.32);
+  position: fixed; inset: 0; background: rgba(22, 24, 29, 0.45);
   backdrop-filter: blur(4px); z-index: 50;
   display: flex; align-items: flex-end; justify-content: center;
   animation: rc-fade 160ms cubic-bezier(0.16, 1, 0.3, 1);
 }
+.compose-overlay { background: rgba(22, 24, 29, 0.32); backdrop-filter: none; }
 /* 시트는 통째로 하나가 굴러간다 — 머리·바닥을 고정하고 가운데만 굴리면 460px 시트에서
    정작 굴러가는 자리가 얼마 안 남는다(단계가 사라지면서 내용이 한 장으로 길어졌다). */
 .sheet {
-  width: 100%; max-width: 540px; background: #FFFFFF;
+  width: 100%; max-width: 100%; background: #FFFFFF;
   border-radius: 20px 20px 0 0; padding: 20px; margin: 0;
   box-shadow: 0 24px 60px rgba(22, 24, 29, 0.28);
   /* dvh 미지원 브라우저는 vh 폴백 */
@@ -504,6 +505,7 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 .cal-pop-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
 .cal-pop-title { font-size: 13.5px; font-weight: 800; color: #16181D; }
 .icon-btn.sm { width: 30px; height: 30px; border-radius: 8px; }
+.cal-nav .icon-btn:disabled { color: #CDD2DB; cursor: default; }
 .cal-pop-week { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; margin-bottom: 2px; }
 .cal-pop-wd { text-align: center; font-size: 11px; font-weight: 700; color: #9AA1AD; padding: 3px 0; }
 .cal-pop-wd.sun { color: #D3352A; }
@@ -566,7 +568,7 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 .modal-diary:focus { border-color: #FFB800; }
 /* 짧은 화면(가로 폰): 빈 본문 칸을 낮추고, 날짜 팝오버는 제 안에서 굴러가게 */
 @media (max-height: 480px) {
-  .modal-diary { min-height: 72px; }
+  .modal-diary { min-height: 88px; }
   .cal-pop { max-height: calc(100dvh - 130px); overflow: auto; }
 }
 
@@ -981,7 +983,7 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
   /* 시트는 화면 가운데 뜬다. 높이는 오버레이 안쪽(패딩 24px 뺀 자리)까지만 — 900×480
      (가로 태블릿)처럼 낮은 화면에서 시트가 제 키대로 서면 닫기 버튼과 저장 줄이
      화면 밖으로 나간다. */
-  .overlay { align-items: center; padding: 24px; }
+  .compose-overlay { align-items: center; padding: 24px; }
   .sheet {
     width: 460px; max-width: 100%; border-radius: 20px; padding: 26px;
     max-height: 100%;

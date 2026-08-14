@@ -76,12 +76,12 @@ function DatePicker({
         <span className="cal-pop-title">{view.y}년 {view.m + 1}월</span>
         <div className="cal-nav">
           <button className="icon-btn sm" onClick={() =>
-            setView(view.m === 0 ? { y: view.y - 1, m: 11 } : { y: view.y, m: view.m - 1 })}>
+            setView(view.m === 0 ? { y: view.y - 1, m: 11 } : { y: view.y, m: view.m - 1 })}
+            aria-label="이전 달">
             <Icon d={PREV_D} size={14} sw={2.4} />
           </button>
-          <button className="icon-btn sm" style={{ color: isCurMonth ? '#CDD2DB' : undefined }} onClick={() => {
-            if (!isCurMonth) setView(view.m === 11 ? { y: view.y + 1, m: 0 } : { y: view.y, m: view.m + 1 });
-          }}>
+          <button className="icon-btn sm" disabled={isCurMonth} aria-label="다음 달" onClick={() =>
+            setView(view.m === 11 ? { y: view.y + 1, m: 0 } : { y: view.y, m: view.m + 1 })}>
             <Icon d={NEXT_D} size={14} sw={2.4} />
           </button>
         </div>
@@ -136,6 +136,7 @@ export function EntryModal({
   useEffect(() => () => clearTimeout(typeTimer.current), []);
 
   const titleId = useId();
+  const bodyId = useId();
   const sheetRef = useRef<HTMLDivElement>(null);
   const bodyRef = useRef<HTMLTextAreaElement>(null);
   useFocusTrap(sheetRef, fallbackRef);
@@ -159,8 +160,18 @@ export function EntryModal({
   const { canSave, hasContent, blocked } = saveGate(modal);
   const showBlocked = tried && !!blocked;
 
+  useEffect(() => {
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key !== 'Escape') return;
+      if (calOpen) setCalOpen(false);
+      else close();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [calOpen, close]);
+
   return (
-    <div className="overlay" onClick={close}>
+    <div className="overlay compose-overlay" onClick={close}>
       {/* 트랩은 Tab만 가둔다 — 화면 낭독기에 "여기가 모달"이라고 알리는 건 dialog 의미다 */}
       <div className="sheet" ref={sheetRef} role="dialog" aria-modal="true" aria-labelledby={titleId}
         onClick={(ev) => ev.stopPropagation()}>
@@ -190,7 +201,7 @@ export function EntryModal({
         </div>
 
         <div className="sheet-label">무엇을 했나요</div>
-        <div className="tag-chips">
+        <div className="tag-chips" role="group" aria-label="무엇을 했나요">
           {TAGS.map((t) => {
             const on = modal.tags.includes(t);
             const tm = TAGMETA[t];
@@ -210,9 +221,10 @@ export function EntryModal({
 
         <div className="sheet-label">오늘 만족도</div>
         {!isOff ? (
-          <div className="star-row">
+          <div className="star-row" role="group" aria-label="오늘 만족도">
             {[1, 2, 3, 4, 5].map((n) => (
-              <button key={n} className="star-btn" aria-label={`${n}점`} onClick={() => patch({ stars: n })}>
+              <button key={n} className="star-btn" aria-label={`${n}점`}
+                aria-pressed={modal.stars === n} onClick={() => patch({ stars: n })}>
                 <svg width={22} height={22} viewBox="0 0 24 24" style={{ display: 'block' }}>
                   <path d={STAR_D} fill={n <= modal.stars ? '#FFB800' : '#E4E7EC'} />
                 </svg>
@@ -226,8 +238,9 @@ export function EntryModal({
           <span className="off-note">{wit.offNote}</span>
         )}
 
-        <div className="sheet-label">기록</div>
+        <label className="sheet-label" htmlFor={bodyId}>기록</label>
         <textarea
+          id={bodyId}
           ref={bodyRef}
           className="modal-diary"
           value={modal.body}
@@ -247,6 +260,7 @@ export function EntryModal({
           <button
             className="todo-toggle"
             aria-expanded={todoOpen}
+            aria-label={todoOpen ? '할 일 목록 접기' : modal.todos.length ? `할 일 목록 펼치기 (${modal.todos.length})` : '할 일 목록 추가'}
             onClick={() => {
               if (!todoOpen && !modal.todos.length) patch({ todos: [{ t: '', done: false }] });
               setTodoOpen(!todoOpen);

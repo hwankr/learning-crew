@@ -213,14 +213,16 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
   }, [draftKey]);
 
   const openNew = () => {
+    // 자정을 지난 직후에도 마지막 분 단위 렌더의 날짜를 쓰지 않도록, 여는 순간 다시 읽는다
+    const openDay = dayKey(new Date());
     editBase.current = null;
     const d = loadDraft(draftKey(null));
     if (d && draftHasContent(d)) {
       // 마무리하지 못한 초안이 있으면 이어서 쓴다
-      setModal(modalFromDraft(d, null, todayKey));
+      setModal(modalFromDraft(d, null, openDay));
       return;
     }
-    setModal({ ...EMPTY_MODAL, open: true, day: todayKey });
+    setModal({ ...EMPTY_MODAL, open: true, day: openDay });
   };
 
   const submit = () => {
@@ -262,7 +264,7 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
     setModal(EMPTY_MODAL);
     /* 시트가 닫히면 방금 저장한 기록이 화면 어디에 놓였는지 바로 안 보인다 — 지난 날짜로
        남기면 오늘 묶음에 없고, 캘린더 탭이면 선택일이 그 날이 아닐 수도 있다 */
-    showToast(isEdit ? wit.edited : common.day === todayKey ? wit.savedToday : wit.savedPast);
+    showToast(isEdit ? wit.edited : common.day === dayKey(stamp) ? wit.savedToday : wit.savedPast);
   };
 
   const actions = {
