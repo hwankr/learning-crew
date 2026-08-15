@@ -1480,7 +1480,8 @@ export class CrewStore implements PhotoUploadStorage {
 
   /* ---------- 동기화 경로 (SyncClient 전용) ---------- */
   /** pull 결과 반영 — 행 저장과 커서 전진을 한 IndexedDB 트랜잭션으로 묶는다.
-      (따로 쓰면 "행은 저장됐는데 커서만 전진" 같은 반쪽 상태가 생길 수 있다) */
+      (따로 쓰면 "행은 저장됐는데 커서만 전진" 같은 반쪽 상태가 생길 수 있다)
+      반환값은 안전 지평선의 중복 행이 아니라 실제로 새 Entry 메타를 채택했는지다. */
   applyPull(p: {
     rows: Entry[];
     cursor: PullCursor | null;
@@ -1492,9 +1493,10 @@ export class CrewStore implements PhotoUploadStorage {
     reactionCursor?: ReactionCursor | null;
     notifications?: Notification[];
     notificationCursor?: PullCursor | null;
-  }): void {
+  }): boolean {
     const { rows, statuses, cursor } = p;
     let changed = false;
+    let entryMetadataChanged = false;
     const puts: Entry[] = [];
     const dels: string[] = [];
     for (const raw of rows) {
@@ -1506,7 +1508,10 @@ export class CrewStore implements PhotoUploadStorage {
       // 커서 안전 윈도우의 중복 전달 — 조용히 무시. updatedAt까지 봐야 비정상적으로
       // 로컬만 바뀐(v 동일) 행이 서버 내용으로 복구될 수 있다
       if (cur && cur.v === row.v && cur.updatedAt === row.updatedAt) continue;
-      if (this.adoptEntry(row)) changed = true;
+      if (this.adoptEntry(row)) {
+        changed = true;
+        entryMetadataChanged = true;
+      }
       if (row.deletedAt) {
         dels.push(row.id);
       } else {
@@ -1610,7 +1615,7 @@ export class CrewStore implements PhotoUploadStorage {
       !notifCursorChanged
     ) {
       if (changed) this.bump();
-      return;
+      return entryMetadataChanged;
     }
     if (cursorChanged) this.lastCursor = cursor;
     if (commentCursorChanged) this.lastCommentCursor = cc;
@@ -1696,6 +1701,7 @@ export class CrewStore implements PhotoUploadStorage {
       notify,
     );
     if (changed) this.bump();
+    return entryMetadataChanged;
   }
 
   /* ---------- 댓글·리액션 push 경로 ---------- */

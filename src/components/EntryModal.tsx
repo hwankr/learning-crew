@@ -339,7 +339,8 @@ export function EntryModal({
         <div className="photo-grid">
           {modal.photos.map((p, i) => (
             <span className="photo-tile" key={p.id}>
-              <PhotoImg photoId={p.id} kind="thumb" alt={`첨부한 사진 ${i + 1}`} icon={20} />
+              <PhotoImg photoId={p.id} kind="thumb" alt={`첨부한 사진 ${i + 1}`} icon={20}
+                immediate />
               <button className="photo-drop" aria-label="이 사진 빼기" onClick={() => onRemovePhoto(p.id)}>
                 <Icon d={X_D} size={10} sw={3} />
               </button>

@@ -16,6 +16,7 @@ import type {
 } from '../../shared/types';
 import { PUSH_LIMITS } from '../../shared/types';
 import { authHeaders } from '../lib/push';
+import { rearmMissingPhotosAfterPull } from '../lib/usePhoto';
 import { reactionKey } from './idb';
 import type { CrewStore } from './store';
 
@@ -240,6 +241,7 @@ export class SyncClient {
     let cCursor = start.comments;
     let rCursor = start.reactions;
     let nCursor = start.notifications;
+    let adoptedEntryMetadata = false;
     // 500행 한도에 걸렸을 수 있으니 네 스트림이 다 비워질 때까지 반복
     for (;;) {
       const qs = new URLSearchParams();
@@ -286,7 +288,7 @@ export class SyncClient {
       // 중간 페이지(=500행)인 스트림은 이전 커서를 영속화한다 — 페이지 사이에서 탭이 죽으면
       // 다시 받으면 그만이지만(중복은 updatedAt으로 무시), 전진한 커서가 지평선 너머로
       // 영속화된 채 방치되면 늦게 커밋된 행을 영영 놓칠 수 있다.
-      this.store.applyPull({
+      const pageAdoptedEntryMetadata = this.store.applyPull({
         rows: data.rows,
         cursor: eFull ? cursor : data.cursor,
         statuses: Array.isArray(data.statuses) ? data.statuses : undefined,
@@ -297,11 +299,15 @@ export class SyncClient {
         notifications: nRows,
         notificationCursor: nRows && (nFull ? nCursor : (data.notificationCursor ?? null)),
       });
+      adoptedEntryMetadata ||= pageAdoptedEntryMetadata;
       if (data.cursor) cursor = data.cursor;
       if (data.commentCursor) cCursor = data.commentCursor;
       if (data.reactionCursor) rCursor = data.reactionCursor;
       if (data.notificationCursor) nCursor = data.notificationCursor;
       if (!eFull && !cFull && !rFull && !nFull) break;
     }
+    // 서버 안전 지평선이 같은 행을 되돌려도 store가 실제 새 메타를 채택하지 않았으면
+    // 같은 404 예산을 다시 열지 않는다.
+    if (adoptedEntryMetadata) rearmMissingPhotosAfterPull();
   }
 }

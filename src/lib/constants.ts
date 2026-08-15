@@ -169,7 +169,7 @@ export const COPY: CopySet = {
   edited: '기록을 수정했어요', deleted: '기록을 삭제했어요',
   photoFull: `사진은 한 기록에 최대 ${ENTRY_PHOTO_LIMIT}장까지예요`,
   photoRoom: (n) => `남은 자리는 ${n}장이에요`,
-  photoUnreadable: '이 사진은 열 수 없어요',
+  photoUnreadable: '이 사진은 열 수 없어요. JPG/PNG로 변환하거나 사진 앱에서 공유해 주세요.',
   photoFailed: '사진을 넣지 못했어요',
   delAsk: '이 기록을 지울까요?', delNote: '지운 기록은 되돌릴 수 없어요.',
   footer: '오늘도 크루 중 누군가는 공부를 합니다.',
