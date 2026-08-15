@@ -1,5 +1,5 @@
 import type { Tag } from '../../shared/types';
-import { TAGMETA } from '../lib/constants';
+import { tagMeta } from '../lib/constants';
 
 const VARIANTS = {
   xs: { icon: 10, cls: 'chip chip-xs' },
@@ -9,7 +9,7 @@ const VARIANTS = {
 } as const;
 
 export function Chip({ tag, variant }: { tag: Tag; variant: keyof typeof VARIANTS }) {
-  const tm = TAGMETA[tag];
+  const tm = tagMeta(tag);
   const v = VARIANTS[variant];
   return (
     <span className={v.cls} style={{ background: tm.bg, color: tm.fg }}>

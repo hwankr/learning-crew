@@ -29,16 +29,66 @@ export const MEMBER_NAMES: Record<MemberId, string> = {
 };
 
 export const TAGS = ['자격증', '영어', '코딩테스트', '기타', 'OFF'] as const;
-export type Tag = (typeof TAGS)[number];
+export type KnownTag = (typeof TAGS)[number];
+export type Tag = string;
 
-/** 다중 태그 정규화 — 유효한 값만, 중복 없이, TAGS 순서로.
+export const TAG_LIMITS = {
+  nameLen: 12,
+  perEntry: 8,
+  perMember: 20,
+} as const;
+
+const CONTROL_CHAR_RE = /\p{Cc}/u;
+const LONE_SURROGATE_RE =
+  /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(^|[^\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+const KNOWN_TAGS = new Set<string>(TAGS);
+
+/** 사용자 태그 한 개 정화 — 화면·저장·서버가 모두 같은 문자열을 비교하도록 NFC와
+    공백을 먼저 맞춘다. 길이는 UTF-16 code unit가 아니라 사용자가 보는 코드포인트 수다.
+    짝 없는 surrogate는 PostgreSQL jsonb가 거부해 요청·동기화 배치 전체를 죽이므로 버린다. */
+export function sanitizeCustomTag(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const isWellFormed = (raw as string & { isWellFormed?: () => boolean }).isWellFormed;
+  if (isWellFormed ? !isWellFormed.call(raw) : LONE_SURROGATE_RE.test(raw)) return null;
+  const normalized = raw.trim().normalize('NFC');
+  // 내부 줄바꿈·탭을 공백으로 숨기기 전에 거부한다. 양끝 공백은 위 trim의 몫이다.
+  if (CONTROL_CHAR_RE.test(normalized)) return null;
+  const tag = normalized.replace(/\s+/gu, ' ');
+  if (!tag || [...tag].length > TAG_LIMITS.nameLen) return null;
+  return tag;
+}
+
+/** locale에 기대지 않는 고정 문자열 순서 — Worker와 브라우저가 반드시 같아야 한다. */
+function compareTagCodePoints(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/** 다중 태그 정규화 — 기본 태그는 TAGS 순서, 커스텀 태그는 코드포인트 순서로.
     순서를 고정하는 이유는 normalizeEmojis와 같다: 순서가 흔들리면 내용이 같은데도
     서로를 "변경"으로 보고 무의미한 동기화가 돈다.
     'OFF'(쉬는 날)는 배타적이라 함께 오면 ['OFF']만 남는다. 유효한 값이 없으면 빈 배열. */
 export function normalizeTags(list: unknown): Tag[] {
   if (!Array.isArray(list)) return [];
-  const picked = TAGS.filter((t) => list.includes(t));
-  return picked.includes('OFF') ? ['OFF'] : picked;
+  const seen = new Set<string>();
+  for (const raw of list) {
+    const tag = sanitizeCustomTag(raw);
+    if (tag !== null) seen.add(tag);
+  }
+  if (seen.has('OFF')) return ['OFF'];
+  const known = TAGS.filter((tag) => seen.has(tag));
+  const custom = [...seen].filter((tag) => !KNOWN_TAGS.has(tag)).sort(compareTagCodePoints);
+  return [...known, ...custom].slice(0, TAG_LIMITS.perEntry);
+}
+
+/** 멤버별 피커에 보여 줄 커스텀 태그 목록 — 기본 태그는 별도로 항상 노출하므로 뺀다. */
+export function normalizeCustomTagList(list: unknown): string[] {
+  if (!Array.isArray(list)) return [];
+  const custom = new Set<string>();
+  for (const raw of list) {
+    const tag = sanitizeCustomTag(raw);
+    if (tag !== null && !KNOWN_TAGS.has(tag)) custom.add(tag);
+  }
+  return [...custom].sort(compareTagCodePoints).slice(0, TAG_LIMITS.perMember);
 }
 
 /** 대표 태그 — tags[0]. 빈 배열이면 '기타'. DB/구버전 클라이언트가 읽는 tag 컬럼의 값. */
@@ -111,7 +161,7 @@ export interface Entry {
       (DB의 tag 컬럼은 text NOT NULL이고, 서비스워커 캐시에 남은 구버전 번들·구버전 Worker가
        여전히 이 필드만 읽고 쓴다. 직접 대입하지 말고 경계마다 primaryTag로 다시 계산할 것) */
   tag: Tag;
-  /** 다중 선택된 공부 종류 — 최소 1개, TAGS 순서, 'OFF'면 단독. */
+  /** 다중 선택된 공부 종류 — 최소 1개, 공용 결정 순서, 최대 8개, 'OFF'면 단독. */
   tags: Tag[];
   stars: number | null; // OFF(tags === ['OFF'])는 null
   memo: string;
@@ -346,6 +396,32 @@ export const DEFAULT_NOTIF_PREFS: Omit<NotifPrefs, 'm' | 'updatedAt'> = {
 export interface NotifPrefsResponse {
   ok: true;
   prefs: NotifPrefs;
+}
+
+/* ---------- 개인 커스텀 태그 설정 ---------- */
+
+/** 멤버당 1행. 목록에서 지워도 과거 기록의 태그는 건드리지 않는다. */
+export interface TagPrefs {
+  m: MemberId;
+  tags: string[];
+  updatedAt: string; // 액션 시각 — 도착 순서가 아니라 이 시각으로 LWW 판정한다
+}
+
+/** PUT /api/tags/prefs 요청. */
+export interface TagPrefsPutRequest {
+  tags: string[];
+  at: string;
+}
+
+/** GET /api/tags/prefs 응답. */
+export interface TagPrefsResponse {
+  ok: true;
+  prefs: TagPrefs;
+}
+
+/** PUT /api/tags/prefs 응답. */
+export interface TagPrefsPutResponse extends TagPrefsResponse {
+  applied: boolean;
 }
 
 /* ---------- 웹 푸시 구독 ---------- */

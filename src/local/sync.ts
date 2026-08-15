@@ -13,6 +13,9 @@ import type {
   ReactionSet,
   StatusSetRequest,
   StatusSetResponse,
+  TagPrefsPutRequest,
+  TagPrefsPutResponse,
+  TagPrefsResponse,
 } from '../../shared/types';
 import { PUSH_LIMITS } from '../../shared/types';
 import { authHeaders } from '../lib/push';
@@ -99,6 +102,7 @@ export class SyncClient {
     try {
       await this.push();
       await this.pushStatus();
+      await this.syncTagPrefs();
       await this.pull();
       this.store.setSyncPhase('ok');
       // 충돌 병합/전송 중 재수정으로 큐가 남았으면 곧바로 다음 라운드를 예약한다.
@@ -233,6 +237,45 @@ export class SyncClient {
     ensureOk(res, 'status');
     const data = (await res.json()) as StatusSetResponse;
     this.store.ackStatus(st.updatedAt, data.status);
+  }
+
+  /** 태그 설정은 별도 범용 큐 대신 캐시 + dirty 플래그 하나만 쓴다.
+      dirty면 PUT 응답이 LWW 병합까지 대신하고, clean이면 GET으로 다른 기기의
+      더 새 액션을 받는다. 실패하면 dirty가 그대로여서 online·가시화·다음 poll이 재시도한다. */
+  private async syncTagPrefs(): Promise<void> {
+    const pending = this.store.myTagPrefsPending();
+    if (pending) {
+      const res = await fetch('/api/tags/prefs', {
+        method: 'PUT',
+        headers: authHeaders(this.token),
+        body: JSON.stringify({
+          tags: pending.tags,
+          at: pending.updatedAt,
+        } satisfies TagPrefsPutRequest),
+        signal: timeoutSignal(),
+      });
+      ensureOk(res, 'tag prefs put');
+      const data = (await res.json()) as TagPrefsPutResponse;
+      if (
+        !data ||
+        data.ok !== true ||
+        typeof data.applied !== 'boolean' ||
+        !this.store.ackTagPrefs(pending.updatedAt, data.prefs, data.applied)
+      ) {
+        throw new Error('tag prefs put malformed response');
+      }
+      return;
+    }
+
+    const res = await fetch('/api/tags/prefs', {
+      headers: authHeaders(this.token),
+      signal: timeoutSignal(),
+    });
+    ensureOk(res, 'tag prefs get');
+    const data = (await res.json()) as TagPrefsResponse;
+    if (!data || data.ok !== true || !this.store.mergeTagPrefsFromGet(data.prefs)) {
+      throw new Error('tag prefs get malformed response');
+    }
   }
 
   private async pull(): Promise<void> {

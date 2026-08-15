@@ -146,7 +146,10 @@ function ctxFor(
 ): string {
   if (!info) return '';
   const who = info.owner === recipient ? '내 기록' : `${MEMBER_NAMES[info.owner]}의 기록`;
-  return info.tags.length ? `${who} · ${info.tags.join('·')}` : who;
+  if (info.tags.length === 0) return who;
+  const shown = info.tags.slice(0, 3).join('·');
+  const rest = info.tags.length - 3;
+  return `${who} · ${shown}${rest > 0 ? ` 외 ${rest}` : ''}`;
 }
 
 function commentPush(row: Notification, actor: MemberId): PushBody {

@@ -12,6 +12,19 @@ const mocks = vi.hoisted(() => ({
     owner: string;
     cleanupGeneration: number;
   } | null),
+  getTagPrefs: vi.fn(async (_db: unknown, m: string) => ({
+    m,
+    tags: [] as string[],
+    updatedAt: '1970-01-01T00:00:00.000Z',
+  })),
+  putTagPrefs: vi.fn(async (
+    _db: unknown,
+    m: string,
+    p: { tags: string[]; at: string },
+  ) => ({
+    applied: true,
+    prefs: { m, tags: p.tags, updatedAt: p.at },
+  })),
   put: vi.fn(),
 }));
 
@@ -21,9 +34,121 @@ vi.mock('./queries', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./queries')>()),
   hasPhotoTombstone: mocks.hasPhotoTombstone,
   rearmPhotoTombstone: mocks.rearmPhotoTombstone,
+  getTagPrefs: mocks.getTagPrefs,
+  putTagPrefs: mocks.putTagPrefs,
 }));
 
 import worker from './index';
+
+describe('GET/PUT /api/tags/prefs', () => {
+  const secret = 'test-secret';
+  const env = { DATABASE_URL: 'postgres://unused', AUTH_SECRET: secret };
+
+  beforeEach(() => {
+    mocks.getTagPrefs.mockReset();
+    mocks.putTagPrefs.mockReset();
+    mocks.getTagPrefs.mockImplementation(async (_db, m) => ({
+      m,
+      tags: [],
+      updatedAt: '1970-01-01T00:00:00.000Z',
+    }));
+    mocks.putTagPrefs.mockImplementation(async (_db, m, p) => ({
+      applied: true,
+      prefs: { m, tags: p.tags, updatedAt: p.at },
+    }));
+  });
+
+  it('인증된 멤버의 행이 없으면 GET 기본값을 그대로 돌려준다', async () => {
+    const token = await makeToken('sh', secret);
+    const response = await worker.fetch(
+      new Request('https://example.test/api/tags/prefs', {
+        headers: { Authorization: `Bearer ${token}` },
+      }),
+      env as never,
+      {} as ExecutionContext,
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      ok: true,
+      prefs: { m: 'sh', tags: [], updatedAt: '1970-01-01T00:00:00.000Z' },
+    });
+    expect(mocks.getTagPrefs).toHaveBeenCalledWith({}, 'sh');
+  });
+
+  it('태그를 공용 규칙으로 재검증하고 미래 액션 시각은 서버 시각으로 캡한다', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime('2026-08-15T12:00:00.000Z');
+    try {
+      const token = await makeToken('wg', secret);
+      const response = await worker.fetch(
+        new Request('https://example.test/api/tags/prefs', {
+          method: 'PUT',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            tags: [' 영어 ', ' 수학 ', 'e\u0301', 'é', '알고리즘', '제어\n문자'],
+            at: '2099-01-01T00:00:00.000Z',
+          }),
+        }),
+        env as never,
+        {} as ExecutionContext,
+      );
+
+      expect(response.status).toBe(200);
+      expect(mocks.putTagPrefs).toHaveBeenCalledWith({}, 'wg', {
+        tags: ['é', '수학', '알고리즘'],
+        at: '2026-08-15T12:00:00.000Z',
+      });
+      await expect(response.json()).resolves.toEqual({
+        ok: true,
+        prefs: {
+          m: 'wg',
+          tags: ['é', '수학', '알고리즘'],
+          updatedAt: '2026-08-15T12:00:00.000Z',
+        },
+        applied: true,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('배열이 아닌 tags와 파싱할 수 없는 at은 400으로 거부한다', async () => {
+    const token = await makeToken('th', secret);
+    const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+    const badTags = await worker.fetch(
+      new Request('https://example.test/api/tags/prefs', {
+        method: 'PUT', headers, body: JSON.stringify({ tags: '수학', at: new Date().toISOString() }),
+      }),
+      env as never,
+      {} as ExecutionContext,
+    );
+    const badAt = await worker.fetch(
+      new Request('https://example.test/api/tags/prefs', {
+        method: 'PUT', headers, body: JSON.stringify({ tags: [], at: 'not-a-date' }),
+      }),
+      env as never,
+      {} as ExecutionContext,
+    );
+
+    expect(badTags.status).toBe(400);
+    expect(badAt.status).toBe(400);
+    expect(mocks.putTagPrefs).not.toHaveBeenCalled();
+  });
+
+  it('인증 없이는 조회할 수 없다', async () => {
+    const response = await worker.fetch(
+      new Request('https://example.test/api/tags/prefs'),
+      env as never,
+      {} as ExecutionContext,
+    );
+    expect(response.status).toBe(401);
+    expect(mocks.getTagPrefs).not.toHaveBeenCalled();
+  });
+});
 
 describe('PUT /api/photos/:photoId', () => {
   beforeEach(() => {

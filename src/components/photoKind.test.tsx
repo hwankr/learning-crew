@@ -84,6 +84,7 @@ describe('작은 자리는 장수와 무관하게 썸네일', () => {
         modal={{ ...EMPTY_MODAL, open: true, entryId: 'e1', day: '2026-08-14', photos: photos(2) }}
         patch={vi.fn()} close={vi.fn()} submit={vi.fn()} wit={COPY}
         demo={false} preparing={false} saving={false} durableStorage="ready"
+        customTags={[]} onAddCustomTag={() => null} onRemoveCustomTag={() => undefined}
         fallbackRef={{ current: null }} onAddFiles={vi.fn()} onRemovePhoto={vi.fn()} />,
     );
     expect(photo.kinds.length).toBeGreaterThan(0);

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { Entry, PullResponse } from '../../shared/types';
+import type { Entry, PullResponse, TagPrefsPutResponse, TagPrefsResponse } from '../../shared/types';
 import * as photoRequests from '../lib/usePhoto';
 import { CrewStore } from './store';
 import { SyncClient } from './sync';
@@ -27,6 +27,10 @@ function entry(v: number): Entry {
 
 async function pull(client: SyncClient): Promise<void> {
   await (client as unknown as { pull(): Promise<void> }).pull();
+}
+
+async function syncTagPrefs(client: SyncClient): Promise<void> {
+  await (client as unknown as { syncTagPrefs(): Promise<void> }).syncTagPrefs();
 }
 
 afterEach(() => {
@@ -60,5 +64,64 @@ describe('SyncClient photo pull rearm', () => {
     row = entry(2);
     await pull(client);
     expect(rearm).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('SyncClient 태그 prefs 재시도', () => {
+  it('추가 PUT 실패는 dirty를 보류하고 다음 기회에 재전송하며 삭제도 빈 목록으로 전송한다', async () => {
+    const store = new CrewStore();
+    const client = new SyncClient(store, 'token', 'sh');
+    store.setCustomTags(['수학']);
+    const first = store.myTagPrefsPending()!;
+
+    const fetchMock = vi.fn();
+    fetchMock.mockRejectedValueOnce(new TypeError('offline'));
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(syncTagPrefs(client)).rejects.toThrow('offline');
+    expect(store.myTagPrefsPending()?.updatedAt).toBe(first.updatedAt);
+    expect(store.getSnapshot().customTags).toEqual(['수학']);
+
+    fetchMock.mockImplementationOnce(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { tags: string[]; at: string };
+      return new Response(JSON.stringify({
+        ok: true,
+        applied: true,
+        prefs: { m: 'sh', tags: body.tags, updatedAt: body.at },
+      } satisfies TagPrefsPutResponse), { status: 200 });
+    });
+    await syncTagPrefs(client);
+    expect(store.myTagPrefsPending()).toBeNull();
+
+    store.setCustomTags([]);
+    const removed = store.myTagPrefsPending()!;
+    fetchMock.mockImplementationOnce(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { tags: string[]; at: string };
+      expect(body).toEqual({ tags: [], at: removed.updatedAt });
+      return new Response(JSON.stringify({
+        ok: true,
+        applied: true,
+        prefs: { m: 'sh', tags: [], updatedAt: body.at },
+      } satisfies TagPrefsPutResponse), { status: 200 });
+    });
+    await syncTagPrefs(client);
+    expect(store.getSnapshot().customTags).toEqual([]);
+    expect(store.myTagPrefsPending()).toBeNull();
+  });
+
+  it('dirty가 없으면 GET으로 서버의 더 새 prefs를 캐시에 반영한다', async () => {
+    const store = new CrewStore();
+    const client = new SyncClient(store, 'token', 'sh');
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      ok: true,
+      prefs: { m: 'sh', tags: ['알고리즘', ' 수학 '], updatedAt: '2026-08-15T03:00:00.000Z' },
+    } satisfies TagPrefsResponse), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await syncTagPrefs(client);
+    expect(fetchMock).toHaveBeenCalledWith('/api/tags/prefs', expect.objectContaining({
+      headers: expect.objectContaining({ authorization: 'Bearer token' }),
+    }));
+    expect(store.getSnapshot().customTags).toEqual(['수학', '알고리즘']);
+    expect(store.myTagPrefsPending()).toBeNull();
   });
 });

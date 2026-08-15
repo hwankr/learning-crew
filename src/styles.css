@@ -480,9 +480,10 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 /* 진짜 선택기는 OS가 연다 — 화면에서는 지우되 click()은 받아야 하고, 탭 순서·낭독기에는
    "사진 추가" 버튼 하나만 남아야 한다 */
 .photo-file { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
-.photo-hint { font-size: 11.5px; color: #9AA1AD; margin-top: 8px; line-height: 1.5; }
+/* 시트 안 인라인 안내는 한 목소리로 — 사진 칸과 태그 칸이 같은 잔글씨를 쓴다 */
+.photo-hint, .tag-hint { font-size: 11.5px; color: #9AA1AD; margin-top: 8px; line-height: 1.5; }
 .photo-hint.full { color: #B37F00; }
-.photo-hint.warn { color: #D3352A; }
+.photo-hint.warn, .tag-hint.warn { color: #D3352A; }
 
 /* 피드 카드의 모자이크 — 열·행·높이는 장수에 따라 인라인으로 온다(lib/photos.ts) */
 .photo-mosaic { display: grid; gap: 4px; margin-top: 11px; border-radius: 12px; overflow: hidden; }
@@ -813,6 +814,40 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
   transition: background 120ms, color 120ms, border-color 120ms;
 }
 .tag-chip:active { transform: scale(0.97); }
+/* 내 태그 만들기 — 고르는 칩이 아니라는 걸 점선 테두리로 먼저 말한다 */
+.tag-chip-add { gap: 5px; padding: 0 13px; border-style: dashed; }
+.tag-chip-add:hover { background: #F8F9FB; color: #16181D; }
+/* 접어 둔 태그 수 — 피드의 .chip-more와 같은 뜻, 같은 무채색(없는 태그의 색을 주장하지 않는다) */
+.tag-chip-more { background: #F1F3F6; border-color: transparent; color: #9AA1AD; }
+.tag-chip-more:hover { color: #4E555F; }
+/* 편집 중에는 칩이 버튼이 아니다(span) — 눌러도 선택이 바뀌지 않는다는 걸 커서·투명도로 알린다 */
+.tag-chips.editing .tag-chip { cursor: default; }
+/* 편집 중이라 못 지우는 칩, 자리가 차서 못 켜는 칩 — 둘 다 "지금은 눌러도 안 바뀐다" */
+.tag-chip.locked, .tag-chip.limit { opacity: 0.5; }
+.tag-chip.limit { cursor: default; }
+.tag-chip-add.limit:hover { background: #FFFFFF; color: #6B7280; }
+.tag-chip.removable { gap: 5px; padding: 0 7px 0 13px; }
+.tag-chip-x {
+  display: flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; flex: none; padding: 0; border: none; border-radius: 50%;
+  background: rgba(22, 24, 29, 0.07); color: #6B7280; cursor: pointer;
+  transition: background 120ms, color 120ms;
+}
+.tag-chip-x:hover { background: #FEECEB; color: #D3352A; }
+/* 태그 이름 입력 — 칩 줄 바로 아래에 인라인으로 편다(모달 위에 모달을 얹지 않는다) */
+.tag-add { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
+.tag-add-input {
+  flex: 1; min-width: 0; height: 36px; padding: 0 14px;
+  border: 1.5px solid #E4E7EC; border-radius: 999px; background: #FFFFFF;
+  font-size: 13px; color: #23262E; outline: none; caret-color: #FFB800;
+  transition: border-color 120ms;
+}
+.tag-add-input:focus { border-color: #FFB800; }
+.tag-add-go {
+  flex: none; height: 36px; padding: 0 16px; border: none; border-radius: 999px;
+  background: #16181D; color: #FFFFFF; font-size: 12.5px; font-weight: 800; cursor: pointer;
+}
+.tag-add-go:active { transform: scale(0.97); }
 
 .star-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
 .star-btn {

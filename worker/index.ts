@@ -14,6 +14,8 @@ import {
   markNotificationsRead,
   getNotifPrefs,
   putNotifPrefs,
+  getTagPrefs,
+  putTagPrefs,
   setStatus,
   allStatuses,
   getStatusRow,
@@ -33,6 +35,7 @@ import {
   UUID_RE,
   canonicalUuid,
   isFreshSince,
+  normalizeCustomTagList,
   normalizeEmojis,
   type Comment,
   type Entry,
@@ -51,6 +54,9 @@ import {
   type PushUnsubscribeRequest,
   type StatusSetRequest,
   type StatusSetResponse,
+  type TagPrefsPutRequest,
+  type TagPrefsPutResponse,
+  type TagPrefsResponse,
   type VapidKeyResponse,
 } from '../shared/types';
 import { invalidReason, normalizePushedEntry } from './validation';
@@ -110,6 +116,7 @@ const requireMember: MiddlewareHandler<Env> = async (c, next) => {
 app.use('/api/sync/*', requireMember);
 app.use('/api/push/*', requireMember);
 app.use('/api/notify/*', requireMember);
+app.use('/api/tags/*', requireMember);
 app.use('/api/photos/*', requireMember);
 
 /* ---------- 사진 R2 업로드·서빙 ---------- */
@@ -559,6 +566,36 @@ app.put('/api/notify/prefs', async (c) => {
     quietTo: body.quietTo,
   });
   return c.json({ ok: true, prefs } satisfies NotifPrefsResponse);
+});
+
+/* ---------- 개인 커스텀 태그 설정 ---------- */
+
+app.get('/api/tags/prefs', async (c) => {
+  const prefs = await getTagPrefs(drizzle(neon(c.env.DATABASE_URL)), c.get('memberId'));
+  return c.json({ ok: true, prefs } satisfies TagPrefsResponse);
+});
+
+app.put('/api/tags/prefs', async (c) => {
+  let body: TagPrefsPutRequest;
+  try {
+    body = await c.req.json<TagPrefsPutRequest>();
+  } catch {
+    return c.json({ error: 'invalid json' }, 400);
+  }
+  if (!body || !Array.isArray(body.tags)) return c.json({ error: 'bad tags' }, 400);
+  if (typeof body.at !== 'string' || !Number.isFinite(Date.parse(body.at))) {
+    return c.json({ error: 'bad at' }, 400);
+  }
+  const result = await putTagPrefs(
+    drizzle(neon(c.env.DATABASE_URL)),
+    c.get('memberId'),
+    {
+      // HTTP와 쿼리 두 경계가 같은 함수를 써서 손상된 값·기본 태그를 저장하지 않는다.
+      tags: normalizeCustomTagList(body.tags),
+      at: normalizeAt(body.at, Date.now()),
+    },
+  );
+  return c.json({ ok: true, ...result } satisfies TagPrefsPutResponse);
 });
 
 /* ---------- 웹 푸시 구독 관리 ---------- */

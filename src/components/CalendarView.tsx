@@ -1,7 +1,7 @@
 import type { Comment, Entry, MemberId, ReactionSet } from '../../shared/types';
 import { entryTags, primaryTag } from '../../shared/types';
 import {
-  MEMBERS, TAGMETA, W, dayKey, memberOf, membersOfEntries, pad2, type CopySet,
+  MEMBERS, W, dayKey, memberOf, membersOfEntries, pad2, tagMeta, type CopySet,
 } from '../lib/constants';
 import { calOffOf, sameDayInMonth } from '../lib/uiState';
 import type { PhotoUploadInfo } from '../local/store';
@@ -81,7 +81,7 @@ export function CalendarView({
             // 알약은 한 줄이라 색도 라벨도 대표 태그 하나로 끊는다 —
             // 태그를 다 이어 붙이면 142px 셀에서 이름이 먼저 말줄임으로 잘린다
             const tag = primaryTag(entryTags(e));
-            const tm = TAGMETA[tag];
+            const tm = tagMeta(tag);
             return (
               <span key={e.id} className="cal-pill" style={{ background: tm.bg }}>
                 <span className="cal-pill-dot" style={{ background: mm.color }} />

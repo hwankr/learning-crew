@@ -71,6 +71,13 @@
       "when": 1786757416309,
       "tag": "0009_faulty_alice",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1786784549106,
+      "tag": "0010_fresh_titania",
+      "breakpoints": true
     }
   ]
 }

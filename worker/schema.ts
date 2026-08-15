@@ -160,6 +160,14 @@ export const notifPrefs = pgTable('notif_prefs', {
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 });
 
+/** 개인 커스텀 태그 목록 — 멤버당 1행. updated_at은 저장 도착 시각이 아니라
+    클라이언트 액션 시각이며, 오프라인 변경의 LWW 기준으로 쓴다. */
+export const tagPrefs = pgTable('tag_prefs', {
+  memberId: text('member_id').primaryKey(),
+  tags: jsonb('tags').notNull().default([]),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull(),
+});
+
 /** 웹 푸시 구독 — 기기(브라우저)당 1행. endpoint가 곧 기기 식별자다. */
 export const pushSubs = pgTable('push_subs', {
   endpoint: text('endpoint').primaryKey(),

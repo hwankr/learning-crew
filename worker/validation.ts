@@ -1,8 +1,10 @@
 import {
   PUSH_LIMITS,
-  TAGS,
+  TAG_LIMITS,
   UUID_RE,
   normalizePhotos,
+  normalizeTags,
+  sanitizeCustomTag,
   type Entry,
   type MemberId,
 } from '../shared/types';
@@ -19,11 +21,13 @@ function isRealDay(day: string): boolean {
   return dt.getUTCFullYear() === y && dt.getUTCMonth() === m! - 1 && dt.getUTCDate() === d;
 }
 
-/** push 경계의 사진 메타를 공용 정규화로 한 번만 맞춘다.
+/** push 경계의 태그·사진 메타를 공용 정규화로 한 번만 맞춘다.
+    태그는 기본/커스텀의 결정적 순서와 한도를 여기서 확정한다.
     photos가 아예 없는 구버전 행은 필드 누락 자체가 의미이므로 그대로 둔다 —
     쿼리 계층이 기존 서버 photos를 보존하는 근거가 이 undefined이다. */
 export function normalizePushedEntry(e: Entry): Entry {
-  return e.photos === undefined ? e : { ...e, photos: normalizePhotos(e.photos) };
+  const row = e.tags === undefined ? e : { ...e, tags: normalizeTags(e.tags) };
+  return row.photos === undefined ? row : { ...row, photos: normalizePhotos(row.photos) };
 }
 
 /** 본인 행 + 형식이 유효할 때만 통과. 실패 사유 문자열, 성공이면 null. */
@@ -39,13 +43,13 @@ export function invalidReason(e: Entry, me: MemberId): string | null {
     if (
       !Array.isArray(e.tags) ||
       e.tags.length === 0 ||
-      e.tags.length > TAGS.length ||
+      e.tags.length > TAG_LIMITS.perEntry ||
       new Set(e.tags).size !== e.tags.length ||
-      !e.tags.every((t) => (TAGS as readonly string[]).includes(t))
+      !e.tags.every((t) => sanitizeCustomTag(t) !== null)
     ) {
       return 'bad tags';
     }
-  } else if (!(TAGS as readonly string[]).includes(e.tag)) {
+  } else if (sanitizeCustomTag(e.tag) === null) {
     return 'bad tag';
   }
   // 배열 내 값은 normalizePhotos가 잘라내고 보정한다. 여기서는 비배열만

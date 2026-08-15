@@ -25,6 +25,7 @@ import type {
   ReactionCursor,
   ReactionEmoji,
   ReactionSet,
+  TagPrefs,
 } from '../../shared/types';
 import {
   MEMBER_IDS,
@@ -32,6 +33,7 @@ import {
   canonicalUuid,
   entryTags,
   isOffTags,
+  normalizeCustomTagList,
   normalizeEmojis,
   normalizePhotos,
   primaryTag,
@@ -87,7 +89,7 @@ const MIGRATED_FLAG = 'migrated-legacy-v2';
 export type SyncPhase = 'ok' | 'offline' | 'error' | 'auth';
 export interface SyncInfo {
   phase: SyncPhase;
-  /** 아직 서버에 안 간 변경 수 (기록 큐 + 지금 상태 dirty + 댓글 큐 + 리액션 dirty) */
+  /** 아직 서버에 안 간 변경 수 (기록·상태·태그 + 댓글·리액션·알림) */
   pending: number;
 }
 
@@ -95,6 +97,8 @@ export interface StoreSnapshot {
   rev: number;
   entries: Entry[]; // deletedAt이 없는 살아있는 행만
   statuses: Partial<Record<MemberId, MemberStatus>>; // 멤버별 지금 상태
+  /** 내 기록 시트에만 보여 줄 커스텀 태그 선택지. */
+  customTags: string[];
   /** entryId → 살아있는 댓글, (createdAt, id) 오름차순 */
   comments: Map<string, Comment[]>;
   /** entryId → 이모지가 하나 이상인 멤버별 리액션 집합 */
@@ -141,6 +145,9 @@ export class PhotoStorageUnavailableError extends Error {
 // meta 스토어의 지금 상태 저장 키
 const MY_STATUS_KEY = 'myStatus';
 const STATUS_DIRTY_KEY = 'statusDirty';
+/** 지금 상태와 달리 태그 캐시는 멤버를 바꿔 로그인해도 각자 남아야 한다. */
+const tagPrefsKey = (m: MemberId): string => `tagPrefs:${m}`;
+const tagPrefsDirtyKey = (m: MemberId): string => `tagPrefsDirty:${m}`;
 // meta 스토어의 스트림별 pull 커서 키 (기록 커서는 기존 이름 'cursor')
 const ENTRY_CURSOR_KEY = 'cursor';
 const COMMENT_CURSOR_KEY = 'commentCursor';
@@ -496,11 +503,36 @@ function asMemberStatus(v: unknown): MemberStatus | null {
   return v !== null && typeof v === 'object' && 'on' in v ? (v as MemberStatus) : null;
 }
 
+/** IDB·HTTP 경계의 태그 설정 복원. 목록은 공용 정규화를 다시 거치고,
+    시각은 사전순 비교가 안전한 ISO 문자열로 고정한다. */
+export function normalizeTagPrefs(raw: unknown, me: MemberId): TagPrefs | null {
+  if (raw === null || typeof raw !== 'object') return null;
+  const value = raw as Partial<TagPrefs>;
+  if (value.m !== me || !Array.isArray(value.tags) || typeof value.updatedAt !== 'string') {
+    return null;
+  }
+  const millis = Date.parse(value.updatedAt);
+  if (!Number.isFinite(millis)) return null;
+  return {
+    m: me,
+    tags: normalizeCustomTagList(value.tags),
+    updatedAt: new Date(millis).toISOString(),
+  };
+}
+
+const emptyTagPrefs = (m: MemberId): TagPrefs => ({
+  m,
+  tags: [],
+  updatedAt: new Date(0).toISOString(),
+});
+
 export class CrewStore implements PhotoUploadStorage {
   private map = new Map<string, Entry>();
   private queue = new Map<string, QueueMeta>();
   private statuses = new Map<MemberId, MemberStatus>();
   private statusDirty = false; // 내 상태가 아직 서버에 안 갔음
+  private tagPrefs: TagPrefs = emptyTagPrefs('sh');
+  private tagPrefsDirty = false; // 내 커스텀 태그 목록이 아직 서버에 안 갔음
   // 댓글: id → 행. 아직 push 안 된 tombstone도 여기 남는다(스냅샷에서만 걸러진다)
   private comments = new Map<string, Comment>();
   private commentQueue = new Set<string>();
@@ -543,6 +575,7 @@ export class CrewStore implements PhotoUploadStorage {
     rev: 0,
     entries: [],
     statuses: {},
+    customTags: [],
     comments: new Map(),
     reactions: new Map(),
     notifications: [],
@@ -569,6 +602,8 @@ export class CrewStore implements PhotoUploadStorage {
   async init(opts: { demo: boolean; memberId: MemberId; token?: string | null }): Promise<void> {
     this.me = opts.memberId;
     this.demo = opts.demo;
+    this.tagPrefs = emptyTagPrefs(opts.memberId);
+    this.tagPrefsDirty = false;
     // IndexedDB가 막힌 환경(사생활 모드, 손상된 프로필)에서도 첫 렌더는 무조건 되어야 한다.
     // 열기가 실패하거나 2초 안에 안 끝나면 메모리 전용으로 동작한다(this.db는 계속 null).
     try {
@@ -610,6 +645,8 @@ export class CrewStore implements PhotoUploadStorage {
         photoRows,
         st,
         dirty,
+        cachedTagPrefs,
+        cachedTagPrefsDirty,
       ] =
         await Promise.all([
           tx.objectStore('entries').getAll(),
@@ -626,6 +663,8 @@ export class CrewStore implements PhotoUploadStorage {
           tx.objectStore('photoBlobs').getAll(),
           tx.objectStore('meta').get(MY_STATUS_KEY),
           tx.objectStore('meta').get(STATUS_DIRTY_KEY),
+          tx.objectStore('meta').get(tagPrefsKey(opts.memberId)),
+          tx.objectStore('meta').get(tagPrefsDirtyKey(opts.memberId)),
         ]);
       await tx.done;
       for (const e of rows) this.map.set(e.id, normalizeEntry(e));
@@ -673,6 +712,11 @@ export class CrewStore implements PhotoUploadStorage {
         this.statuses.set(mine.m, mine);
         this.statusDirty = !!dirty;
       }
+      const cachedPrefs = normalizeTagPrefs(cachedTagPrefs, opts.memberId);
+      if (!opts.demo && cachedPrefs) {
+        this.tagPrefs = cachedPrefs;
+        this.tagPrefsDirty = !!cachedTagPrefsDirty;
+      }
       } catch {
         // open은 됐어도 첫 transaction이 실패하는 손상/사생활 모드가 있다. 반쯤 읽은
         // 상태로 부팅하지 않고 handle을 닫아 명시적인 메모리-risk 경로로 강등한다.
@@ -716,6 +760,12 @@ export class CrewStore implements PhotoUploadStorage {
   getById(id: string): Entry | undefined {
     return this.map.get(id);
   }
+
+  /** 콜백이 이전 렌더의 스냅샷을 캡아도 연타를 잃지 않게 현재 목록을 직접 읽는다. */
+  getCustomTags(): string[] {
+    return [...this.tagPrefs.tags];
+  }
+
   pendingIds(): string[] {
     return [...this.queue.keys()];
   }
@@ -1369,6 +1419,23 @@ export class CrewStore implements PhotoUploadStorage {
     }
   }
 
+  /** 커스텀 태그 목록 변경 — 공용 정규화 후 캐시와 dirty 표시를 한 tx로 남긴다.
+      같은 ms의 연타도 엄격히 새 액션이 되도록 직전 시각보다 최소 1ms 앞으로 옮긴다. */
+  setCustomTags(raw: unknown): void {
+    const tags = normalizeCustomTagList(raw);
+    if (JSON.stringify(tags) === JSON.stringify(this.tagPrefs.tags)) return;
+    const previous = Date.parse(this.tagPrefs.updatedAt);
+    const at = new Date(Math.max(Date.now(), Number.isFinite(previous) ? previous + 1 : 0)).toISOString();
+    const next: TagPrefs = { m: this.me, tags, updatedAt: at };
+    this.tagPrefs = next;
+    if (!this.demo) {
+      this.tagPrefsDirty = true;
+      this.persistTagPrefs(next, true);
+      this.onLocalWrite?.();
+    }
+    this.bump();
+  }
+
   /** 지금 상태 토글 — 켜면 since가 지금으로 시작한다(장소 변경도 새로 시작). */
   setMyStatus(on: boolean, place: Place | null): void {
     const nowIso = new Date().toISOString();
@@ -1964,6 +2031,38 @@ export class CrewStore implements PhotoUploadStorage {
     this.bump();
   }
 
+  /** 서버에 아직 안 간 태그 목록. 없으면 GET으로 최신 상태만 확인하면 된다. */
+  myTagPrefsPending(): TagPrefs | null {
+    return this.tagPrefsDirty ? { ...this.tagPrefs, tags: [...this.tagPrefs.tags] } : null;
+  }
+
+  /** GET 병합 — 서버 액션 시각이 엄격히 더 새울 때만 채택한다.
+      로컬 dirty가 더 새거나 같으면 그 의도를 PUT 정산 전에 버리지 않는다. */
+  mergeTagPrefsFromGet(raw: unknown): boolean {
+    const server = normalizeTagPrefs(raw, this.me);
+    if (!server) return false;
+    if (server.updatedAt <= this.tagPrefs.updatedAt) return true;
+    this.tagPrefs = server;
+    this.tagPrefsDirty = false;
+    this.persistTagPrefs(server, false);
+    this.bump();
+    return true;
+  }
+
+  /** PUT 정산 — applied:false면 다른 기기가 이긴 서버 prefs를 채택한다.
+      단 전송 중 다시 고친 로컬 액션이 응답보다 새우면 dirty로 남겨 다시 보낸다. */
+  ackTagPrefs(sentUpdatedAt: string, raw: unknown, applied: boolean): boolean {
+    const server = normalizeTagPrefs(raw, this.me);
+    if (!server || typeof applied !== 'boolean') return false;
+    const changedWhileSending = this.tagPrefs.updatedAt !== sentUpdatedAt;
+    if (changedWhileSending && server.updatedAt <= this.tagPrefs.updatedAt) return true;
+    this.tagPrefs = server;
+    this.tagPrefsDirty = false;
+    this.persistTagPrefs(server, false);
+    this.bump();
+    return true;
+  }
+
   /** 서버에 아직 안 보낸 내 상태. 없으면 null. */
   myStatusPending(): MemberStatus | null {
     return this.statusDirty ? (this.statuses.get(this.me) ?? null) : null;
@@ -2044,6 +2143,16 @@ export class CrewStore implements PhotoUploadStorage {
     });
   }
 
+  /** 태그 캐시와 미전송 표시는 항상 한 트랜잭션으로 오간다. */
+  private persistTagPrefs(prefs: TagPrefs, dirty: boolean): void {
+    this.txWrite(['meta'], (tx) => {
+      const meta = tx.objectStore('meta');
+      void meta.put(prefs, tagPrefsKey(this.me));
+      if (dirty) void meta.put(true, tagPrefsDirtyKey(this.me));
+      else void meta.delete(tagPrefsDirtyKey(this.me));
+    });
+  }
+
   /** fire-and-forget IDB 트랜잭션 — UI는 기다리지 않고, 실패해도 트랜잭션이라 반쪽 상태는 없다.
       커밋되면 다른 탭에 알린다(BroadcastChannel) — 그쪽 메모리도 IDB를 다시 읽는다.
       notify=false는 커서 전진 같은 탭-로컬 메타 쓰기용: 다른 탭을 깨울 필요가 없다.
@@ -2117,6 +2226,8 @@ export class CrewStore implements PhotoUploadStorage {
         dbPhotoRows,
         dbSt,
         dbDirty,
+        dbTagPrefs,
+        dbTagPrefsDirty,
       ] = await Promise.all([
         tx.objectStore('entries').getAll(),
         tx.objectStore('queue').getAllKeys(),
@@ -2132,6 +2243,8 @@ export class CrewStore implements PhotoUploadStorage {
         tx.objectStore('photoBlobs').getAll(),
         tx.objectStore('meta').get(MY_STATUS_KEY),
         tx.objectStore('meta').get(STATUS_DIRTY_KEY),
+        tx.objectStore('meta').get(tagPrefsKey(this.me)),
+        tx.objectStore('meta').get(tagPrefsDirtyKey(this.me)),
       ]);
       await tx.done;
       if (this.snapshot.rev !== rev0) {
@@ -2210,6 +2323,26 @@ export class CrewStore implements PhotoUploadStorage {
           changed = true;
         } else if (dbMine.updatedAt === mem.updatedAt && this.statusDirty && !dbDirty) {
           this.statusDirty = false;
+          changed = true;
+        }
+      }
+
+      // 태그 캐시도 다른 탭의 더 새 액션을 채택하고, 같은 액션을 그 탭이
+      // PUT 정산했으면 dirty를 내린다. 반대로 새 dirty를 받았으면 이 탭이 대신 보낸다.
+      let tookTagPrefsDirty = false;
+      const cachedPrefs = normalizeTagPrefs(dbTagPrefs, this.me);
+      if (cachedPrefs) {
+        const sameAction = cachedPrefs.updatedAt === this.tagPrefs.updatedAt;
+        const sameTags = JSON.stringify(cachedPrefs.tags) === JSON.stringify(this.tagPrefs.tags);
+        const dirty = !!dbTagPrefsDirty;
+        if (
+          cachedPrefs.updatedAt > this.tagPrefs.updatedAt ||
+          (sameAction && (!sameTags || dirty !== this.tagPrefsDirty))
+        ) {
+          const wasDirty = this.tagPrefsDirty;
+          this.tagPrefs = cachedPrefs;
+          this.tagPrefsDirty = dirty;
+          tookTagPrefsDirty = dirty && (!wasDirty || !sameTags);
           changed = true;
         }
       }
@@ -2316,7 +2449,7 @@ export class CrewStore implements PhotoUploadStorage {
       }
 
       if (changed) this.bump();
-      if (tookDirty) this.onLocalWrite?.();
+      if (tookDirty || tookTagPrefsDirty) this.onLocalWrite?.();
       for (const id of adoptedPhotos) {
         const row = this.photoBlobs.get(id);
         if (
@@ -2385,6 +2518,7 @@ export class CrewStore implements PhotoUploadStorage {
       rev: this.snapshot.rev + 1,
       entries: [...this.map.values()].filter((e) => !e.deletedAt),
       statuses: Object.fromEntries(this.statuses) as Partial<Record<MemberId, MemberStatus>>,
+      customTags: [...this.tagPrefs.tags],
       comments: groupComments(this.comments.values()),
       reactions: groupReactions(this.reactions.values()),
       notifications,
@@ -2401,6 +2535,7 @@ export class CrewStore implements PhotoUploadStorage {
         pending:
           this.queue.size +
           (this.statusDirty ? 1 : 0) +
+          (this.tagPrefsDirty ? 1 : 0) +
           this.commentQueue.size +
           this.reactionDirty.size +
           this.notifReadQueue.size,

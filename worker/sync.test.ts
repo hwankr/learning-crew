@@ -13,6 +13,8 @@ import {
   allStatuses,
   getStatusRow,
   claimNotifySlot,
+  getTagPrefs,
+  putTagPrefs,
   upsertPushSub,
   deletePushSub,
   deleteGonePushSub,
@@ -81,14 +83,20 @@ describe('entry push validation', () => {
     );
   });
 
-  it('tags의 빈 배열·중복·유효하지 않은 원소를 배치 SQL 전에 거부한다', () => {
+  it('tags의 빈 배열·중복·정화할 수 없는 원소를 배치 SQL 전에 거부한다', () => {
     expect(invalidReason(entry({ id: A, m: 'sh', tags: [] }), 'sh')).toBe('bad tags');
     expect(invalidReason(entry({ id: A, m: 'sh', tags: ['영어', '영어'] }), 'sh')).toBe(
       'bad tags',
     );
     expect(
-      invalidReason(entry({ id: A, m: 'sh', tags: ['영어', '수학'] as Entry['tags'] }), 'sh'),
+      invalidReason(entry({ id: A, m: 'sh', tags: ['영어', '수학\n복습'] }), 'sh'),
     ).toBe('bad tags');
+  });
+
+  it('정화 가능한 커스텀 태그는 허용하고 공용 순서로 맞춘다', () => {
+    const raw = entry({ id: A, m: 'sh', tags: ['알고리즘', '영어', '수학'] });
+    expect(invalidReason(raw, 'sh')).toBeNull();
+    expect(normalizePushedEntry(raw).tags).toEqual(['영어', '수학', '알고리즘']);
   });
 
   it('tags가 없는 구버전 행은 tag를 검사하고, tags가 있으면 어긋난 tag를 신뢰하지 않는다', () => {
@@ -341,6 +349,7 @@ describe('다중 태그', () => {
   const M1 = 'dddddddd-dddd-4ddd-8ddd-ddddddddddd1';
   const M2 = 'dddddddd-dddd-4ddd-8ddd-ddddddddddd2';
   const M3 = 'dddddddd-dddd-4ddd-8ddd-ddddddddddd3';
+  const M4 = 'dddddddd-dddd-4ddd-8ddd-ddddddddddd4';
 
   it('여러 태그가 그대로 왕복하고 tag는 대표 태그로 저장된다', async () => {
     const out = await pushEntries(
@@ -388,6 +397,17 @@ describe('다중 태그', () => {
     expect(out.applied[0]!.tag).toBe('영어'); // 보낸 tag를 믿지 않는다
     expect(out.applied[0]!.tags).toEqual(['영어', '기타']);
     expect(out.applied[0]!.stars).not.toBeNull(); // OFF가 아니므로 별점이 살아 있다
+  });
+
+  it('커스텀 태그가 push→pull에서 내용과 결정적 순서를 그대로 유지한다', async () => {
+    const tags = ['영어', '수학', '알고리즘'];
+    const out = await pushEntries(db, [entry({ id: M4, m: 'sh', tags })], 'sh');
+    expect(out.applied[0]!.tags).toEqual(tags);
+    expect(out.applied[0]!.tag).toBe('영어');
+
+    const pulled = (await pullSince(db, null)).rows.find((row) => row.id === M4)!;
+    expect(pulled.tags).toEqual(tags);
+    expect(pulled.tag).toBe('영어');
   });
 
   it('tags가 비어 저장된 구버전 행도 읽을 때 tag에서 되살아난다 (백필 전 행)', async () => {
@@ -747,6 +767,50 @@ describe('isStatusActive (표시 규칙)', () => {
   });
   it('상태가 아예 없으면 비활성', () => {
     expect(isStatusActive(undefined, now)).toBe(false);
+  });
+});
+
+describe('개인 커스텀 태그 설정', () => {
+  const firstAt = '2026-08-15T01:00:00.000Z';
+  const nextAt = '2026-08-15T02:00:00.000Z';
+
+  it('행이 없으면 빈 목록과 epoch 시각을 기본값으로 돌려준다', async () => {
+    expect(await getTagPrefs(db, 'kj')).toEqual({
+      m: 'kj',
+      tags: [],
+      updatedAt: '1970-01-01T00:00:00.000Z',
+    });
+  });
+
+  it('저장 직전에도 정화하고 더 새 액션만 LWW로 반영한다', async () => {
+    const first = await putTagPrefs(db, 'kj', {
+      tags: [' 영어 ', '알고리즘', ' 수학 ', 'e\u0301', 'é', '제어\n문자'],
+      at: firstAt,
+    });
+    expect(first).toEqual({
+      applied: true,
+      prefs: { m: 'kj', tags: ['é', '수학', '알고리즘'], updatedAt: firstAt },
+    });
+
+    const stale = await putTagPrefs(db, 'kj', { tags: ['독서'], at: firstAt });
+    expect(stale.applied).toBe(false); // 같은 시각의 재전송도 기존 세대를 그대로 채택
+    expect(stale.prefs).toEqual(first.prefs);
+
+    const newer = await putTagPrefs(db, 'kj', { tags: [' 독서 ', '기타'], at: nextAt });
+    expect(newer).toEqual({
+      applied: true,
+      prefs: { m: 'kj', tags: ['독서'], updatedAt: nextAt },
+    });
+    expect(await getTagPrefs(db, 'kj')).toEqual(newer.prefs);
+  });
+
+  it('뒤늦게 도착한 더 오래된 변경은 거부하고 현재 목록을 돌려준다', async () => {
+    const stale = await putTagPrefs(db, 'kj', {
+      tags: ['덮어쓰면 안 됨'],
+      at: '2026-08-15T01:30:00.000Z',
+    });
+    expect(stale.applied).toBe(false);
+    expect(stale.prefs).toEqual({ m: 'kj', tags: ['독서'], updatedAt: nextAt });
   });
 });
 

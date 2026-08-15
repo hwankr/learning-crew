@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import type { Comment, Entry, Notification, ReactionSet } from '../../shared/types';
 import { primaryTag } from '../../shared/types';
 import {
+  CrewStore,
   adoptCommentFromDB,
   commentAckOutcome,
   commentAckSettles,
@@ -16,6 +17,7 @@ import {
   mergeEntry,
   mergeMyReactionFromDB,
   normalizeEntry,
+  normalizeTagPrefs,
   notifPullAction,
   reactionAckSettles,
   sortNotifications,
@@ -491,5 +493,67 @@ describe('sortNotifications (스냅샷 정렬 + 보관 기간)', () => {
     const x = N('x', '2026-08-12T08:00:00.000Z');
     const y = N('y', '2026-08-12T08:00:00.000Z');
     expect(sortNotifications([x, y], NOW).map((n) => n.id)).toEqual(['y', 'x']);
+  });
+});
+
+describe('커스텀 태그 캐시 LWW 병합', () => {
+  it('IDB·HTTP 복원 경계에서 멤버·시각을 검사하고 shared 순서로 맞춘다', () => {
+    expect(normalizeTagPrefs({
+      m: 'sh', tags: ['알고리즘', ' 영어 ', ' 수학 '], updatedAt: '2026-08-15T01:00:00Z',
+    }, 'sh')).toEqual({
+      m: 'sh', tags: ['수학', '알고리즘'], updatedAt: '2026-08-15T01:00:00.000Z',
+    });
+    expect(normalizeTagPrefs({
+      m: 'wg', tags: ['수학'], updatedAt: '2026-08-15T01:00:00.000Z',
+    }, 'sh')).toBeNull();
+  });
+
+  it('로컬 추가는 캐시·dirty에 즉시 반영되고 GET은 더 새 서버 시각만 채택한다', () => {
+    const store = new CrewStore();
+    store.setCustomTags(['알고리즘', ' 수학 ']);
+    const local = store.myTagPrefsPending()!;
+    expect(store.getSnapshot().customTags).toEqual(['수학', '알고리즘']);
+    expect(store.getSnapshot().sync.pending).toBe(1);
+
+    expect(store.mergeTagPrefsFromGet({
+      m: 'sh', tags: ['독서'], updatedAt: '1970-01-01T00:00:00.000Z',
+    })).toBe(true);
+    expect(store.getSnapshot().customTags).toEqual(['수학', '알고리즘']);
+    expect(store.myTagPrefsPending()?.updatedAt).toBe(local.updatedAt);
+
+    const newerAt = new Date(Date.parse(local.updatedAt) + 1_000).toISOString();
+    expect(store.mergeTagPrefsFromGet({ m: 'sh', tags: ['독서'], updatedAt: newerAt })).toBe(true);
+    expect(store.getSnapshot().customTags).toEqual(['독서']);
+    expect(store.myTagPrefsPending()).toBeNull();
+  });
+
+  it('PUT의 applied:false는 서버 prefs를 채택하되 전송 중 더 새 로컬 액션은 보존한다', () => {
+    const store = new CrewStore();
+    store.setCustomTags(['수학']);
+    const sent = store.myTagPrefsPending()!;
+    const winnerAt = new Date(Date.parse(sent.updatedAt) + 1_000).toISOString();
+    expect(store.ackTagPrefs(sent.updatedAt, {
+      m: 'sh', tags: ['독서'], updatedAt: winnerAt,
+    }, false)).toBe(true);
+    expect(store.getSnapshot().customTags).toEqual(['독서']);
+    expect(store.myTagPrefsPending()).toBeNull();
+
+    store.setCustomTags(['코딩']);
+    const inFlight = store.myTagPrefsPending()!;
+    store.setCustomTags(['코딩', '영어 회화']);
+    expect(store.ackTagPrefs(inFlight.updatedAt, {
+      m: 'sh', tags: ['코딩'], updatedAt: inFlight.updatedAt,
+    }, true)).toBe(true);
+    expect(store.getSnapshot().customTags).toEqual(['영어 회화', '코딩']);
+    expect(store.myTagPrefsPending()).not.toBeNull();
+  });
+
+  it('데모는 목록을 메모리에만 반영하고 미전송으로 남기지 않는다', async () => {
+    const store = new CrewStore();
+    await store.init({ demo: true, memberId: 'sh', token: null });
+    store.setCustomTags(['수학']);
+    expect(store.getSnapshot().customTags).toEqual(['수학']);
+    expect(store.myTagPrefsPending()).toBeNull();
+    expect(store.getSnapshot().sync.pending).toBe(0);
   });
 });

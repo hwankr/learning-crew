@@ -21,6 +21,7 @@ import {
 import { ImageDecodeError } from './lib/image';
 import { addDraftPhotos } from './lib/photoDraft';
 import { lightboxIndex, shownPhotos } from './lib/photos';
+import { addCustomTag, removeCustomTag } from './lib/tagPrefs';
 import { PhotoLimitError, PhotoStorageUnavailableError, contentEqual } from './local/store';
 import { BY_ID, COPY, MEMBERS, W, dayKey, pad2, shiftKey } from './lib/constants';
 import type { AppConfig } from './lib/config';
@@ -553,6 +554,18 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
 
   const pendingDel = delId ? entries.find((e) => e.id === delId) ?? null : null;
 
+  // 태그 액션은 렌더 스냅샷 대신 스토어의 현재 캐시를 기준으로 한다 —
+  // 같은 틱에 연속 호출되어도 앞선 추가·삭제를 잃지 않는다.
+  const onAddCustomTag = useCallback((name: string): string | null => {
+    const result = addCustomTag(store.getCustomTags(), name);
+    if (result.error) return result.error;
+    store.setCustomTags(result.tags);
+    return null;
+  }, [store]);
+  const onRemoveCustomTag = useCallback((name: string): void => {
+    store.setCustomTags(removeCustomTag(store.getCustomTags(), name));
+  }, [store]);
+
   const footer = (
     <div className="footer">
       {wit.footer}
@@ -682,6 +695,8 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
         <EntryModal modal={modal} patch={patch} close={closeModal} submit={submit} wit={wit}
           demo={cfg.demo} preparing={preparing > 0} saving={reviving}
           durableStorage={snap.durableStorage}
+          customTags={snap.customTags}
+          onAddCustomTag={onAddCustomTag} onRemoveCustomTag={onRemoveCustomTag}
           fallbackRef={ctaRef} onAddFiles={onAddFiles} onRemovePhoto={onRemovePhoto} />
       )}
       {lightEntry && lightPhotos.length > 0 && (

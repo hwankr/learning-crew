@@ -375,6 +375,21 @@ describe('notifyCommentEvents', () => {
     expect(calls[0]!.data.title).toContain('내 기록에 댓글');
   });
 
+  it('긴 태그 문구는 앞 3개만 적고 나머지 개수를 붙인다', async () => {
+    await pushEntries(db, [entry({
+      id: E1,
+      m: 'wg',
+      tags: ['자격증', '영어', '코딩테스트', '기타', '수학'],
+      v: 1,
+    })], 'wg');
+    const c = comment({ id: C1, entryId: E1, m: 'sh' });
+    await pushComments(db, [c], 'sh');
+    await notifyCommentEvents(db, ENV, 'sh', [c], [], Date.now());
+
+    const rows = (await pullNotifications(db, 'wg', null)).rows;
+    expect(rows[0]!.ctx).toBe('내 기록 · 자격증·영어·코딩테스트 외 2');
+  });
+
   it('cmAll이 꺼진 구경꾼은 조용하고, 켜면 all로 받는다', async () => {
     const { send } = makeSender();
     const c = comment({ id: C3, entryId: E1, m: 'sh', body: '지나가다 한마디' });

@@ -8,6 +8,7 @@ import type {
   PullCursor,
   ReactionCursor,
   ReactionSet,
+  TagPrefs,
 } from '../../shared/types';
 
 /** 큐 항목 — 값이 rev/base를 담는다.
@@ -68,7 +69,7 @@ export interface CrewDB extends DBSchema {
   photoBlobs: { key: string; value: PhotoBlobRecord };
   /** key = `${photoId}:${kind}` — 인증 fetch로 받은 다른 멤버 사진의 로컬 캐시. */
   photoCache: { key: string; value: PhotoCacheRecord };
-  meta: { key: string; value: PullCursor | ReactionCursor | boolean | MemberStatus };
+  meta: { key: string; value: PullCursor | ReactionCursor | boolean | MemberStatus | TagPrefs };
 }
 
 /** 리액션 로컬 키 — (기록, 멤버) 쌍이 곧 행이다. */

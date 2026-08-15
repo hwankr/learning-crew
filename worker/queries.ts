@@ -10,6 +10,7 @@ import {
   pushSubs,
   reactions,
   status,
+  tagPrefs,
 } from './schema';
 import {
   DEFAULT_NOTIF_PREFS,
@@ -17,6 +18,7 @@ import {
   NOTIF_MODES,
   entryTags,
   isOffTags,
+  normalizeCustomTagList,
   normalizeEmojis,
   normalizePhotos,
   primaryTag,
@@ -38,6 +40,7 @@ import type {
   ReactionEmoji,
   ReactionSet,
   Tag,
+  TagPrefs,
   Todo,
 } from '../shared/types';
 
@@ -1091,6 +1094,52 @@ export async function priorCommenters(
     map.set(r.entryId, list);
   }
   return map;
+}
+
+/* ---------- 개인 커스텀 태그 설정 ---------- */
+
+function toTagPrefs(r: typeof tagPrefs.$inferSelect): TagPrefs {
+  return {
+    m: r.memberId as MemberId,
+    // jsonb는 손상된 값도 담을 수 있으므로 GET 경계에서도 공용 규칙을 다시 적용한다.
+    tags: normalizeCustomTagList(r.tags),
+    updatedAt: isoTs(r.updatedAt),
+  };
+}
+
+function defaultTagPrefs(m: MemberId): TagPrefs {
+  return { m, tags: [], updatedAt: new Date(0).toISOString() };
+}
+
+export async function getTagPrefs(db: Db, me: MemberId): Promise<TagPrefs> {
+  const [row] = await db.select().from(tagPrefs).where(eq(tagPrefs.memberId, me)).limit(1);
+  return row ? toTagPrefs(row) : defaultTagPrefs(me);
+}
+
+/** 커스텀 태그 목록 저장 — 액션 시각이 기존 값보다 엄격히 새울 때만 반영한다.
+    목록은 HTTP 경계에서 정화했더라도 DB 경계에서 한 번 더 같은 정의를 적용한다. */
+export async function putTagPrefs(
+  db: Db,
+  me: MemberId,
+  p: { tags: unknown; at: string },
+): Promise<{ prefs: TagPrefs; applied: boolean }> {
+  const values = {
+    memberId: me,
+    tags: normalizeCustomTagList(p.tags),
+    updatedAt: p.at,
+  };
+  const [row] = await db
+    .insert(tagPrefs)
+    .values(values)
+    .onConflictDoUpdate({
+      target: tagPrefs.memberId,
+      set: { tags: sql`excluded.tags`, updatedAt: sql`excluded.updated_at` },
+      setWhere: sql`excluded.updated_at > ${tagPrefs.updatedAt}`,
+    })
+    .returning();
+  if (row) return { prefs: toTagPrefs(row), applied: true };
+  const [current] = await db.select().from(tagPrefs).where(eq(tagPrefs.memberId, me)).limit(1);
+  return { prefs: toTagPrefs(current!), applied: false };
 }
 
 /* ---------- 알림 설정 ---------- */

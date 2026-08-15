@@ -9,12 +9,12 @@ import {
 import type {
   Comment,
   Entry,
+  KnownTag,
   MemberId,
   MemberStatus,
   Notification,
   Place,
   ReactionSet,
-  Tag,
 } from '../../shared/types';
 
 export interface Member {
@@ -94,13 +94,58 @@ export function membersOfEntries(list: readonly { m: MemberId }[]): Member[] {
   return [...MEMBER_IDS.filter((id) => seen.has(id)), ...unknown].map(memberOf);
 }
 
-export const TAGMETA: Record<Tag, { icon: string; bg: string; fg: string }> = {
+export interface TagMeta {
+  icon: string;
+  bg: string;
+  fg: string;
+}
+
+export const TAGMETA: Record<KnownTag, TagMeta> = {
   '자격증': { icon: 'M12 3a5 5 0 1 1 0 10 5 5 0 0 1 0-10zm-3.5 9.5L7 21l5-3 5 3-1.5-8.5', bg: '#FFF9E6', fg: '#B37F00' },
   '영어': { icon: 'M8 9.5h8M8 13h5M21 12c0 4.4-4 8-9 8-1.1 0-2.1-.1-3.1-.4L4 21l1.5-4.2A7.6 7.6 0 0 1 3 12c0-4.4 4-8 9-8s9 3.6 9 8z', bg: '#E7F1FF', fg: '#14579F' },
   '코딩테스트': { icon: 'M8 6l-6 6 6 6M16 6l6 6-6 6', bg: '#E6F9F0', fg: '#0A6E42' },
   '기타': { icon: 'M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z', bg: '#F1F3F6', fg: '#4E555F' },
   'OFF': { icon: 'M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9z', bg: '#F1F3F6', fg: '#6B7280' },
 };
+
+/** 커스텀 태그의 범용 아이콘 — 기본 태그처럼 뜻을 그릴 수 없으니(무슨 태그가 올지 모른다)
+    "태그"라는 사물 자체를 그린다. 끝의 짧은 선은 round 캡이 찍어 주는 구멍 점이다. */
+const CUSTOM_TAG_ICON =
+  'M11.2 2H4a2 2 0 0 0-2 2v7.2a2 2 0 0 0 .6 1.4l8.7 8.7a2.4 2.4 0 0 0 3.4 0l6.6-6.6a2.4 2.4 0 0 0 0-3.4l-8.7-8.7A2 2 0 0 0 11.2 2zM7.5 7.5h.01';
+
+/* 커스텀 태그 팔레트 — 기본 태그와 같은 톤(아주 옅은 배경 + 진한 글자, 본문 대비 4.5:1 이상)
+   이되, 크루 다섯 색과 기본 태그 네 색(앰버·블루·그린·그레이) 어느 것도 주장하지 않는
+   색상만 골랐다. 여섯 개뿐이라 태그가 늘면 색은 당연히 겹치는데, 태그를 가르는 것은
+   이름이고 색은 피드에서 눈이 먼저 짚게 도와주는 힌트다. */
+const CUSTOM_TAG_LOOKS: readonly { bg: string; fg: string }[] = [
+  { bg: '#F1E9FE', fg: '#5B33A8' }, // 보라
+  { bg: '#FFE9EE', fg: '#A3123C' }, // 로즈
+  { bg: '#E2F6F7', fg: '#0B6068' }, // 청록
+  { bg: '#EEF6DD', fg: '#4C6413' }, // 올리브
+  { bg: '#FBE9F6', fg: '#8C1F6B' }, // 자홍
+  { bg: '#F4EBE3', fg: '#6E4A2E' }, // 코코아
+];
+
+/** 팔레트를 못 고른 자리의 무채색 — '기타'와 같은 톤이라 색을 주장하지 않는다. */
+const CUSTOM_TAG_NEUTRAL = { bg: '#F1F3F6', fg: '#4E555F' };
+
+/** 이름 → 팔레트 자리. FNV-1a 32비트를 코드포인트 위에서 돌린다 — 해시가 환경(엔진·locale)에
+    기대면 같은 태그가 기기마다 다른 색으로 보이고, 피드에서 같은 태그를 다른 태그로 읽는다. */
+function customTagLook(tag: string): TagMeta {
+  let h = 0x811c9dc5;
+  for (const ch of tag) h = Math.imul(h ^ (ch.codePointAt(0) ?? 0), 0x01000193);
+  const look = CUSTOM_TAG_LOOKS[(h >>> 0) % CUSTOM_TAG_LOOKS.length] ?? CUSTOM_TAG_NEUTRAL;
+  return { icon: CUSTOM_TAG_ICON, ...look };
+}
+
+/** 표시용 태그 메타 조회 — 기본 태그는 제 색으로, 그 밖(멤버가 만든 태그, 만든 사람이
+    목록에서 지운 뒤에도 과거 기록에 남은 태그)은 이름으로 정해지는 파스텔로.
+    화면에 태그를 그리는 자리는 전부 이걸 지나야 한다. */
+export function tagMeta(tag: string): TagMeta {
+  return Object.prototype.hasOwnProperty.call(TAGMETA, tag)
+    ? TAGMETA[tag as KnownTag]
+    : customTagLook(tag);
+}
 
 export const PLACE_ICON: Record<Place, string> = {
   '도서관': '📚',
