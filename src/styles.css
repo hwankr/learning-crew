@@ -479,6 +479,7 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 .photo-file { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 .photo-hint { font-size: 11.5px; color: #9AA1AD; margin-top: 8px; line-height: 1.5; }
 .photo-hint.full { color: #B37F00; }
+.photo-hint.warn { color: #D3352A; }
 
 /* 피드 카드의 모자이크 — 열·행·높이는 장수에 따라 인라인으로 온다(lib/photos.ts) */
 .photo-mosaic { display: grid; gap: 4px; margin-top: 11px; border-radius: 12px; overflow: hidden; }

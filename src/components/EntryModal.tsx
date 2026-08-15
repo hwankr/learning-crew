@@ -2,6 +2,7 @@ import { useEffect, useId, useLayoutEffect, useRef, useState, type RefObject } f
 import type { EntryPhoto, Tag, Todo } from '../../shared/types';
 import { ENTRY_PHOTO_LIMIT, PUSH_LIMITS, TAGS, isOffTags, normalizeTags } from '../../shared/types';
 import { TAGMETA, W, dayKey, pad2, type CopySet } from '../lib/constants';
+import type { DurableStorageState } from '../local/store';
 import { useFocusTrap } from '../lib/useFocusTrap';
 import { useOnline } from '../lib/useOnline';
 import { CameraIcon, CheckMark, Icon, PLUS_D, STAR_D, X_D } from './icons';
@@ -24,6 +25,46 @@ export interface ModalState {
 export const EMPTY_MODAL: ModalState = {
   open: false, entryId: '', editingId: null, tags: [], stars: 0, body: '', todos: [], photos: [], day: '',
 };
+
+export function photoStorageNotice(args: {
+  durableStorage: DurableStorageState;
+  online: boolean;
+  demo: boolean;
+  full: boolean;
+  hasPhotos: boolean;
+}): { text: string; blocksAdd: boolean; tone: 'normal' | 'warn' | 'full' } {
+  if (!args.demo && args.durableStorage !== 'ready') {
+    if (!args.online) {
+      return {
+        text: '사진을 안전하게 보관할 수 없어 오프라인에서는 추가할 수 없어요.',
+        blocksAdd: true,
+        tone: 'warn',
+      };
+    }
+    if (args.hasPhotos) {
+      return {
+        text: '임시 저장 상태예요. 업로드가 끝날 때까지 페이지를 닫지 마세요.',
+        blocksAdd: false,
+        tone: 'warn',
+      };
+    }
+  }
+  if (args.full) {
+    return {
+      text: '4장을 다 채웠어요. 빼면 다시 넣을 수 있어요.',
+      blocksAdd: true,
+      tone: 'full',
+    };
+  }
+  if (!args.demo && !args.online && args.hasPhotos) {
+    return {
+      text: '오프라인 — 저장하면 대기 상태로 남고 연결되면 올라가요.',
+      blocksAdd: false,
+      tone: 'normal',
+    };
+  }
+  return { text: '', blocksAdd: false, tone: 'normal' };
+}
 
 /** 태그 칩 토글 결과 — 'OFF'(쉬는 날)는 배타적이다.
     OFF를 켜면 나머지는 전부 빠지고, OFF가 켜진 채 다른 태그를 켜면 OFF가 빠진다.
@@ -125,7 +166,7 @@ function DatePicker({
 }
 
 export function EntryModal({
-  modal, patch, close, submit, wit, demo, preparing, fallbackRef, onAddFiles, onRemovePhoto,
+  modal, patch, close, submit, wit, demo, preparing, saving, durableStorage, fallbackRef, onAddFiles, onRemovePhoto,
 }: {
   modal: ModalState;
   patch: (p: Partial<ModalState>) => void;
@@ -136,6 +177,9 @@ export function EntryModal({
   demo: boolean;
   /** 고른 사진을 리사이즈하는 중 — 저장을 눌러도 App이 끝날 때까지 기다렸다 이어 간다 */
   preparing: boolean;
+  /** 삭제된 기록을 새 기록으로 살리며 blob을 복제하는 중 — 저장 스냅샷이 바뀌지 않게 잠근다. */
+  saving: boolean;
+  durableStorage: DurableStorageState;
   /** 열었던 수정 버튼이 닫는 사이 사라질 수 있다 — 날짜를 바꿔 저장하면 카드가 다른 날 묶음으로
       옮겨가고, 다른 기기에서 그 기록이 지워질 수도 있다. 그때 초점이 갈 자리. */
   fallbackRef: RefObject<HTMLElement | null>;
@@ -181,28 +225,30 @@ export function EntryModal({
   const showBlocked = tried && !!blocked;
 
   const photoFull = modal.photos.length >= ENTRY_PHOTO_LIMIT;
-  /* 자리가 찼다는 말이 먼저다 — 오프라인 안내는 아직 넣을 수 있는 사람에게만 필요하다.
-     데모는 올릴 서버가 없어 사진이 그 자리에서 끝난다 — "연결되면 올라가요"는 거짓이다. */
-  const photoHint = photoFull
-    ? '4장을 다 채웠어요. 빼면 다시 넣을 수 있어요.'
-    : !online && !demo && modal.photos.length > 0
-      ? '오프라인 — 저장하면 대기 상태로 남고 연결되면 올라가요.'
-      : '';
+  const photoNotice = photoStorageNotice({
+    durableStorage,
+    online,
+    demo,
+    full: photoFull,
+    hasPhotos: modal.photos.length > 0 || preparing,
+  });
 
   useEffect(() => {
     const onKey = (ev: KeyboardEvent) => {
       if (ev.key !== 'Escape') return;
+      if (saving) return;
       if (calOpen) setCalOpen(false);
       else close();
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [calOpen, close]);
+  }, [calOpen, close, saving]);
 
   return (
-    <div className="overlay compose-overlay" onClick={close}>
+    <div className="overlay compose-overlay" onClick={saving ? undefined : close}>
       {/* 트랩은 Tab만 가둔다 — 화면 낭독기에 "여기가 모달"이라고 알리는 건 dialog 의미다 */}
       <div className="sheet" ref={sheetRef} role="dialog" aria-modal="true" aria-labelledby={titleId}
+        aria-busy={saving} inert={saving || undefined}
         onClick={(ev) => ev.stopPropagation()}>
         <div className="sheet-head-row">
           <h2 className="sheet-title" id={titleId}>
@@ -304,7 +350,7 @@ export function EntryModal({
           <button
             className="photo-add"
             aria-label="사진 추가"
-            disabled={photoFull}
+            disabled={photoFull || photoNotice.blocksAdd}
             onClick={() => fileRef.current?.click()}
           >
             <CameraIcon size={19} />
@@ -325,8 +371,14 @@ export function EntryModal({
             }}
           />
         </div>
-        {photoHint && (
-          <div className={'photo-hint' + (photoFull ? ' full' : '')}>{photoHint}</div>
+        {photoNotice.text && (
+          <div
+            className={'photo-hint' + (photoNotice.tone === 'normal' ? '' : ` ${photoNotice.tone}`)}
+            role="status"
+            aria-live="polite"
+          >
+            {photoNotice.text}
+          </div>
         )}
 
         <div className="sheet-label-row">
@@ -396,14 +448,15 @@ export function EntryModal({
               동시에 할 말이 있는 상황이 아니다(저장이 막혀 있으면 그게 먼저다) */}
           <span className={'draft-note' + (showBlocked ? ' warn' : '')} role="status" aria-live="polite">
             {showBlocked ? blocked
-              : preparing ? '사진 준비 중…'
+              : saving ? '기록 살리는 중…'
+                : preparing ? '사진 준비 중…'
                 : hasContent ? (typing ? '쓰는 중…' : '초안 저장됨') : ''}
           </span>
           <button className="cancel-btn" onClick={close}>취소</button>
           <button
             className={'submit' + (canSave ? ' ready' : '')}
             aria-disabled={!canSave}
-            aria-busy={preparing}
+            aria-busy={preparing || saving}
             onClick={() => { if (canSave) submit(); else setTried(true); }}
           >
             {modal.editingId ? wit.editSubmit : wit.submit}

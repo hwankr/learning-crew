@@ -97,6 +97,32 @@ describe('mergeEntry (필드 단위 3-way 병합)', () => {
     expect(merged.body).toBe('서버에서 수정');
   });
 
+  it('base 사진은 local 또는 server 어느 한쪽에서 제거해도 삭제가 이긴다', () => {
+    const p = { id: '22222222-2222-4222-8222-222222222222', w: 1600, h: 900 };
+    const base = e({ photos: [p] });
+    expect(mergeEntry(base, e({ photos: [] }), e({ photos: [p], v: 2 })).photos).toEqual([]);
+    expect(mergeEntry(base, e({ photos: [p] }), e({ photos: [], v: 2 })).photos).toEqual([]);
+  });
+
+  it('양쪽 독립 신규 사진은 stable union하고 중복 없이 네 장으로 제한한다', () => {
+    const p = (n: number) => ({
+      id: `20000000-0000-4000-8000-${String(n).padStart(12, '0')}`,
+      w: 1600,
+      h: 900,
+    });
+    const merged = mergeEntry(
+      e({ photos: [] }),
+      e({ photos: [p(1), p(2), p(3)] }),
+      e({ photos: [p(4), p(2), p(5)], v: 2 }),
+    );
+    expect(merged.photos.map((photo) => photo.id)).toEqual([
+      p(1).id,
+      p(4).id,
+      p(2).id,
+      p(3).id,
+    ]);
+  });
+
   it('레거시 이관의 비-OFF+null은 보존하고 OFF의 숫자 별점만 null로 강제한다', () => {
     const legacyNoRating = normalizeEntry(e({ tags: ['기타'], stars: null }));
     expect(legacyNoRating.tag).toBe('기타');

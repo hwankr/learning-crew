@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { Tag } from '../../shared/types';
-import { EMPTY_MODAL, saveGate, toggledTags, type ModalState } from './EntryModal';
+import {
+  EMPTY_MODAL,
+  photoStorageNotice,
+  saveGate,
+  toggledTags,
+  type ModalState,
+} from './EntryModal';
 
 describe('toggledTags (기록 모달 다중 선택)', () => {
   it('선택 순서와 무관하게 TAGS 순서로 고정하고 여러 태그를 유지한다', () => {
@@ -76,5 +82,35 @@ describe('saveGate (한 장짜리 시트의 저장 문턱)', () => {
   it('준비 중이라도 태그·별점 문턱은 그대로다', () => {
     expect(saveGate(m({}), true).blocked).toBe('무엇을 했는지 골라주세요');
     expect(saveGate(m({ tags: ['영어'] }), true).blocked).toBe('만족도를 골라주세요');
+  });
+});
+
+describe('photoStorageNotice (사진 내구성 안내)', () => {
+  it('IDB unavailable/quota-error + offline은 추가를 막고 안전 보관 불가를 알린다', () => {
+    for (const durableStorage of ['unavailable', 'quota-error'] as const) {
+      const notice = photoStorageNotice({
+        durableStorage,
+        online: false,
+        demo: false,
+        full: false,
+        hasPhotos: false,
+      });
+      expect(notice.blocksAdd).toBe(true);
+      expect(notice.text).toContain('오프라인에서는 추가할 수 없어요');
+      expect(notice.tone).toBe('warn');
+    }
+  });
+
+  it('IDB unavailable + online은 추가를 허용하되 페이지 유지 경고를 계속 보인다', () => {
+    const notice = photoStorageNotice({
+      durableStorage: 'unavailable',
+      online: true,
+      demo: false,
+      full: false,
+      hasPhotos: true,
+    });
+    expect(notice.blocksAdd).toBe(false);
+    expect(notice.text).toContain('업로드가 끝날 때까지 페이지를 닫지 마세요');
+    expect(notice.tone).toBe('warn');
   });
 });

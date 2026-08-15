@@ -28,9 +28,19 @@ export interface PhotoBlobRecord {
   pct: number;
   entryId: string;
   addedAt: number;
+  /** done 전환 시각. v5 행에는 없으므로 읽을 때 addedAt을 폴백으로 쓴다. */
+  doneAt?: number;
 }
 
 export type PhotoKind = 'full' | 'thumb';
+
+/** 내려받은 사진은 재요청 가능한 캐시다. bytes/lastAccess를 값에 함께 두어 별도
+    메타 스토어와 blob 스토어가 어긋나는 정리 race를 만들지 않는다. */
+export interface PhotoCacheRecord {
+  blob: Blob;
+  bytes: number;
+  lastAccess: number;
+}
 
 /** 내려받은 사진 키 — IDB 스키마와 usePhoto가 같은 문자열을 쓰게 한곳에 둔다. */
 export const photoCacheKey = (photoId: string, kind: PhotoKind): string => `${photoId}:${kind}`;
@@ -57,7 +67,7 @@ export interface CrewDB extends DBSchema {
   /** key = photoId — 원본 대신 리사이즈된 JPEG 두 장만 보관한다. */
   photoBlobs: { key: string; value: PhotoBlobRecord };
   /** key = `${photoId}:${kind}` — 인증 fetch로 받은 다른 멤버 사진의 로컬 캐시. */
-  photoCache: { key: string; value: Blob };
+  photoCache: { key: string; value: PhotoCacheRecord };
   meta: { key: string; value: PullCursor | ReactionCursor | boolean | MemberStatus };
 }
 
@@ -66,9 +76,20 @@ export const reactionKey = (entryId: string, m: MemberId): string => `${entryId}
 
 export type CrewDatabase = IDBPDatabase<CrewDB>;
 
+/** v5 photoCache는 값이 bare Blob이라 LRU 메타를 신뢰할 수 없다. 내려받은 캐시만
+    버리고 다시 만들며, 유일본일 수 있는 photoBlobs는 절대 건드리지 않는다. */
+export function upgradePhotoCacheStore(
+  db: Pick<IDBPDatabase<CrewDB>, 'createObjectStore' | 'deleteObjectStore'>,
+  oldVersion: number,
+): void {
+  if (oldVersion >= 6) return;
+  if (oldVersion >= 5) db.deleteObjectStore('photoCache');
+  db.createObjectStore('photoCache');
+}
+
 export function openCrewDB(): Promise<CrewDatabase> {
   let handle: CrewDatabase | null = null;
-  const opened = openDB<CrewDB>('learning-crew', 5, {
+  const opened = openDB<CrewDB>('learning-crew', 6, {
     async upgrade(db, oldVersion, _newVersion, tx) {
       if (oldVersion < 1) {
         db.createObjectStore('entries', { keyPath: 'id' });
@@ -103,8 +124,8 @@ export function openCrewDB(): Promise<CrewDatabase> {
         // 바이너리는 Entry CAS 큐와 수명이 다르다. 업로드할 내 파일과 내려받은 캐시를
         // 분리해야 캐시 정리가 미완료 업로드를 지우거나, 그 반대가 되지 않는다.
         db.createObjectStore('photoBlobs');
-        db.createObjectStore('photoCache');
       }
+      upgradePhotoCacheStore(db, oldVersion);
     },
     // 다른 탭이 더 높은 버전으로 업그레이드하려 할 때 이 연결이 막고 있으면 양보한다 —
     // 이 탭은 메모리 전용으로 강등되지만(쓰기는 txWrite가 조용히 무시) 새 탭이 살아난다.
@@ -115,4 +136,26 @@ export function openCrewDB(): Promise<CrewDatabase> {
     },
   });
   return opened.then((db) => (handle = db));
+}
+
+/** 구버전 탭이 upgrade를 막으면 앱은 제한 시간 뒤 메모리 모드로 계속 뜬다. 그 뒤
+    늦게 열린 handle까지 닫아야 보이지 않는 연결이 다음 upgrade를 다시 막지 않는다. */
+export async function openCrewDBWithTimeout(
+  timeoutMs = 2000,
+  opener: () => Promise<CrewDatabase> = openCrewDB,
+): Promise<CrewDatabase | null> {
+  const opened = opener();
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const timedOut = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), timeoutMs);
+  });
+  let db: CrewDatabase | null;
+  try {
+    db = await Promise.race([opened, timedOut]);
+  } finally {
+    if (timer !== null) clearTimeout(timer);
+  }
+  if (db) return db;
+  void opened.then((late) => late.close(), () => undefined);
+  return null;
 }
