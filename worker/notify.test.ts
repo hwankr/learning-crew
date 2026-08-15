@@ -1,6 +1,6 @@
 /* 알림 파이프라인 검증 — 순수 판정(shared/notify)은 그대로, 팬아웃·cron은
    PGlite(진짜 Postgres) 위에서 발송기 스텁을 꽂아 끝까지 돌린다. */
-import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import { PGlite } from '@electric-sql/pglite';
 import { drizzle } from 'drizzle-orm/pglite';
@@ -17,11 +17,14 @@ import {
   pushEntries,
   pushReactions,
   putNotifPrefs,
+  pendingPhotoTombstoneIds,
+  rearmPhotoTombstone,
   upsertPushSub,
   upsertReactionDaily,
   type Db,
 } from './queries';
 import { notifyCommentEvents, notifyStart, runHourly, type Sender } from './notify';
+import { cleanupPhotoTombstones } from './photos';
 import type { PushBody } from './push';
 import {
   DEFAULT_NOTIF_PREFS,
@@ -117,6 +120,14 @@ function makeSender() {
     calls.push({ endpoints: targets.map((t) => t.endpoint), data });
   };
   return { calls, send };
+}
+
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
 }
 
 /** 지금 기준으로 "가장 최근의 KST hh:00" 시각(ms) — cron 시각을 과거로 잡아
@@ -584,17 +595,88 @@ describe('runHourly', () => {
     ).toEqual([{ n: 0 }]);
   });
 
-  it('R2 삭제 실패 톰스톤을 남기고 다음 cron에서 재시도해 정산한다', async () => {
+  it('cleanup 성공은 원장 row를 남겨 cleaned_at만 기록하고 pending에서 제외한다', async () => {
+    const photoId = 'f0000000-0000-4000-8000-000000000000';
+    await db.execute(sql`
+      insert into photo_tombstones (photo_id, owner) values (${photoId}::uuid, 'sh')
+    `);
+    const deletedKeys: string[][] = [];
+    const env = {
+      ...ENV,
+      PHOTOS: {
+        head: async () => ({ customMetadata: { memberId: 'sh' } }),
+        delete: async (keys: string[]) => {
+          deletedKeys.push(keys);
+        },
+      } as unknown as R2Bucket,
+    };
+    const { send } = makeSender();
+
+    await runHourly(db, env, lastKstHour(12), send);
+
+    expect(deletedKeys).toEqual([[
+      'p/f0000000-0000-4000-8000-000000000000',
+      'p/f0000000-0000-4000-8000-000000000000.t',
+    ]]);
+    expect(
+      (await db.execute(sql`
+        select photo_id, cleaned_at is not null as cleaned, attempt_count,
+          last_error, first_failed_at is not null as first_failed, cleanup_generation
+        from photo_tombstones where photo_id = ${photoId}::uuid
+      `)).rows,
+    ).toEqual([{
+      photo_id: photoId,
+      cleaned: true,
+      attempt_count: 0,
+      last_error: null,
+      first_failed: false,
+      cleanup_generation: 0,
+    }]);
+    expect(await pendingPhotoTombstoneIds(db)).toEqual([]);
+  });
+
+  it('다른 멤버가 만든 tombstone은 소유자의 R2 객체를 지우지 않고 사유를 남긴다', async () => {
+    const photoId = 'f0000000-0000-4000-8000-000000000001';
+    await db.execute(sql`
+      insert into photo_tombstones (photo_id, owner) values (${photoId}::uuid, 'wg')
+    `);
+    const head = vi.fn(async () => ({ customMetadata: { memberId: 'sh' } }));
+    const remove = vi.fn(async () => {});
+    const bucket = { head, delete: remove } as unknown as R2Bucket;
+
+    expect(await cleanupPhotoTombstones(db, bucket)).toEqual({
+      deleted: [photoId],
+      failed: [],
+    });
+
+    expect(head).toHaveBeenCalledTimes(2);
+    expect(remove).not.toHaveBeenCalled();
+    expect(
+      (await db.execute(sql`
+        select owner, cleaned_at is not null as cleaned, last_error
+        from photo_tombstones where photo_id = ${photoId}::uuid
+      `)).rows,
+    ).toEqual([{
+      owner: 'wg',
+      cleaned: true,
+      last_error: 'R2 object owner mismatch; foreign object preserved',
+    }]);
+  });
+
+  it('R2 실패는 attempt_count/last_error/first_failed_at을 기록하고 다음 cron에서 재시도한다', async () => {
     const photoId = 'f1111111-1111-4111-8111-111111111111';
-    await db.execute(sql`insert into photo_tombstones (photo_id) values (${photoId}::uuid)`);
+    await db.execute(sql`
+      insert into photo_tombstones (photo_id, owner) values (${photoId}::uuid, 'sh')
+    `);
     let attempts = 0;
     const deletedKeys: string[][] = [];
     const env = {
       ...ENV,
       PHOTOS: {
+        head: async () => ({ customMetadata: { memberId: 'sh' } }),
         delete: async (keys: string[]) => {
           attempts += 1;
-          if (attempts === 1) throw new Error('temporary R2 error');
+          if (attempts <= 2) throw new Error('temporary R2 error');
           deletedKeys.push(keys);
         },
       } as unknown as R2Bucket,
@@ -603,16 +685,112 @@ describe('runHourly', () => {
     const at = lastKstHour(12);
 
     await runHourly(db, env, at, send);
+    const [firstFailure] = (await db.execute(sql`
+      select photo_id, cleaned_at, attempt_count, last_error, first_failed_at
+      from photo_tombstones
+    `)).rows as {
+      photo_id: string;
+      cleaned_at: string | null;
+      attempt_count: number;
+      last_error: string | null;
+      first_failed_at: string | null;
+    }[];
+    expect(firstFailure).toMatchObject({
+      photo_id: photoId,
+      cleaned_at: null,
+      attempt_count: 1,
+      last_error: 'temporary R2 error',
+    });
+    expect(firstFailure!.first_failed_at).not.toBeNull();
+    expect(await pendingPhotoTombstoneIds(db)).toEqual([photoId]);
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await runHourly(db, env, at, send);
     expect(
-      (await db.execute(sql`select photo_id from photo_tombstones`)).rows,
-    ).toEqual([{ photo_id: photoId }]);
+      (await db.execute(sql`
+        select attempt_count, last_error, first_failed_at from photo_tombstones
+      `)).rows,
+    ).toEqual([{
+      attempt_count: 2,
+      last_error: 'temporary R2 error',
+      first_failed_at: firstFailure!.first_failed_at,
+    }]);
 
     await runHourly(db, env, at, send);
-    expect((await db.execute(sql`select photo_id from photo_tombstones`)).rows).toEqual([]);
+    expect(
+      (await db.execute(sql`
+        select photo_id, cleaned_at is not null as cleaned, attempt_count,
+          last_error, first_failed_at is not null as first_failed
+        from photo_tombstones
+      `)).rows,
+    ).toEqual([{
+      photo_id: photoId,
+      cleaned: true,
+      attempt_count: 2,
+      last_error: null,
+      first_failed: true,
+    }]);
+    expect(await pendingPhotoTombstoneIds(db)).toEqual([]);
     expect(deletedKeys).toEqual([[
       'p/f1111111-1111-4111-8111-111111111111',
       'p/f1111111-1111-4111-8111-111111111111.t',
     ]]);
+  });
+
+  it('cleanup gen0 delete와 늦은 PUT gen1 rearm이 교차해도 stale ACK가 새 세대를 정산하지 않는다', async () => {
+    const photoId = 'f2222222-2222-4222-8222-222222222222';
+    const fullKey = `p/${photoId}`;
+    const thumbKey = `${fullKey}.t`;
+    const objects = new Set([fullKey, thumbKey]);
+    const firstDeleteReached = deferred();
+    const releaseFirstDelete = deferred();
+    let deleteCalls = 0;
+    const bucket = {
+      head: async (key: string) => (
+        objects.has(key) ? { customMetadata: { memberId: 'sh' } } : null
+      ),
+      delete: async (input: string | string[]) => {
+        deleteCalls += 1;
+        const keys = typeof input === 'string' ? [input] : input;
+        for (const key of keys) objects.delete(key);
+        if (deleteCalls === 1) {
+          firstDeleteReached.resolve();
+          await releaseFirstDelete.promise;
+        }
+      },
+    } as unknown as R2Bucket;
+    await db.execute(sql`
+      insert into photo_tombstones (photo_id, owner) values (${photoId}::uuid, 'sh')
+    `);
+
+    const staleCleanup = cleanupPhotoTombstones(db, bucket);
+    await firstDeleteReached.promise;
+
+    // gen0 cleanup이 R2를 지웠지만 아직 DB 완료 도장을 찍기 전, 늦은 PUT이 다시 쓴 상황.
+    objects.add(fullKey);
+    const rearmed = await rearmPhotoTombstone(db, photoId, 'sh');
+    expect(rearmed).toEqual({ photoId, owner: 'sh', cleanupGeneration: 1 });
+    await bucket.delete(fullKey); // PUT 사후 장벽의 즉시 delete
+    releaseFirstDelete.resolve();
+
+    expect(await staleCleanup).toEqual({ deleted: [], failed: [] });
+    expect(
+      (await db.execute(sql`
+        select cleanup_generation, cleaned_at from photo_tombstones
+        where photo_id = ${photoId}::uuid
+      `)).rows,
+    ).toEqual([{ cleanup_generation: 1, cleaned_at: null }]);
+    expect([...objects]).toEqual([]);
+
+    expect(await cleanupPhotoTombstones(db, bucket)).toEqual({ deleted: [photoId], failed: [] });
+    expect(
+      (await db.execute(sql`
+        select cleanup_generation, cleaned_at is not null as cleaned
+        from photo_tombstones where photo_id = ${photoId}::uuid
+      `)).rows,
+    ).toEqual([{ cleanup_generation: 1, cleaned: true }]);
+    expect(await pendingPhotoTombstoneIds(db)).toEqual([]);
+    expect([...objects]).toEqual([]);
   });
 });
 

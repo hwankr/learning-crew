@@ -213,31 +213,148 @@ export async function pushEntriesLegacy(
 
 /* ---------- 사진 R2 삭제 톰스톤 ---------- */
 
-/** PUT 경계에서 늦은 업로드를 막는 존재 확인. */
-export async function hasPhotoTombstone(db: Db, photoId: string): Promise<boolean> {
+/** PUT 경계에서 늦은 업로드를 막는 소유자별 존재 확인. */
+export async function hasPhotoTombstone(
+  db: Db,
+  photoId: string,
+  owner: MemberId,
+): Promise<boolean> {
   const rows = await db
     .select({ photoId: photoTombstones.photoId })
     .from(photoTombstones)
-    .where(eq(photoTombstones.photoId, photoId))
+    .where(and(
+      eq(photoTombstones.photoId, photoId),
+      eq(photoTombstones.owner, owner),
+    ))
     .limit(1);
   return rows.length > 0;
 }
 
-/** 매시 cron이 한 번에 처리할 유한한 묶음. 오래된 작업부터 내본다. */
-export async function pendingPhotoTombstoneIds(db: Db, limit = 500): Promise<string[]> {
-  const rows = await db
-    .select({ photoId: photoTombstones.photoId })
-    .from(photoTombstones)
-    .orderBy(photoTombstones.createdAt, photoTombstones.photoId)
-    .limit(limit);
-  return rows.map((row) => row.photoId);
+export interface PhotoTombstoneJob {
+  photoId: string;
+  owner: string;
+  cleanupGeneration: number;
 }
 
-/** R2 두 객체 삭제가 성공한 id만 큐에서 정산한다. */
-export async function deletePhotoTombstones(db: Db, photoIds: readonly string[]): Promise<void> {
-  const ids = [...new Set(photoIds)];
-  if (ids.length === 0) return;
-  await db.delete(photoTombstones).where(inArray(photoTombstones.photoId, ids));
+/** 매시 cron이 한 번에 처리할 유한한 묶음. 완료 원장은 건너뛰고 오래된 작업부터 내본다. */
+export async function pendingPhotoTombstones(
+  db: Db,
+  limit = 500,
+): Promise<PhotoTombstoneJob[]> {
+  return db
+    .select({
+      photoId: photoTombstones.photoId,
+      owner: photoTombstones.owner,
+      cleanupGeneration: photoTombstones.cleanupGeneration,
+    })
+    .from(photoTombstones)
+    .where(isNull(photoTombstones.cleanedAt))
+    .orderBy(photoTombstones.createdAt, photoTombstones.photoId, photoTombstones.owner)
+    .limit(limit);
+}
+
+/** 테스트·관측용 id 목록. 실제 cleanup은 반드시 위의 세대까지 함께 읽는다. */
+export async function pendingPhotoTombstoneIds(db: Db, limit = 500): Promise<string[]> {
+  return (await pendingPhotoTombstones(db, limit)).map((row) => row.photoId);
+}
+
+interface PhotoTombstoneJobGroup {
+  owner: string;
+  cleanupGeneration: number;
+  photoIds: string[];
+}
+
+function jobsByOwnerAndGeneration(
+  jobs: readonly PhotoTombstoneJob[],
+): PhotoTombstoneJobGroup[] {
+  const groups = new Map<string, PhotoTombstoneJobGroup>();
+  const seen = new Set<string>();
+  for (const job of jobs) {
+    const jobKey = JSON.stringify([job.photoId, job.owner, job.cleanupGeneration]);
+    if (seen.has(jobKey)) continue;
+    seen.add(jobKey);
+    const groupKey = JSON.stringify([job.owner, job.cleanupGeneration]);
+    const group = groups.get(groupKey) ?? {
+      owner: job.owner,
+      cleanupGeneration: job.cleanupGeneration,
+      photoIds: [],
+    };
+    group.photoIds.push(job.photoId);
+    groups.set(groupKey, group);
+  }
+  return [...groups.values()];
+}
+
+/** R2 삭제 성공을 관측한 세대에만 완료 도장을 찍는다.
+    늦은 PUT이 generation을 올렸다면 옛 cleanup의 ACK는 아무 행도 갱신하지 못한다. */
+export async function markPhotoTombstonesCleaned(
+  db: Db,
+  jobs: readonly PhotoTombstoneJob[],
+  lastError: string | null = null,
+): Promise<string[]> {
+  const settled: string[] = [];
+  for (const { owner, cleanupGeneration, photoIds } of jobsByOwnerAndGeneration(jobs)) {
+    const rows = await db
+      .update(photoTombstones)
+      .set({ cleanedAt: sql`now()`, lastError })
+      .where(and(
+        inArray(photoTombstones.photoId, photoIds),
+        eq(photoTombstones.owner, owner),
+        eq(photoTombstones.cleanupGeneration, cleanupGeneration),
+        isNull(photoTombstones.cleanedAt),
+      ))
+      .returning({ photoId: photoTombstones.photoId });
+    settled.push(...rows.map((row) => row.photoId));
+  }
+  return settled;
+}
+
+/** R2 실패는 같은 pending 세대에만 누적한다. 겹친 cleanup의 늦은 실패가
+    이미 완료됐거나 PUT으로 재무장된 세대의 상태를 오염시키지 않는다. */
+export async function recordPhotoTombstoneFailures(
+  db: Db,
+  jobs: readonly PhotoTombstoneJob[],
+  error: string,
+): Promise<void> {
+  for (const { owner, cleanupGeneration, photoIds } of jobsByOwnerAndGeneration(jobs)) {
+    await db
+      .update(photoTombstones)
+      .set({
+        attemptCount: sql`${photoTombstones.attemptCount} + 1`,
+        lastError: error,
+        firstFailedAt: sql`coalesce(${photoTombstones.firstFailedAt}, now())`,
+      })
+      .where(and(
+        inArray(photoTombstones.photoId, photoIds),
+        eq(photoTombstones.owner, owner),
+        eq(photoTombstones.cleanupGeneration, cleanupGeneration),
+        isNull(photoTombstones.cleanedAt),
+      ));
+  }
+}
+
+/** PUT 사후 장벽. 원장이 생겨 있으면 새 cleanup 세대로 원자적으로 재무장한다. */
+export async function rearmPhotoTombstone(
+  db: Db,
+  photoId: string,
+  owner: MemberId,
+): Promise<PhotoTombstoneJob | null> {
+  const [row] = await db
+    .update(photoTombstones)
+    .set({
+      cleanedAt: null,
+      cleanupGeneration: sql`${photoTombstones.cleanupGeneration} + 1`,
+    })
+    .where(and(
+      eq(photoTombstones.photoId, photoId),
+      eq(photoTombstones.owner, owner),
+    ))
+    .returning({
+      photoId: photoTombstones.photoId,
+      owner: photoTombstones.owner,
+      cleanupGeneration: photoTombstones.cleanupGeneration,
+    });
+  return row ?? null;
 }
 
 export interface PullResult {

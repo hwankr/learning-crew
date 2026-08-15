@@ -37,12 +37,27 @@ export const entries = pgTable(
   (t) => [index('entries_updated_at_id_idx').on(t.updatedAt, t.id)],
 );
 
-/** R2 삭제가 끝날 때까지 남는 내구성 있는 작업 큐.
-    entry 변경과 같은 DB 문장 안에서 트리거가 넣어 메타가 먼저 사라져도 photo id를 잃지 않는다. */
-export const photoTombstones = pgTable('photo_tombstones', {
-  photoId: uuid('photo_id').primaryKey(),
-  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
-});
+/** 삭제된 photo id를 영구 기억하는 원장 겸 R2 정리 큐.
+    entry 변경과 같은 DB 문장 안에서 트리거가 넣어 메타가 먼저 사라져도 photo id를 잃지 않고,
+    정리가 끝난 뒤에도 행을 남겨 구버전 클라이언트가 같은 id를 되살리지 못하게 한다. */
+export const photoTombstones = pgTable(
+  'photo_tombstones',
+  {
+    photoId: uuid('photo_id').notNull(),
+    // 같은 UUID를 다른 멤버가 자기 기록에 주입해도 소유자의 삭제 원장을 대신 만들 수 없다.
+    owner: text('owner').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+    cleanedAt: timestamp('cleaned_at', { withTimezone: true, mode: 'string' }),
+    attemptCount: integer('attempt_count').notNull().default(0),
+    lastError: text('last_error'),
+    firstFailedAt: timestamp('first_failed_at', { withTimezone: true, mode: 'string' }),
+    // cleanup이 R2 삭제를 마친 뒤 늦은 PUT이 재무장한 세대를 옛 ACK가 닫지 못하게 하는 CAS 값.
+    cleanupGeneration: integer('cleanup_generation').notNull().default(0),
+  },
+  (t) => [
+    primaryKey({ name: 'photo_tombstones_photo_id_owner_pk', columns: [t.photoId, t.owner] }),
+  ],
+);
 
 /** 지금 상태 — 멤버당 1행을 덮어쓴다. 컬럼명 is_on은 SQL 예약어(on) 회피. */
 export const status = pgTable('status', {

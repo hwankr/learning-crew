@@ -1,8 +1,10 @@
 import { canonicalUuid, type MemberId } from '../shared/types';
 import {
-  deletePhotoTombstones,
-  pendingPhotoTombstoneIds,
+  markPhotoTombstonesCleaned,
+  pendingPhotoTombstones,
+  recordPhotoTombstoneFailures,
   type Db,
+  type PhotoTombstoneJob,
 } from './queries';
 
 export type PhotoKind = 'full' | 'thumb';
@@ -110,35 +112,132 @@ export interface PhotoCleanupResult {
   failed: string[];
 }
 
-/** 톰스톤이 지키는 photo id의 R2 두 객체를 재시도한다.
-    R2 배치가 실패하면 해당 id는 DB에 그대로 남고, 성공한 묶음만 지운다.
+const OWNER_MISMATCH_ERROR = 'R2 object owner mismatch; foreign object preserved';
+
+interface InspectedCleanupJob {
+  job: PhotoTombstoneJob;
+  ownedKeys: string[];
+  ownerMismatch: boolean;
+}
+
+/** 톰스톤이 지키는 photo id의 R2 두 객체 중 원장 소유자와 같은 것만 재시도한다.
+    소유자가 다른 객체는 남의 데이터이므로 남기고 사유를 적은 뒤 해당 원장만 정산한다.
+    R2 실패는 원장에 누적하고, 성공은 관측한 cleanup 세대에만 완료 도장을 찍는다.
     DB 정산이 실패해도 R2 delete는 멱등이므로 다음 cron이 안전하게 다시 시도한다. */
 export async function cleanupPhotoTombstones(
   db: Db,
   bucket: R2Bucket,
 ): Promise<PhotoCleanupResult> {
-  const ids = await pendingPhotoTombstoneIds(db);
+  const jobs = await pendingPhotoTombstones(db);
   const deleted: string[] = [];
   const failed: string[] = [];
 
   // id 100개 = R2 키 200개로, 배치 delete 상한(1000)보다 작게 둔다.
-  for (let offset = 0; offset < ids.length; offset += 100) {
-    const batch = ids.slice(offset, offset + 100);
-    const keys = batch.flatMap((id) => [
-      photoObjectKey(id, 'full'),
-      photoObjectKey(id, 'thumb'),
-    ]);
-    try {
-      await bucket.delete(keys);
-      await deletePhotoTombstones(db, batch);
-      deleted.push(...batch);
-    } catch (error) {
-      failed.push(...batch);
+  for (let offset = 0; offset < jobs.length; offset += 100) {
+    const batch = jobs.slice(offset, offset + 100);
+    const inspections = await Promise.all(batch.map(async (job) => {
+      const keys = [
+        photoObjectKey(job.photoId, 'full'),
+        photoObjectKey(job.photoId, 'thumb'),
+      ];
+      try {
+        const objects = await Promise.all(keys.map((key) => bucket.head(key)));
+        const inspected: InspectedCleanupJob = {
+          job,
+          ownedKeys: keys.filter((_, index) => (
+            objects[index]?.customMetadata?.memberId === job.owner
+          )),
+          // 없는 객체는 이미 정리된 성공이다. 존재하지만 소유자가 다른 경우만 보존 사유를 남긴다.
+          ownerMismatch: objects.some((object) => (
+            object !== null && object.customMetadata?.memberId !== job.owner
+          )),
+        };
+        return { ok: true as const, inspected };
+      } catch (error) {
+        return {
+          ok: false as const,
+          job,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    }));
+
+    const headFailures = inspections.filter((result) => !result.ok);
+    if (headFailures.length > 0) {
+      const failedJobs = headFailures.map((result) => result.job);
+      const message = `R2 head failed: ${[
+        ...new Set(headFailures.map((result) => result.error)),
+      ].join('; ')}`;
+      failed.push(...failedJobs.map(({ photoId }) => photoId));
+      try {
+        await recordPhotoTombstoneFailures(db, failedJobs, message);
+      } catch (recordError) {
+        console.error(JSON.stringify({
+          message: 'photo tombstone failure accounting failed',
+          error: recordError instanceof Error ? recordError.message : String(recordError),
+          count: failedJobs.length,
+        }));
+      }
       console.error(JSON.stringify({
-        message: 'photo tombstone cleanup failed',
-        error: error instanceof Error ? error.message : String(error),
-        count: batch.length,
+        message: 'photo tombstone ownership check failed',
+        error: message,
+        count: failedJobs.length,
       }));
+    }
+
+    const inspected = inspections
+      .filter((result) => result.ok)
+      .map((result) => result.inspected);
+    const withOwnedObjects = inspected.filter((result) => result.ownedKeys.length > 0);
+    let settle = inspected;
+
+    if (withOwnedObjects.length > 0) {
+      try {
+        await bucket.delete(withOwnedObjects.flatMap((result) => result.ownedKeys));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const failedJobs = withOwnedObjects.map((result) => result.job);
+        failed.push(...failedJobs.map(({ photoId }) => photoId));
+        try {
+          await recordPhotoTombstoneFailures(db, failedJobs, message);
+        } catch (recordError) {
+          console.error(JSON.stringify({
+            message: 'photo tombstone failure accounting failed',
+            error: recordError instanceof Error ? recordError.message : String(recordError),
+            count: failedJobs.length,
+          }));
+        }
+        console.error(JSON.stringify({
+          message: 'photo tombstone cleanup failed',
+          error: message,
+          count: failedJobs.length,
+        }));
+        // 소유 객체가 있던 행은 pending으로 남겨 다시 시도하되,
+        // 없거나 남의 객체만 있던 행은 이 delete 실패와 무관하게 정산한다.
+        settle = inspected.filter((result) => result.ownedKeys.length === 0);
+      }
+    }
+
+    for (const ownerMismatch of [false, true]) {
+      const settlingJobs = settle
+        .filter((result) => result.ownerMismatch === ownerMismatch)
+        .map((result) => result.job);
+      if (settlingJobs.length === 0) continue;
+      try {
+        // generation이 달라진 행은 반환되지 않는다. 새 세대는 pending으로 남아 다음 cleanup이 맡는다.
+        deleted.push(...await markPhotoTombstonesCleaned(
+          db,
+          settlingJobs,
+          ownerMismatch ? OWNER_MISMATCH_ERROR : null,
+        ));
+      } catch (error) {
+        failed.push(...settlingJobs.map(({ photoId }) => photoId));
+        console.error(JSON.stringify({
+          message: 'photo tombstone cleanup settlement failed',
+          error: error instanceof Error ? error.message : String(error),
+          count: settlingJobs.length,
+        }));
+      }
     }
   }
   return { deleted, failed };

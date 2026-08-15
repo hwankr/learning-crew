@@ -22,6 +22,7 @@ import {
   pushReactions,
   pullReactions,
   NIL_UUID,
+  hasPhotoTombstone,
   pendingPhotoTombstoneIds,
   type Db,
 } from './queries';
@@ -350,6 +351,11 @@ describe('사진 메타 동기화', () => {
   const P3 = 'b3333333-3333-4333-8333-333333333333';
   const P4 = 'b4444444-4444-4444-8444-444444444444';
   const P5 = 'b5555555-5555-4555-8555-555555555555';
+  const P6 = 'b6666666-6666-4666-8666-666666666666';
+  const P7 = 'b7777777-7777-4777-8777-777777777777';
+  const P8 = 'b8888888-8888-4888-8888-888888888888';
+  const P9 = 'b9999999-9999-4999-8999-999999999999';
+  const P10 = 'c0000000-0000-4000-8000-000000000000';
 
   it('push 경계가 중복·개수·크기를 정규화하고 pull까지 그대로 왕복한다', async () => {
     const raw = entry({
@@ -407,6 +413,90 @@ describe('사진 메타 동기화', () => {
     };
     const applied = await pushEntriesLegacy(db, [legacy as Omit<Entry, 'v'>], 'sh');
     expect(applied[0]!.photos).toEqual([{ id: P1, w: 1600, h: 900 }]);
+  });
+
+  it('cleaned tombstone id는 CAS push photos에서 제거하고 독립 신규 id는 보존한다', async () => {
+    await db.execute(sql`delete from photo_tombstones`);
+    const entryId = 'a3333333-3333-4333-8333-333333333333';
+    const created = await pushEntries(db, [entry({ id: entryId, m: 'sh' })], 'sh');
+    await db.execute(sql`
+      insert into photo_tombstones (photo_id, owner, cleaned_at)
+      values (${P6}::uuid, 'sh', now())
+    `);
+
+    const out = await pushEntries(
+      db,
+      [{
+        ...created.applied[0]!,
+        photos: [
+          { id: P6, w: 1600, h: 900 },
+          { id: P7, w: 1200, h: 800 },
+        ],
+      }],
+      'sh',
+    );
+
+    expect(out.applied[0]!.photos).toEqual([{ id: P7, w: 1200, h: 800 }]);
+    expect(await pendingPhotoTombstoneIds(db)).toEqual([]);
+    expect(
+      (await db.execute(sql`select count(*)::int as n from photo_tombstones where photo_id = ${P6}::uuid`))
+        .rows,
+    ).toEqual([{ n: 1 }]);
+    await db.execute(sql`delete from photo_tombstones`);
+  });
+
+  it('cleaned tombstone id는 legacy LWW push에서도 부활하지 않는다', async () => {
+    await db.execute(sql`delete from photo_tombstones`);
+    const entryId = 'a4444444-4444-4444-8444-444444444444';
+    const created = await pushEntries(db, [entry({ id: entryId, m: 'sh' })], 'sh');
+    await db.execute(sql`
+      insert into photo_tombstones (photo_id, owner, cleaned_at)
+      values (${P8}::uuid, 'sh', now())
+    `);
+    const { v: _v, ...legacy } = {
+      ...created.applied[0]!,
+      photos: [
+        { id: P8, w: 1600, h: 900 },
+        { id: P9, w: 900, h: 1200 },
+      ],
+    };
+
+    const applied = await pushEntriesLegacy(db, [legacy], 'sh');
+
+    expect(applied[0]!.photos).toEqual([{ id: P9, w: 900, h: 1200 }]);
+    await db.execute(sql`delete from photo_tombstones`);
+  });
+
+  it('다른 멤버의 tombstone은 소유자의 메타를 막지 않고 각자의 원장이 공존한다', async () => {
+    await db.execute(sql`delete from photo_tombstones`);
+    await db.execute(sql`
+      insert into photo_tombstones (photo_id, owner, cleaned_at)
+      values (${P10}::uuid, 'wg', now())
+    `);
+    const entryId = 'a5555555-5555-4555-8555-555555555555';
+
+    const created = await pushEntries(db, [entry({
+      id: entryId,
+      m: 'sh',
+      photos: [{ id: P10, w: 1600, h: 900 }],
+    })], 'sh');
+
+    expect(created.applied[0]!.photos).toEqual([{ id: P10, w: 1600, h: 900 }]);
+    expect(await hasPhotoTombstone(db, P10, 'sh')).toBe(false);
+    expect(await hasPhotoTombstone(db, P10, 'wg')).toBe(true);
+
+    const removed = await pushEntries(db, [{ ...created.applied[0]!, photos: [] }], 'sh');
+    expect(removed.applied[0]!.photos).toEqual([]);
+    expect(
+      (await db.execute(sql`
+        select owner, cleaned_at is not null as cleaned
+        from photo_tombstones where photo_id = ${P10}::uuid order by owner
+      `)).rows,
+    ).toEqual([
+      { owner: 'sh', cleaned: false },
+      { owner: 'wg', cleaned: true },
+    ]);
+    await db.execute(sql`delete from photo_tombstones`);
   });
 
   it('수정으로 빠진 id를 entry 변경과 같은 DB 문장에서 톰스톤으로 남긴다', async () => {

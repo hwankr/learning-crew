@@ -21,6 +21,7 @@ import {
   upsertPushSub,
   deletePushSub,
   hasPhotoTombstone,
+  rearmPhotoTombstone,
 } from './queries';
 import { NOTIFY_COOLDOWN_MS, shouldNotify } from './push';
 import { notifyCommentEvents, notifyStart, runHourly } from './notify';
@@ -125,7 +126,8 @@ app.put('/api/photos/:photoId', async (c) => {
   if (kind === null) return c.json({ error: 'bad photo kind' }, 400);
 
   const db = drizzle(neon(c.env.DATABASE_URL));
-  if (await hasPhotoTombstone(db, photoId)) {
+  const memberId = c.get('memberId');
+  if (await hasPhotoTombstone(db, photoId, memberId)) {
     return c.json({ error: 'photo was removed' }, 410);
   }
 
@@ -141,17 +143,55 @@ app.put('/api/photos/:photoId', async (c) => {
   const body = await readBoundedPhotoBody(c.req.raw.body, maxBytes);
   if (body.tooLarge) return c.json({ error: 'photo too large' }, 413);
 
+  const key = photoObjectKey(photoId, kind);
   const stored = await putOwnedPhoto(
     c.env.PHOTOS,
-    photoObjectKey(photoId, kind),
+    key,
     body.data,
-    c.get('memberId'),
+    memberId,
   );
   if (!stored.ok) {
     return stored.reason === 'forbidden'
       ? c.json({ error: 'photo belongs to another member' }, 403)
       : c.json({ error: 'photo upload conflict' }, 409);
   }
+
+  // body를 읽고 R2에 쓰는 사이 삭제 원장이 생길 수 있다. 원자적 세대 증가를 먼저
+  // 커밋해 cron의 pending을 보장한 뒤 방금 쓴 kind도 즉시 지운다. 직접 삭제 실패와
+  // 무관하게 410을 돌려 클라이언트가 삭제된 id를 완료 상태로 오인하지 않게 한다.
+  try {
+    const rearmed = await rearmPhotoTombstone(db, photoId, memberId);
+    if (rearmed !== null) {
+      try {
+        await c.env.PHOTOS.delete(key);
+      } catch (error) {
+        console.error(JSON.stringify({
+          message: 'post-put tombstone delete failed',
+          error: error instanceof Error ? error.message : String(error),
+          photoId,
+          kind,
+          cleanupGeneration: rearmed.cleanupGeneration,
+        }));
+      }
+      return c.json({ error: 'photo was removed' }, 410);
+    }
+  } catch (rearmError) {
+    // R2 write 이후 DB 확인이 실패하면 톰스톤이 cleaned인 채로 객체만
+    // 남을 수 있다. 삭제 여부를 확증할 수 없으므로 방금 쓴 key를 보수적으로 지운다.
+    try {
+      await c.env.PHOTOS.delete(key);
+    } catch (deleteError) {
+      console.error(JSON.stringify({
+        message: 'post-put tombstone rearm and delete failed',
+        rearmError: rearmError instanceof Error ? rearmError.message : String(rearmError),
+        deleteError: deleteError instanceof Error ? deleteError.message : String(deleteError),
+        photoId,
+        kind,
+      }));
+    }
+    return c.json({ error: 'photo was removed' }, 410);
+  }
+
   c.header('ETag', stored.etag);
   return c.json({ ok: true, etag: stored.etag });
 });
