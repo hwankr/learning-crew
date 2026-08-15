@@ -4,6 +4,7 @@
 import type { ReactNode, RefObject } from 'react';
 import type { SyncInfo } from '../local/store';
 import type { CopySet, Member } from '../lib/constants';
+import type { DesktopView } from '../lib/uiState';
 import { Avatar, BELL_D, Icon, PENCIL_D } from './icons';
 import { SyncStatus } from './SyncStatus';
 
@@ -17,8 +18,8 @@ export function TopBar({
 }: {
   me: Member;
   wit: CopySet;
-  view: 'feed' | 'cal';
-  onView: (v: 'feed' | 'cal') => void;
+  view: DesktopView;
+  onView: (v: DesktopView) => void;
   panelOpen: boolean;
   onTogglePanel: () => void;
   /** null이면 이 줄에 아무것도 세우지 않는다 — 데모(토큰 없음)에는 맞출 서버가 없다 */

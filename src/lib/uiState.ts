@@ -30,12 +30,26 @@ export function isDayKey(value: unknown): value is string {
 export type MobileTab = 'home' | 'feed' | 'cal' | 'alerts';
 const MTABS: readonly string[] = ['home', 'feed', 'cal', 'alerts'];
 
+export type DesktopView = 'feed' | 'cal';
+
+/** 피드 필터 — 라운지 글은 전용 탭이 아니라 피드 안의 한 갈래다(텅 빈 탭 방지). */
+export type FeedFilter = 'all' | 'entries' | 'posts';
+const FEED_FILTERS: readonly string[] = ['all', 'entries', 'posts'];
+
+/** 기록으로 향하는 동작(기록 저장, 알림에서 기록 열기) 뒤의 필터 — 라운지만 보기였다면
+    전체로 풀어 준다. 안 풀면 방금 저장한 기록·알림이 가리킨 기록이 화면에 없다. */
+export function revealEntries(filter: FeedFilter): FeedFilter {
+  return filter === 'posts' ? 'all' : filter;
+}
+
 export interface UiState {
-  view: 'feed' | 'cal';
+  view: DesktopView;
   mtab: MobileTab;
   panelOpen: boolean;
   /** 캘린더에서 고른 날 (null = 오늘) */
   selDay: string | null;
+  /** 피드에서 보던 갈래 — 새로고침해도 필터가 풀리지 않는다 */
+  feedFilter: FeedFilter;
 }
 
 export function loadUi(): Partial<UiState> {
@@ -48,6 +62,9 @@ export function loadUi(): Partial<UiState> {
     if (d.view === 'feed' || d.view === 'cal') out.view = d.view;
     if (typeof d.mtab === 'string' && MTABS.includes(d.mtab)) out.mtab = d.mtab as MobileTab;
     if (typeof d.panelOpen === 'boolean') out.panelOpen = d.panelOpen;
+    if (typeof d.feedFilter === 'string' && FEED_FILTERS.includes(d.feedFilter)) {
+      out.feedFilter = d.feedFilter as FeedFilter;
+    }
     const selDay = d.selDay;
     if (isDayKey(selDay)) out.selDay = selDay;
     return out;

@@ -1,7 +1,7 @@
 /* 화면 상태는 신뢰할 수 없는 localStorage에서 온다 — 형식만 날짜처럼 생긴 값이
    캘린더의 달과 선택일 제목을 갈라놓지 않게 복원 경계를 검증한다. */
 import { afterEach, describe, expect, it } from 'vitest';
-import { calOffOf, isDayKey, loadUi, sameDayInMonth } from './uiState';
+import { calOffOf, isDayKey, loadUi, revealEntries, sameDayInMonth } from './uiState';
 
 const originalStorage = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
 
@@ -40,6 +40,22 @@ describe('loadUi', () => {
       expect(loadUi()).toEqual({ view: 'cal', panelOpen: false });
     },
   );
+
+  it('유효한 피드 필터는 복원하고, 모르는 값(옛 lounge 탭 등)은 버린다', () => {
+    stored(JSON.stringify({ view: 'feed', feedFilter: 'posts' }));
+    expect(loadUi()).toEqual({ view: 'feed', feedFilter: 'posts' });
+    // 통합 전 버전이 남긴 view/mtab 'lounge'도 필터 자리의 이상값도 조용히 버려져야 한다
+    stored(JSON.stringify({ view: 'lounge', mtab: 'lounge', feedFilter: 'lounge' }));
+    expect(loadUi()).toEqual({});
+  });
+});
+
+describe('revealEntries (기록으로 향하는 동작 뒤의 필터)', () => {
+  it('라운지만 보기였을 때만 전체로 풀린다', () => {
+    expect(revealEntries('posts')).toBe('all');
+    expect(revealEntries('entries')).toBe('entries');
+    expect(revealEntries('all')).toBe('all');
+  });
 });
 
 describe('isDayKey', () => {

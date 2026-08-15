@@ -17,6 +17,13 @@ const mocks = vi.hoisted(() => ({
     tags: [] as string[],
     updatedAt: '1970-01-01T00:00:00.000Z',
   })),
+  pullSince: vi.fn(async () => ({ rows: [], cursor: null })),
+  allStatuses: vi.fn(async () => []),
+  pullComments: vi.fn(async () => ({ rows: [], cursor: null })),
+  pullReactions: vi.fn(async () => ({ rows: [], cursor: null })),
+  pullNotifications: vi.fn(async () => ({ rows: [], cursor: null })),
+  pullPosts: vi.fn(async () => ({ rows: [], cursor: null })),
+  pullPostComments: vi.fn(async () => ({ rows: [], cursor: null })),
   putTagPrefs: vi.fn(async (
     _db: unknown,
     m: string,
@@ -36,6 +43,13 @@ vi.mock('./queries', async (importOriginal) => ({
   rearmPhotoTombstone: mocks.rearmPhotoTombstone,
   getTagPrefs: mocks.getTagPrefs,
   putTagPrefs: mocks.putTagPrefs,
+  pullSince: mocks.pullSince,
+  allStatuses: mocks.allStatuses,
+  pullComments: mocks.pullComments,
+  pullReactions: mocks.pullReactions,
+  pullNotifications: mocks.pullNotifications,
+  pullPosts: mocks.pullPosts,
+  pullPostComments: mocks.pullPostComments,
 }));
 
 import worker from './index';
@@ -326,5 +340,46 @@ describe('PUT /api/photos/:photoId', () => {
     } finally {
       errorLog.mockRestore();
     }
+  });
+});
+
+describe('GET /api/sync/pull 라운지 커서 검증 (핸들러 경계)', () => {
+  const secret = 'test-secret';
+  const env = { DATABASE_URL: 'postgres://unused', AUTH_SECRET: secret };
+  const PO = 'dddddddd-dddd-4ddd-8ddd-ddddddddddd1';
+
+  beforeEach(() => {
+    mocks.pullPosts.mockClear();
+    mocks.pullPostComments.mockClear();
+  });
+
+  async function pull(qs: string): Promise<Response> {
+    const token = await makeToken('sh', secret);
+    return worker.fetch(
+      new Request(`https://example.test/api/sync/pull?${qs}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      }),
+      env as never,
+      {} as ExecutionContext,
+    );
+  }
+
+  it('형식이 맞는 psince/psinceId는 커서로 전달된다', async () => {
+    const res = await pull(`psince=${encodeURIComponent('2026-08-15T00:00:00.000Z')}&psinceId=${PO}`);
+    expect(res.status).toBe(200);
+    expect(mocks.pullPosts).toHaveBeenCalledWith({}, { ts: '2026-08-15T00:00:00.000Z', id: PO });
+  });
+
+  it('파싱할 수 없는 시각은 커서를 버리고 처음부터 pull한다 — timestamptz 캐스트 500을 막는다', async () => {
+    const res = await pull(`psince=not-a-date&psinceId=${PO}&pcsince=also-bad&pcsinceId=${PO}`);
+    expect(res.status).toBe(200);
+    expect(mocks.pullPosts).toHaveBeenCalledWith({}, null);
+    expect(mocks.pullPostComments).toHaveBeenCalledWith({}, null);
+  });
+
+  it('UUID가 아닌 pcsinceId도 커서를 버린다', async () => {
+    const res = await pull(`pcsince=${encodeURIComponent('2026-08-15T00:00:00.000Z')}&pcsinceId=nope`);
+    expect(res.status).toBe(200);
+    expect(mocks.pullPostComments).toHaveBeenCalledWith({}, null);
   });
 });

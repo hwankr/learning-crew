@@ -21,6 +21,10 @@ import {
   pushSubsExcept,
   pushComments,
   pullComments,
+  pushPosts,
+  pullPosts,
+  pushPostComments,
+  pullPostComments,
   pushReactions,
   pullReactions,
   NIL_UUID,
@@ -43,6 +47,8 @@ import type {
   Comment,
   Entry,
   MemberStatus,
+  Post,
+  PostComment,
   PullCursor,
   ReactionCursor,
   ReactionSet,
@@ -1195,5 +1201,214 @@ describe('canonicalUuid (핸들러 경계의 소문자 정규화)', () => {
     const out = await pushComments(db, [comment({ id: ids[0]!, m: 'wg', entryId: A })], 'wg');
     expect(out.applied).toHaveLength(1);
     expect(out.applied[0]!.id).toBe(C4);
+  });
+});
+
+/* ---------- 라운지 글 ---------- */
+
+const PO1 = 'dddddddd-dddd-4ddd-8ddd-ddddddddddd1';
+const PO2 = 'dddddddd-dddd-4ddd-8ddd-ddddddddddd2';
+const PO3 = 'dddddddd-dddd-4ddd-8ddd-ddddddddddd3';
+const PO4 = 'dddddddd-dddd-4ddd-8ddd-ddddddddddd4';
+const PO5 = 'dddddddd-dddd-4ddd-8ddd-ddddddddddd5';
+const PC1 = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee1';
+const PC2 = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee2';
+const PP1 = 'ffffffff-ffff-4fff-8fff-fffffffffff1';
+const PP2 = 'ffffffff-ffff-4fff-8fff-fffffffffff2';
+const PP3 = 'ffffffff-ffff-4fff-8fff-fffffffffff3';
+
+function post(p: Partial<Post> & Pick<Post, 'id' | 'm'>): Post {
+  const nowIso = new Date().toISOString();
+  return {
+    body: '도서관 가는 길',
+    photos: [],
+    createdAt: nowIso,
+    updatedAt: nowIso,
+    deletedAt: null,
+    ...p,
+  };
+}
+
+async function agePosts(): Promise<void> {
+  await db.execute(sql`update posts set updated_at = updated_at - interval '10 minutes'`);
+}
+
+describe('post queries (라운지 글)', () => {
+  it('새 글이 저장되고 pull로 받는다 — 타임스탬프는 ISO', async () => {
+    const out = await pushPosts(
+      db,
+      [
+        post({ id: PO1, m: 'kj', photos: [{ id: PP1, w: 1200, h: 1500 }] }),
+        post({ id: PO2, m: 'kj', body: '', photos: [{ id: PP2, w: 800, h: 1000 }] }),
+      ],
+      'kj',
+    );
+    expect(out.applied).toHaveLength(2);
+    expect(out.current).toHaveLength(0);
+    expect(out.applied[0]!.updatedAt).toMatch(ISO_RE);
+    expect(out.applied[0]!.createdAt).toMatch(ISO_RE);
+    const r = await pullPosts(db, null);
+    expect(r.rows.map((x) => x.id).sort()).toEqual([PO1, PO2].sort());
+    const p1 = r.rows.find((x) => x.id === PO1)!;
+    expect(p1.body).toBe('도서관 가는 길');
+    expect(p1.photos).toEqual([{ id: PP1, w: 1200, h: 1500 }]);
+  });
+
+  it('같은 id 재전송은 멱등 — 본문·사진을 덮지 않고 현재 행을 돌려준다', async () => {
+    const out = await pushPosts(
+      db,
+      [post({ id: PO1, m: 'kj', body: '바꿔치기 시도', photos: [] })],
+      'kj',
+    );
+    expect(out.applied).toHaveLength(0);
+    expect(out.current).toHaveLength(1);
+    expect(out.current[0]!.body).toBe('도서관 가는 길'); // 클라이언트는 이 행을 채택하고 큐를 비운다
+    expect(out.current[0]!.photos.map((ph) => ph.id)).toEqual([PP1]);
+  });
+
+  it('남의 글은 지울 수 없다 — 거부되고 살아있는 현재 행이 돌아온다', async () => {
+    const out = await pushPosts(
+      db,
+      [post({ id: PO1, m: 'sh', deletedAt: new Date().toISOString() })],
+      'sh',
+    );
+    expect(out.applied).toHaveLength(0);
+    expect(out.current[0]!.m).toBe('kj');
+    expect(out.current[0]!.deletedAt).toBeNull();
+  });
+
+  it('내 글 삭제는 tombstone으로 전파되고 사진 id가 삭제 원장에 남는다 (부활 불가)', async () => {
+    await db.execute(sql`delete from photo_tombstones`);
+    const del = await pushPosts(
+      db,
+      [post({ id: PO1, m: 'kj', photos: [{ id: PP1, w: 1200, h: 1500 }], deletedAt: new Date().toISOString() })],
+      'kj',
+    );
+    expect(del.applied).toHaveLength(1);
+    expect(del.applied[0]!.deletedAt).not.toBeNull();
+    expect(del.applied[0]!.body).toBe('도서관 가는 길'); // 본문은 그대로 — 갱신되는 건 삭제뿐
+    // posts의 톰스톤 트리거가 글 사진을 R2 정리 큐(원장)에 남겼다
+    expect(await pendingPhotoTombstoneIds(db)).toEqual([PP1]);
+
+    // 오프라인 기기가 삭제 전 상태를 밀어 올리는 시나리오 — 되살아나면 안 된다
+    const revive = await pushPosts(db, [post({ id: PO1, m: 'kj' })], 'kj');
+    expect(revive.applied).toHaveLength(0);
+    expect(revive.current[0]!.deletedAt).not.toBeNull();
+
+    // tombstone도 pull로 전파된다 (다른 기기가 목록에서 지울 수 있게)
+    const r = await pullPosts(db, null);
+    expect(r.rows.find((x) => x.id === PO1)!.deletedAt).toMatch(ISO_RE);
+  });
+
+  it('톰스톤된 사진 id를 되살리는 새 글 push는 DB 경계에서 걸러진다', async () => {
+    // PP1은 위에서 kj 소유 톰스톤이 됐다 — 같은 소유자의 새 글이 재사용해도 저장되지 않는다
+    const out = await pushPosts(
+      db,
+      [post({ id: PO3, m: 'kj', photos: [{ id: PP1, w: 100, h: 100 }, { id: PP2, w: 200, h: 250 }] })],
+      'kj',
+    );
+    expect(out.applied).toHaveLength(1);
+    expect(out.applied[0]!.photos.map((ph) => ph.id)).toEqual([PP2]);
+    await db.execute(sql`delete from photo_tombstones`);
+  });
+
+  it('사진만 있던 글의 사진이 전부 걸러지면 빈 live 행 대신 tombstone으로 강등된다', async () => {
+    // 핸들러 검증은 걸러지기 전 배열을 보므로 "사진 1장, 본문 없음"인 live 행이 여기까지 온다.
+    // filter 트리거가 그 사진을 걷어낸 뒤 빈 live 행으로 남으면 클라이언트가 내용 없는 글을
+    // 영원히 표시한다 — 강등된 tombstone이 applied로 돌아와야 로컬 행이 정리(정산)된다.
+    await db.execute(sql`
+      insert into photo_tombstones (photo_id, owner, cleaned_at)
+      values (${PP3}::uuid, 'kj', now())
+    `);
+    const out = await pushPosts(
+      db,
+      [post({ id: PO4, m: 'kj', body: '', photos: [{ id: PP3, w: 800, h: 1000 }] })],
+      'kj',
+    );
+    expect(out.applied).toHaveLength(1);
+    expect(out.applied[0]!.photos).toEqual([]);
+    expect(out.applied[0]!.deletedAt).toMatch(ISO_RE);
+
+    // 본문이 남는 글은 사진만 걸러지고 live로 저장된다 — 강등은 "내용이 전부 사라진 행"만
+    const kept = await pushPosts(
+      db,
+      [post({ id: PO5, m: 'kj', body: '사진은 날아갔지만 글은 남는다', photos: [{ id: PP3, w: 800, h: 1000 }] })],
+      'kj',
+    );
+    expect(kept.applied).toHaveLength(1);
+    expect(kept.applied[0]!.photos).toEqual([]);
+    expect(kept.applied[0]!.deletedAt).toBeNull();
+    await db.execute(sql`delete from photo_tombstones`);
+  });
+});
+
+function postComment(p: Partial<PostComment> & Pick<PostComment, 'id' | 'm' | 'postId'>): PostComment {
+  const nowIso = new Date().toISOString();
+  return { body: '창가 자리 주인 인정합니다', createdAt: nowIso, updatedAt: nowIso, deletedAt: null, ...p };
+}
+
+describe('post comment queries (라운지 글 댓글)', () => {
+  it('새 댓글이 저장되고 pull로 받는다 (아직 없는 글에도 달 수 있다 — 외래키 없음)', async () => {
+    const out = await pushPostComments(
+      db,
+      [postComment({ id: PC1, m: 'wg', postId: PO1 }), postComment({ id: PC2, m: 'wg', postId: GHOST })],
+      'wg',
+    );
+    expect(out.applied).toHaveLength(2);
+    expect(out.current).toHaveLength(0);
+    expect(out.applied[0]!.updatedAt).toMatch(ISO_RE);
+    const r = await pullPostComments(db, null);
+    expect(r.rows.map((x) => x.id).sort()).toEqual([PC1, PC2].sort());
+    expect(r.rows.find((x) => x.id === PC1)!.body).toBe('창가 자리 주인 인정합니다');
+  });
+
+  it('재전송은 본문을 덮지 않고, 남의 댓글은 지울 수 없다', async () => {
+    const resend = await pushPostComments(
+      db,
+      [postComment({ id: PC1, m: 'wg', postId: PO1, body: '바꿔치기 시도' })],
+      'wg',
+    );
+    expect(resend.applied).toHaveLength(0);
+    expect(resend.current[0]!.body).toBe('창가 자리 주인 인정합니다');
+
+    const foreign = await pushPostComments(
+      db,
+      [postComment({ id: PC1, m: 'sh', postId: PO1, deletedAt: new Date().toISOString() })],
+      'sh',
+    );
+    expect(foreign.applied).toHaveLength(0);
+    expect(foreign.current[0]!.deletedAt).toBeNull();
+  });
+
+  it('내 댓글 삭제는 tombstone으로 전파되고 부활하지 않는다 (삭제는 단조)', async () => {
+    const del = await pushPostComments(
+      db,
+      [postComment({ id: PC1, m: 'wg', postId: PO1, deletedAt: new Date().toISOString() })],
+      'wg',
+    );
+    expect(del.applied).toHaveLength(1);
+    expect(del.applied[0]!.deletedAt).not.toBeNull();
+
+    const revive = await pushPostComments(db, [postComment({ id: PC1, m: 'wg', postId: PO1 })], 'wg');
+    expect(revive.applied).toHaveLength(0);
+    expect(revive.current[0]!.deletedAt).not.toBeNull();
+  });
+});
+
+describe('post pull 커서 안전 지평선', () => {
+  it('최근 행이 있으면 커서가 지평선에서 멈추고, 재-pull은 최근 행을 다시 싣는다', async () => {
+    const r = await pullPosts(db, null);
+    expect(r.rows.length).toBeGreaterThan(0);
+    expect(r.cursor!.id).toBe(NIL_UUID);
+    const again = await pullPosts(db, r.cursor);
+    expect(again.rows.some((x) => x.id === PO2)).toBe(true);
+  });
+
+  it('오래된 행만 있으면 키셋 커서로 전진하고 재-pull은 비어 있다', async () => {
+    await agePosts();
+    const r = await pullPosts(db, null);
+    expect(r.cursor!.id).not.toBe(NIL_UUID);
+    const r2 = await pullPosts(db, r.cursor);
+    expect(r2.rows).toHaveLength(0);
   });
 });

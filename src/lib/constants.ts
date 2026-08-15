@@ -14,6 +14,8 @@ import type {
   MemberStatus,
   Notification,
   Place,
+  Post,
+  PostComment,
   ReactionSet,
 } from '../../shared/types';
 
@@ -197,6 +199,18 @@ export interface CopySet {
   placeAt: (place: string) => string; // "{장소}에서" — 체크인 카드와 크루 행이 함께 쓴다
   statusStarted: (place: string) => string; // 체크인 시작 토스트
   statusEnded: string; // 체크인 종료 토스트
+  /* 라운지 — 피드에 섞이는 자유 글 (별점·태그·수정 없음) */
+  loungeCta: string; // 작성 시트 제목
+  loungePh: string; // 피드 상단 자유 글 입구(컴포저 행) placeholder
+  loungeEmpty: string;
+  loungeEmptySub: string;
+  loungeComposeSub: string; // 작성 시트 부제
+  loungeBodyPh: string; // 작성 시트 본문 placeholder
+  loungeNoPhotoHint: string; // 사진 없이도 올릴 수 있다는 안내
+  loungePosted: string; // 올리기 토스트
+  loungeDeleted: string; // 글 삭제 토스트
+  loungeDelAsk: string; // 글 삭제 확인 물음
+  loungeDelNote: string;
 }
 
 export const COPY: CopySet = {
@@ -226,6 +240,17 @@ export const COPY: CopySet = {
   placeAt: (p) => `${p}에서`,
   statusStarted: (p) => `${p}에서 공부 시작 — 크루에게 보였어요`,
   statusEnded: '공부를 종료했어요',
+  loungeCta: '라운지에 올리기',
+  loungePh: '도서관 가는 길, 오늘의 책상… 아무거나',
+  loungeEmpty: '아직 올라온 게 없어요',
+  loungeEmptySub: '도서관 가는 길 사진 한 장으로 시작해보세요',
+  loungeComposeSub: '별점도 태그도 없어요 — 그냥 올리면 됩니다',
+  loungeBodyPh: '오늘 뭐 봤는지, 어디 있는지, 아무거나',
+  loungeNoPhotoHint: '사진 없이 글만 올려도 됩니다',
+  loungePosted: '라운지에 올렸어요',
+  loungeDeleted: '글을 삭제했어요',
+  loungeDelAsk: '이 글을 지울까요?',
+  loungeDelNote: '지운 글은 되돌릴 수 없어요.',
 };
 
 export const W = ['일', '월', '화', '수', '목', '금', '토'];
@@ -294,6 +319,41 @@ export function seedComments(): Comment[] {
     c('c7', 's10', 'sh', t, '09:05', '7시 50분이라니. 저는 그 시간에 알람과 싸우는 중'),
     c('c8', 's2', 'kj', t, '15:20', '쉐도잉 3일차에서 도망친 사람이 여기 있습니다'),
     c('c9', 's5', 'kj', y, '20:40', '복습 테스트가 진짜 본체인데'),
+  ];
+}
+
+/** 데모 모드 라운지 글 시드 — id가 UUID가 아니라(p*) 지속·동기화되지 않는다.
+    사진은 데모 기록과 같은 이유로 없다: 보여 줄 실제 바이너리가 없다. */
+export function seedPosts(): Post[] {
+  const t = shiftKey(0), y = shiftKey(-1);
+  const p = (id: string, m: MemberId, day: string, hhmm: string, body: string): Post => {
+    const at = seedAt(day, hhmm);
+    return { id, m, body, photos: [], createdAt: at, updatedAt: at, deletedAt: null };
+  };
+  return [
+    p('p1', 'kj', t, '07:41', '문 열자마자 들어가면 창가 자리가 비어 있다. 이 길이 오늘의 유일한 산책.'),
+    p('p2', 'wg', t, '12:20', '점심 먹고 졸음이 오는 게 학식 탓인지 아침에 세 시간 앉아 있던 탓인지 아직 결론이 안 났다.\n오후에 커피 한 잔 마시고 두 시간 더 앉아 보고, 그래도 졸리면 학식은 무죄다.\n참고로 오늘 메뉴는 제육이었고, 제육은 늘 무죄다.'),
+    p('p3', 'th', y, '21:05', '집중 안 될 때 쓰는 방법 아무거나 하나씩 알려주세요. 저는 지금 의자를 바꿔 앉는 것까지 왔습니다.'),
+    p('p4', 'jj', y, '18:30', '카페 공부는 30분 집중 + 30분 사람 구경이라는 걸 인정하기로 했다.'),
+    p('p5', 'sh', y, '09:10', '책상 정리는 공부 시작을 미루는 가장 완성도 높은 방법이다.'),
+  ];
+}
+
+/** 데모 모드 라운지 글 댓글 시드 — 시드 글(p*)에 달려 메모리 전용이다. */
+export function seedPostComments(): PostComment[] {
+  const t = shiftKey(0), y = shiftKey(-1);
+  const c = (id: string, postId: string, m: MemberId, day: string, hhmm: string, body: string): PostComment => {
+    const at = seedAt(day, hhmm);
+    return { id, postId, m, body, createdAt: at, updatedAt: at, deletedAt: null };
+  };
+  return [
+    c('pc1', 'p1', 'sh', t, '08:02', '이 시간에 이미 도착이라니'),
+    c('pc2', 'p1', 'wg', t, '08:20', '창가 자리 주인 인정합니다'),
+    c('pc3', 'p2', 'jj', t, '12:44', '제육 무죄에 한 표'),
+    c('pc4', 'p3', 'kj', y, '21:20', '타이머 25분 켜고 폰은 가방에 넣기'),
+    c('pc5', 'p3', 'sh', y, '21:38', '저는 책상 앞에 물 한 잔 두는 것'),
+    c('pc6', 'p4', 'wg', y, '19:02', '그 30분도 공부입니다'),
+    c('pc7', 'p5', 'th', y, '09:40', '정리된 책상 사진만 보고 갑니다'),
   ];
 }
 

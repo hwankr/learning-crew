@@ -67,6 +67,113 @@ describe('SyncClient photo pull rearm', () => {
   });
 });
 
+describe('SyncClient 라운지 글 push 정산', () => {
+  const POST_ID = '33333333-3333-4333-8333-333333333333';
+
+  async function push(client: SyncClient): Promise<void> {
+    await (client as unknown as { push(): Promise<void> }).push();
+  }
+
+  it('postResults로 큐를 정산하고 서버 행을 채택한다', async () => {
+    const store = new CrewStore();
+    const client = new SyncClient(store, 'token', 'sh');
+    store.addPost({ id: POST_ID, body: '도서관 도착', photos: [] });
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { posts: { id: string; body: string }[] };
+      expect(body.posts.map((p) => p.id)).toEqual([POST_ID]);
+      const sent = body.posts[0]!;
+      return new Response(JSON.stringify({
+        ok: true,
+        serverTime: '2026-08-15T12:00:00.000Z',
+        results: [], commentResults: [], reactionResults: [], notificationReadResults: [],
+        postResults: [{ id: sent.id, applied: true, row: { ...sent, m: 'sh', photos: [], createdAt: '2026-08-15T11:59:00.000Z', updatedAt: '2026-08-15T12:00:00.000Z', deletedAt: null } }],
+        postCommentResults: [],
+      }), { status: 200 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await push(client);
+    expect(store.pendingPosts()).toHaveLength(0);
+    expect(store.getSnapshot().posts[0]!.updatedAt).toBe('2026-08-15T12:00:00.000Z');
+  });
+
+  it('글 댓글도 같은 요청에 실려 postCommentResults로 정산된다', async () => {
+    const store = new CrewStore();
+    const client = new SyncClient(store, 'token', 'sh');
+    store.addPost({ id: POST_ID, body: '글', photos: [] });
+    store.addPostComment(POST_ID, '첫 댓글');
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as {
+        posts: { id: string }[];
+        postComments: { id: string; postId: string; body: string }[];
+      };
+      expect(body.postComments).toHaveLength(1);
+      const sentPost = body.posts[0]!;
+      const sentComment = body.postComments[0]!;
+      return new Response(JSON.stringify({
+        ok: true,
+        serverTime: '2026-08-15T12:00:00.000Z',
+        results: [], commentResults: [], reactionResults: [], notificationReadResults: [],
+        postResults: [{ id: sentPost.id, applied: true, row: { ...sentPost, m: 'sh', body: '글', photos: [], createdAt: '2026-08-15T11:59:00.000Z', updatedAt: '2026-08-15T12:00:00.000Z', deletedAt: null } }],
+        postCommentResults: [{ id: sentComment.id, applied: true, row: { ...sentComment, m: 'sh', createdAt: '2026-08-15T11:59:30.000Z', updatedAt: '2026-08-15T12:00:00.000Z', deletedAt: null } }],
+      }), { status: 200 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await push(client);
+    expect(store.pendingPosts()).toHaveLength(0);
+    expect(store.pendingPostComments()).toHaveLength(0);
+    expect(store.getSnapshot().postComments.get(POST_ID)![0]!.body).toBe('첫 댓글');
+  });
+
+  it('행 없이 커서만 실린 반쪽 응답은 라운지 커서를 전진시키지 않는다', async () => {
+    const store = new CrewStore();
+    const client = new SyncClient(store, 'token', 'sh');
+    // 댓글 스트림을 가득 찬 페이지(500행)로 만들어 pull 루프가 두 번째 페이지를 돌게 한다
+    const fullComments = Array.from({ length: 500 }, (_, i) => ({
+      id: `44444444-4444-4444-8444-${String(i).padStart(12, '0')}`,
+      entryId: ENTRY_ID,
+      m: 'wg',
+      body: `${i}`,
+      createdAt: '2026-08-15T00:00:00.000Z',
+      updatedAt: '2026-08-15T00:00:01.000Z',
+      deletedAt: null,
+    }));
+    const urls: string[] = [];
+    const fetchMock = vi.fn(async (url: string) => {
+      urls.push(url);
+      const first = urls.length === 1;
+      return new Response(JSON.stringify({
+        rows: [], cursor: null, statuses: [],
+        comments: first ? fullComments : [],
+        commentCursor: { ts: '2026-08-15T00:00:01.000Z', id: fullComments[499]!.id },
+        // 반쪽 응답: posts 배열 없이 커서만 — 프록시·구버전 경계의 뒤섞인 응답을 흉내 낸다
+        ...(first ? { postCursor: { ts: '2026-08-15T09:00:00.000Z', id: ENTRY_ID } } : {}),
+      }), { status: 200 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await pull(client);
+    expect(urls.length).toBeGreaterThan(1);
+    // 두 번째 페이지 요청에 psince가 실렸다면 적용한 적 없는 커서를 믿은 것이다
+    expect(urls[1]).not.toContain('psince');
+  });
+
+  it('보냈는데 postResults가 없으면(구버전 Worker) 큐를 지키고 오류로 재시도를 예약한다', async () => {
+    const store = new CrewStore();
+    const client = new SyncClient(store, 'token', 'sh');
+    store.addPost({ id: POST_ID, body: '유실되면 안 되는 글', photos: [] });
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      ok: true,
+      serverTime: '2026-08-15T12:00:00.000Z',
+    }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(push(client)).rejects.toThrow('push post results missing');
+    expect(store.pendingPosts()).toHaveLength(1); // 큐 보존 — 조용한 유실 방지
+  });
+});
+
 describe('SyncClient 태그 prefs 재시도', () => {
   it('추가 PUT 실패는 dirty를 보류하고 다음 기회에 재전송하며 삭제도 빈 목록으로 전송한다', async () => {
     const store = new CrewStore();

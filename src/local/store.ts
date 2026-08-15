@@ -21,6 +21,8 @@ import type {
   Notification,
   NotificationRead,
   Place,
+  Post,
+  PostComment,
   PullCursor,
   ReactionCursor,
   ReactionEmoji,
@@ -62,6 +64,8 @@ import {
   seedComments,
   seedEntries,
   seedNotifications,
+  seedPostComments,
+  seedPosts,
   seedReactionSets,
   seedStatuses,
 } from '../lib/constants';
@@ -75,6 +79,10 @@ type StoreName =
   | 'reactionQueue'
   | 'notifications'
   | 'notifReadQueue'
+  | 'posts'
+  | 'postQueue'
+  | 'postComments'
+  | 'postCommentQueue'
   | 'photoBlobs'
   | 'photoCache'
   | 'meta';
@@ -89,7 +97,7 @@ const MIGRATED_FLAG = 'migrated-legacy-v2';
 export type SyncPhase = 'ok' | 'offline' | 'error' | 'auth';
 export interface SyncInfo {
   phase: SyncPhase;
-  /** 아직 서버에 안 간 변경 수 (기록·상태·태그 + 댓글·리액션·알림) */
+  /** 아직 서버에 안 간 변경 수 (기록·상태·태그 + 댓글·리액션·알림 + 라운지 글·글 댓글) */
   pending: number;
 }
 
@@ -103,6 +111,10 @@ export interface StoreSnapshot {
   comments: Map<string, Comment[]>;
   /** entryId → 이모지가 하나 이상인 멤버별 리액션 집합 */
   reactions: Map<string, ReactionSet[]>;
+  /** 라운지 글 — 살아있는 행만, (createdAt, id) 내림차순(최신 먼저) */
+  posts: Post[];
+  /** postId → 살아있는 글 댓글, (createdAt, id) 오름차순 */
+  postComments: Map<string, PostComment[]>;
   /** 내 알림 내역 — (createdAt, id) 내림차순(최신 먼저). 읽은 행도 담긴다(내역 화면용) */
   notifications: Notification[];
   /** 안 읽은 알림 수 — 벨 배지가 이 값 하나만 본다 */
@@ -152,6 +164,8 @@ const tagPrefsDirtyKey = (m: MemberId): string => `tagPrefsDirty:${m}`;
 const ENTRY_CURSOR_KEY = 'cursor';
 const COMMENT_CURSOR_KEY = 'commentCursor';
 const REACTION_CURSOR_KEY = 'reactionCursor';
+const POST_CURSOR_KEY = 'postCursor';
+const POST_COMMENT_CURSOR_KEY = 'postCommentCursor';
 /** 알림 커서만 멤버별 키다 — 이 스트림은 토큰 주인 것만 오므로, 같은 기기에서 멤버를
     바꿔 로그인했을 때 공용 커서를 물려받으면 그 멤버의 기존 알림을 영구히 건너뛴다. */
 const notifCursorKey = (m: MemberId): string => `notifCursor:${m}`;
@@ -348,6 +362,30 @@ export function groupComments(list: Iterable<Comment>): Map<string, Comment[]> {
   return out;
 }
 
+/** 스냅샷용 라운지 글 목록 — 살아있는 행만, (createdAt, id) 내림차순(최신 먼저). */
+export function sortPosts(list: Iterable<Post>): Post[] {
+  const out = [...list].filter((p) => !p.deletedAt);
+  out.sort((a, b) =>
+    a.createdAt === b.createdAt ? cmp(b.id, a.id) : cmp(b.createdAt, a.createdAt),
+  );
+  return out;
+}
+
+/** 스냅샷용 글 댓글 맵 — groupComments와 같은 규칙, 키만 postId. */
+export function groupPostComments(list: Iterable<PostComment>): Map<string, PostComment[]> {
+  const out = new Map<string, PostComment[]>();
+  for (const c of list) {
+    if (c.deletedAt) continue;
+    const arr = out.get(c.postId);
+    if (arr) arr.push(c);
+    else out.set(c.postId, [c]);
+  }
+  for (const arr of out.values()) {
+    arr.sort((a, b) => (a.createdAt === b.createdAt ? cmp(a.id, b.id) : cmp(a.createdAt, b.createdAt)));
+  }
+  return out;
+}
+
 /** 스냅샷용 리액션 맵 — 빈 집합("다 뗐다"를 서버에 전하려고 남겨 둔 행)은 뺀다.
     멤버 순서를 고정해야 칩의 이름 목록이 흔들리지 않는다. */
 export function groupReactions(list: Iterable<ReactionSet>): Map<string, ReactionSet[]> {
@@ -380,7 +418,14 @@ export function toggledEmojis(cur: readonly ReactionEmoji[], emoji: ReactionEmoj
     행이 없는 경우를 "정산 가능"으로 보는 건 **메모리 전용 탭 폴백 전용** 규칙이다
     (그 탭에는 공유 IDB라는 진실이 없어 이게 최선이다). 트랜잭션을 열 수 있는 경로는
     `commentAckOutcome`을 쓴다 — 거기서는 행이 없다는 사실 자체가 정보다. */
-export function commentAckSettles(sent: Comment, stored: Comment | undefined): boolean {
+/** "내용 불변 + soft delete" 스트림의 공통 모양 — 댓글·라운지 글·글 댓글이 공유한다.
+    아래 ACK/중복 판정은 이 두 필드만 보므로 세 스트림이 같은 함수를 쓴다. */
+interface Tombstoneable {
+  updatedAt: string;
+  deletedAt: string | null;
+}
+
+export function commentAckSettles(sent: Tombstoneable, stored: Tombstoneable | undefined): boolean {
   return !stored || (stored.deletedAt === null) === (sent.deletedAt === null);
 }
 
@@ -392,8 +437,8 @@ export function commentAckSettles(sent: Comment, stored: Comment | undefined): b
               로컬 복제본에 지워진 댓글이 영구히 남는다 — "삭제는 항상 승리, 부활 없음"을 어긴다.
     'adopt' = 서버 행을 그대로 채택하고 큐를 비운다(댓글은 이길 수 없는 스트림이다). */
 export function commentAckOutcome(
-  sent: Comment,
-  stored: Comment | undefined,
+  sent: Tombstoneable,
+  stored: Tombstoneable | undefined,
 ): 'hold' | 'gone' | 'adopt' {
   if (!stored) return 'gone';
   return commentAckSettles(sent, stored) ? 'adopt' : 'hold';
@@ -430,7 +475,7 @@ export function mergeMyReactionFromDB(i: {
     두 탭이 이미 같은 큐 키를 갖고 있으면 "새로 채택"이 일어나지 않아, 이 예외가 없으면
     다른 탭이 지운 댓글을 살아 있는 채로 계속 push·정산해 삭제가 지연·유실된다. */
 export function adoptCommentFromDB(
-  db: Comment,
+  db: Tombstoneable,
   o: { queued: boolean; adopted: boolean },
 ): boolean {
   return !o.queued || o.adopted || db.deletedAt !== null;
@@ -442,7 +487,7 @@ export function adoptCommentFromDB(
     기록에는 v(서버 리비전)라는 별도 판별값이 있지만 이 스트림에는 없어서, 그때 뒤의 tombstone을
     "이미 받은 행"으로 오인해 영구히 버린다. 닿기 매우 어려운 조건이지만 판별값을 하나 더 보는
     비용이 사실상 0이라 막아 둔다. 내용은 불변이니 삭제 상태가 곧 두 번째 판별값이다. */
-export function isDuplicateComment(cur: Comment, row: Comment): boolean {
+export function isDuplicateComment(cur: Tombstoneable, row: Tombstoneable): boolean {
   return cur.updatedAt === row.updatedAt && (cur.deletedAt === null) === (row.deletedAt === null);
 }
 
@@ -536,6 +581,19 @@ export class CrewStore implements PhotoUploadStorage {
   // 댓글: id → 행. 아직 push 안 된 tombstone도 여기 남는다(스냅샷에서만 걸러진다)
   private comments = new Map<string, Comment>();
   private commentQueue = new Set<string>();
+  // 라운지 글·글 댓글 — 댓글과 같은 "내용 불변" 스트림이라 구조도 같다
+  private posts = new Map<string, Post>();
+  private postQueue = new Set<string>();
+  private postComments = new Map<string, PostComment>();
+  private postCommentQueue = new Set<string>();
+  /** 라운지 파생 스냅샷 캐시 — bump는 사진 진행률(장당 최대 백여 번)에도 오므로,
+      글 목록 정렬·댓글 그룹핑은 두 맵이 실제로 바뀐 다음 bump에서만 다시 계산한다.
+      posts/postComments 맵을 바꾸는 모든 자리가 markLoungeChanged를 불러야 한다. */
+  private loungeCache: { posts: Post[]; postComments: Map<string, PostComment[]> } | null = null;
+  /** 기록 파생 스냅샷 캐시 — 같은 이유. 배열 참조가 bump마다 새로우면 피드의 혼합 정렬
+      useMemo가 무관한 갱신(사진 진행률 등)에도 전부 다시 돈다.
+      this.map을 바꾸는 모든 자리(adoptEntry/adoptMissingEntry/upsert/remove)가 무효화한다. */
+  private entriesCache: Entry[] | null = null;
   // 리액션: reactionKey(entryId, m) → 행. dirty는 entryId만으로 충분하다 — 내 행만 dirty가 된다
   private reactions = new Map<string, ReactionSet>();
   private reactionDirty = new Set<string>();
@@ -578,6 +636,8 @@ export class CrewStore implements PhotoUploadStorage {
     customTags: [],
     comments: new Map(),
     reactions: new Map(),
+    posts: [],
+    postComments: new Map(),
     notifications: [],
     unreadNotifications: 0,
     photoUploads: new Map(),
@@ -595,6 +655,8 @@ export class CrewStore implements PhotoUploadStorage {
   private lastCommentCursor: PullCursor | null = null;
   private lastReactionCursor: ReactionCursor | null = null;
   private lastNotifCursor: PullCursor | null = null;
+  private lastPostCursor: PullCursor | null = null;
+  private lastPostCommentCursor: PullCursor | null = null;
 
   /** SyncClient가 등록 — 로컬 쓰기 직후 push를 예약한다. */
   onLocalWrite: (() => void) | null = null;
@@ -627,6 +689,10 @@ export class CrewStore implements PhotoUploadStorage {
         'reactionQueue',
         'notifications',
         'notifReadQueue',
+        'posts',
+        'postQueue',
+        'postComments',
+        'postCommentQueue',
         'photoBlobs',
         'meta',
       ]);
@@ -641,6 +707,10 @@ export class CrewStore implements PhotoUploadStorage {
         nRows,
         nQKeys,
         nQVals,
+        pRows,
+        pQueue,
+        pcRows,
+        pcQueue,
         photoKeys,
         photoRows,
         st,
@@ -659,6 +729,10 @@ export class CrewStore implements PhotoUploadStorage {
           tx.objectStore('notifications').getAll(),
           tx.objectStore('notifReadQueue').getAllKeys(),
           tx.objectStore('notifReadQueue').getAll(),
+          tx.objectStore('posts').getAll(),
+          tx.objectStore('postQueue').getAllKeys(),
+          tx.objectStore('postComments').getAll(),
+          tx.objectStore('postCommentQueue').getAllKeys(),
           tx.objectStore('photoBlobs').getAllKeys(),
           tx.objectStore('photoBlobs').getAll(),
           tx.objectStore('meta').get(MY_STATUS_KEY),
@@ -671,6 +745,10 @@ export class CrewStore implements PhotoUploadStorage {
       qkeys.forEach((k, i) => this.queue.set(String(k), qvals[i]!));
       for (const c of cRows) this.comments.set(c.id, c);
       for (const k of cQueue) this.commentQueue.add(String(k));
+      for (const p of pRows) this.posts.set(p.id, p);
+      for (const k of pQueue) this.postQueue.add(String(k));
+      for (const c of pcRows) this.postComments.set(c.id, c);
+      for (const k of pcQueue) this.postCommentQueue.add(String(k));
       for (const r of rRows) this.reactions.set(reactionKey(r.entryId, r.m), r);
       for (const k of rQueue) this.reactionDirty.add(String(k));
       // 알림 — 남의 행(멤버 전환 잔재)과 보관 기간 지난 행은 걸러 싣고, 후자는 IDB에서도 지운다
@@ -733,6 +811,8 @@ export class CrewStore implements PhotoUploadStorage {
       for (const c of seedComments()) this.comments.set(c.id, c);
       for (const r of seedReactionSets()) this.reactions.set(reactionKey(r.entryId, r.m), r);
       for (const n of seedNotifications(opts.memberId)) this.notifications.set(n.id, n);
+      for (const p of seedPosts()) this.posts.set(p.id, p);
+      for (const c of seedPostComments()) this.postComments.set(c.id, c);
     }
     if (this.db && !opts.demo && typeof BroadcastChannel !== 'undefined') {
       this.bc = new BroadcastChannel('lc-sync');
@@ -925,9 +1005,16 @@ export class CrewStore implements PhotoUploadStorage {
     this.bc?.postMessage('changed');
   }
 
+  /** 사진 소유 행 — Entry 또는 라운지 글(Post). PhotoBlobRecord.entryId는 이 둘 중 하나의
+      id다(키 이름은 v5 시절의 유산). 소유 참조 판정이 필요한 모든 경로가 이 헬퍼를 지난다 —
+      직접 map만 보면 라운지 글 사진이 "미첨부"로 오인돼 업로드가 밀리거나 정리돼 버린다. */
+  private photoOwnerRow(ownerId: string): Entry | Post | undefined {
+    return this.map.get(ownerId) ?? this.posts.get(ownerId);
+  }
+
   private photoCount(entryId: string, currentPhotos?: readonly EntryPhoto[]): number {
     const photoIds = new Set(
-      (currentPhotos ?? this.map.get(entryId)?.photos ?? []).map((photo) => photo.id),
+      (currentPhotos ?? this.photoOwnerRow(entryId)?.photos ?? []).map((photo) => photo.id),
     );
     for (const [id, row] of this.photoBlobs) {
       // 시트가 명시적으로 뺀 사진은 저장 때 정리된다 — 지금 세면 그 자리를 다시 못 채운다
@@ -945,20 +1032,20 @@ export class CrewStore implements PhotoUploadStorage {
   }
 
   private photoIsAttached(photoId: string, row: PhotoBlobRecord): boolean {
-    const entry = this.map.get(row.entryId);
+    const owner = this.photoOwnerRow(row.entryId);
     return (
-      !!entry &&
-      entry.m === this.me &&
-      !entry.deletedAt &&
-      entry.photos.some((photo) => photo.id === photoId)
+      !!owner &&
+      owner.m === this.me &&
+      !owner.deletedAt &&
+      owner.photos.some((photo) => photo.id === photoId)
     );
   }
 
-  /** 상태 배지도 현재 토큰 주인의 사진만 본다. Entry가 아직 없는 신규 초안은
-      현재 탭에서 만든 행이므로 보이되, 다른 멤버 Entry에 묶인 행은 멤버 전환 뒤 숨긴다. */
+  /** 상태 배지도 현재 토큰 주인의 사진만 본다. 소유 행(Entry/Post)이 아직 없는 신규 초안은
+      현재 탭에서 만든 행이므로 보이되, 다른 멤버 행에 묶인 사진은 멤버 전환 뒤 숨긴다. */
   private photoStatusBelongsToMe(row: PhotoBlobRecord): boolean {
-    const entry = this.map.get(row.entryId);
-    return !entry || entry.m === this.me;
+    const owner = this.photoOwnerRow(row.entryId);
+    return !owner || owner.m === this.me;
   }
 
   /** App이 활성 초안의 참조 목록을 교체하는 경계. 중간에 빈 목록을 거치지 않게
@@ -1340,9 +1427,11 @@ export class CrewStore implements PhotoUploadStorage {
       - previous에서 빠진 참조(삭제는 해당 entryId의 모든 행)는 정리한다.
       - 원격/CAS/다른 탭 채택은 활성 초안 pin을 보호하고, 로컬 저장은 사용자가
         확정한 photos가 최종 참조이므로 pin과 무관하게 정리한다. */
+  /** 소유 행(Entry/Post)의 사진 참조 변화에 맞춰 로컬 blob·캐시 수명을 정리한다.
+      photos와 삭제 상태만 보므로 두 타입이 같은 경로를 쓴다. */
   private reconcileEntryPhotoReferences(
-    previous: Entry | undefined,
-    next: Entry | null,
+    previous: { photos: EntryPhoto[]; deletedAt: string | null } | undefined,
+    next: { photos: EntryPhoto[]; deletedAt: string | null } | null,
     entryId: string,
     protectDraft: boolean,
   ): boolean {
@@ -1382,6 +1471,7 @@ export class CrewStore implements PhotoUploadStorage {
   private adoptEntry(next: Entry, retainTombstone = false): boolean {
     const previous = this.map.get(next.id);
     const photoChanged = this.reconcileEntryPhotoReferences(previous, next, next.id, true);
+    this.markEntriesChanged();
     if (next.deletedAt && !retainTombstone) return this.map.delete(next.id) || photoChanged;
     this.map.set(next.id, next);
     return true;
@@ -1391,6 +1481,7 @@ export class CrewStore implements PhotoUploadStorage {
   private adoptMissingEntry(id: string): boolean {
     const previous = this.map.get(id);
     const photoChanged = this.reconcileEntryPhotoReferences(previous, null, id, true);
+    this.markEntriesChanged();
     return this.map.delete(id) || photoChanged;
   }
 
@@ -1402,6 +1493,7 @@ export class CrewStore implements PhotoUploadStorage {
     const prev = this.map.get(entry.id);
     this.reconcileEntryPhotoReferences(prev, entry, entry.id, false);
     this.map.set(entry.id, entry);
+    this.markEntriesChanged();
     if (UUID_RE.test(entry.id)) {
       const q = this.queue.get(entry.id);
       // 첫 dirty 전환 시의 직전(clean) 상태가 3-way 병합의 base — 이미 dirty면 base 유지
@@ -1466,6 +1558,7 @@ export class CrewStore implements PhotoUploadStorage {
     if (!UUID_RE.test(id)) {
       this.removePhotosForEntry(id);
       this.map.delete(id); // 데모 시드는 그냥 지운다
+      this.markEntriesChanged();
       this.bump();
       return;
     }
@@ -1523,6 +1616,106 @@ export class CrewStore implements PhotoUploadStorage {
     this.bump();
   }
 
+  /* ---------- 라운지 글 (UI 경로 — 댓글과 같은 즉시 반영 규칙) ---------- */
+
+  /** 라운지 글 추가 — 컴포저가 사진 스테이징에 쓴 미리 만든 id를 그대로 받는다.
+      본문 trim·사진 정규화 후 내용이 하나도 없으면 무시한다(빈 글 금지 — 서버와 같은 규칙). */
+  addPost(raw: { id: string; body: string; photos: readonly EntryPhoto[] }): void {
+    const body = raw.body.trim().slice(0, PUSH_LIMITS.postBody).trim();
+    const photos = normalizePhotos([...raw.photos]);
+    if (!body && photos.length === 0) return;
+    const now = new Date().toISOString();
+    const post: Post = {
+      // Worker가 uuid를 소문자로 돌려주므로 저장 키도 소문자여야 ACK·pull이 짝지어진다.
+      // 스테이징된 blob의 entryId가 대문자라도 아래 reconcile의 associatePhoto가 다시 맞춘다.
+      id: canonicalUuid(raw.id),
+      m: this.me,
+      body,
+      photos,
+      createdAt: now, // 작성 기기 시각 — 표시·정렬 기준(서버가 범위만 검증한다)
+      updatedAt: now, // 잠정치 — 서버 시계가 확정한다
+      deletedAt: null,
+    };
+    const prev = this.posts.get(post.id);
+    this.reconcileEntryPhotoReferences(prev, post, post.id, false);
+    this.posts.set(post.id, post);
+    this.markLoungeChanged();
+    if (this.syncable(post.id)) {
+      this.postQueue.add(post.id);
+      this.persistPost(post, true);
+      this.onLocalWrite?.();
+    }
+    this.bump();
+    // 글 push와 바이너리 PUT은 서로 기다리지 않지만, 둘 다 올리기 동작 뒤 시작한다.
+    for (const photo of post.photos) this.photoUploader?.queuePhoto(photo.id);
+  }
+
+  /** 내 글 삭제(soft) — 내 글이 아니면 무시. 사진 blob·캐시도 참조 규칙으로 정리된다. */
+  removePost(id: string): void {
+    const cur = this.posts.get(id);
+    if (!cur || cur.m !== this.me || cur.deletedAt) return;
+    if (!this.syncable(id)) {
+      this.reconcileEntryPhotoReferences(cur, null, id, false);
+      this.posts.delete(id); // 데모 시드는 그냥 지운다
+      this.markLoungeChanged();
+      this.bump();
+      return;
+    }
+    // tombstone은 메모리에 남는다 — 아직 서버에 못 전한 삭제를 pendingPosts가 실어 보낸다
+    const next: Post = { ...cur, deletedAt: new Date().toISOString() };
+    this.reconcileEntryPhotoReferences(cur, next, id, false);
+    this.posts.set(id, next);
+    this.markLoungeChanged();
+    this.postQueue.add(id);
+    this.persistPost(next, true);
+    this.onLocalWrite?.();
+    this.bump();
+  }
+
+  /** 라운지 글 댓글 추가 — addComment와 같은 규칙, 대상만 postId. */
+  addPostComment(postId: string, body: string): void {
+    const text = body.trim().slice(0, PUSH_LIMITS.commentBody).trim();
+    if (!text) return;
+    const now = new Date().toISOString();
+    const c: PostComment = {
+      id: crypto.randomUUID(),
+      // addPost와 같은 이유 — 상관 키가 소문자여야 서버 행과 짝지어진다(데모 id는 그대로다)
+      postId: canonicalUuid(postId),
+      m: this.me,
+      body: text,
+      createdAt: now,
+      updatedAt: now,
+      deletedAt: null,
+    };
+    this.postComments.set(c.id, c);
+    this.markLoungeChanged();
+    if (this.syncable(c.id, c.postId)) {
+      this.postCommentQueue.add(c.id);
+      this.persistPostComment(c, true);
+      this.onLocalWrite?.();
+    }
+    this.bump();
+  }
+
+  /** 내 글 댓글 삭제(soft) — removeComment와 같은 규칙. */
+  removePostComment(id: string): void {
+    const cur = this.postComments.get(id);
+    if (!cur || cur.m !== this.me || cur.deletedAt) return;
+    if (!this.syncable(id, cur.postId)) {
+      this.postComments.delete(id); // 데모 시드는 그냥 지운다
+      this.markLoungeChanged();
+      this.bump();
+      return;
+    }
+    const next: PostComment = { ...cur, deletedAt: new Date().toISOString() };
+    this.postComments.set(id, next);
+    this.markLoungeChanged();
+    this.postCommentQueue.add(id);
+    this.persistPostComment(next, true);
+    this.onLocalWrite?.();
+    this.bump();
+  }
+
   /** 내 리액션 토글 — 이모지 집합 전체를 새 액션 시각으로 갱신한다(LWW).
       집합이 비어도 행은 남긴다: 서버에 "다 뗐다"를 전해야 다른 기기에서도 사라진다. */
   toggleReaction(entryId: string, emoji: ReactionEmoji): void {
@@ -1560,6 +1753,10 @@ export class CrewStore implements PhotoUploadStorage {
     reactionCursor?: ReactionCursor | null;
     notifications?: Notification[];
     notificationCursor?: PullCursor | null;
+    posts?: Post[];
+    postCursor?: PullCursor | null;
+    postComments?: PostComment[];
+    postCommentCursor?: PullCursor | null;
   }): boolean {
     const { rows, statuses, cursor } = p;
     let changed = false;
@@ -1619,6 +1816,49 @@ export class CrewStore implements PhotoUploadStorage {
       }
     }
 
+    // 라운지 글 — 댓글과 같은 불변 스트림 병합. 사진 참조 정리는 삭제 채택 시에만 필요하다.
+    const pPuts: Post[] = [];
+    const pDels: string[] = [];
+    for (const row of p.posts ?? []) {
+      if (this.postQueue.has(row.id)) continue;
+      const cur = this.posts.get(row.id);
+      if (cur && isDuplicateComment(cur, row)) continue; // 커서 안전 윈도우의 중복 전달
+      if (cur && row.updatedAt < cur.updatedAt) continue; // 느린 응답이 더 새 행을 못 되돌리게
+      if (row.deletedAt) {
+        this.reconcileEntryPhotoReferences(cur, row, row.id, true);
+        if (this.posts.delete(row.id)) changed = true;
+        pDels.push(row.id);
+      } else {
+        this.reconcileEntryPhotoReferences(cur, row, row.id, true);
+        this.posts.set(row.id, row);
+        pPuts.push(row);
+        changed = true;
+        // 글도 사진 메타를 나른다 — Entry와 같은 근거로 404 재시도 예산을 다시 연다
+        // (라운지만 보는 탭에서 상대의 늦은 업로드가 끝나면 다음 pull로 사진이 살아나야 한다)
+        entryMetadataChanged = true;
+      }
+    }
+
+    // 라운지 글 댓글 — 위와 같은 규칙, 사진이 없어 참조 정리만 빠진다.
+    const pcPuts: PostComment[] = [];
+    const pcDels: string[] = [];
+    for (const row of p.postComments ?? []) {
+      if (this.postCommentQueue.has(row.id)) continue;
+      const cur = this.postComments.get(row.id);
+      if (cur && isDuplicateComment(cur, row)) continue;
+      if (cur && row.updatedAt < cur.updatedAt) continue;
+      if (row.deletedAt) {
+        if (this.postComments.delete(row.id)) changed = true;
+        pcDels.push(row.id);
+      } else {
+        this.postComments.set(row.id, row);
+        pcPuts.push(row);
+        changed = true;
+      }
+    }
+    // 라운지 두 스트림의 어떤 변이든 파생 스냅샷을 다시 계산해야 한다
+    if (pPuts.length || pDels.length || pcPuts.length || pcDels.length) this.markLoungeChanged();
+
     // 리액션 — 기록×멤버당 1행. 아직 push 안 된 내 토글은 서버 행보다 우선한다.
     const rPuts: ReactionSet[] = [];
     for (const row of p.reactions ?? []) {
@@ -1666,6 +1906,12 @@ export class CrewStore implements PhotoUploadStorage {
     const nc = p.notificationCursor;
     const notifCursorChanged =
       !!nc && (this.lastNotifCursor?.ts !== nc.ts || this.lastNotifCursor?.id !== nc.id);
+    const pc = p.postCursor;
+    const postCursorChanged =
+      !!pc && (this.lastPostCursor?.ts !== pc.ts || this.lastPostCursor?.id !== pc.id);
+    const pcc = p.postCommentCursor;
+    const postCommentCursorChanged =
+      !!pcc && (this.lastPostCommentCursor?.ts !== pcc.ts || this.lastPostCommentCursor?.id !== pcc.id);
     const notify =
       puts.length > 0 ||
       dels.length > 0 ||
@@ -1673,13 +1919,19 @@ export class CrewStore implements PhotoUploadStorage {
       cPuts.length > 0 ||
       cDels.length > 0 ||
       rPuts.length > 0 ||
-      nPuts.length > 0;
+      nPuts.length > 0 ||
+      pPuts.length > 0 ||
+      pDels.length > 0 ||
+      pcPuts.length > 0 ||
+      pcDels.length > 0;
     if (
       !notify &&
       !cursorChanged &&
       !commentCursorChanged &&
       !reactionCursorChanged &&
-      !notifCursorChanged
+      !notifCursorChanged &&
+      !postCursorChanged &&
+      !postCommentCursorChanged
     ) {
       if (changed) this.bump();
       return entryMetadataChanged;
@@ -1688,6 +1940,8 @@ export class CrewStore implements PhotoUploadStorage {
     if (commentCursorChanged) this.lastCommentCursor = cc;
     if (reactionCursorChanged) this.lastReactionCursor = rc;
     if (notifCursorChanged) this.lastNotifCursor = nc;
+    if (postCursorChanged) this.lastPostCursor = pc;
+    if (postCommentCursorChanged) this.lastPostCommentCursor = pcc;
     // 손댈 스토어만 트랜잭션에 넣는다 — 안 쓰는 스토어까지 잠그면 다른 탭의 쓰기를 괜히 막는다.
     // 큐 스토어까지 넣는 이유: 다른 탭의 미전송 쓰기를 같은 트랜잭션 안에서 읽어 피해 가야 한다
     const stores: StoreName[] = ['meta'];
@@ -1695,6 +1949,8 @@ export class CrewStore implements PhotoUploadStorage {
     if (cPuts.length > 0 || cDels.length > 0) stores.push('comments', 'commentQueue');
     if (rPuts.length > 0) stores.push('reactions', 'reactionQueue');
     if (nPuts.length > 0) stores.push('notifications', 'notifReadQueue');
+    if (pPuts.length > 0 || pDels.length > 0) stores.push('posts', 'postQueue');
+    if (pcPuts.length > 0 || pcDels.length > 0) stores.push('postComments', 'postCommentQueue');
     this.txWrite(
       stores,
       async (tx) => {
@@ -1738,6 +1994,37 @@ export class CrewStore implements PhotoUploadStorage {
           }
           if (skipped) this.scheduleRefresh();
         }
+        if (pPuts.length > 0 || pDels.length > 0) {
+          // 댓글과 같은 이유 — 큐에 키가 있는 행(다른 탭의 미전송 쓰기)은 덮지 않는다
+          const queued = new Set((await tx.objectStore('postQueue').getAllKeys()).map(String));
+          const store = tx.objectStore('posts');
+          let skipped = false;
+          for (const row of pPuts) {
+            if (queued.has(row.id)) skipped = true;
+            else void store.put(row);
+          }
+          for (const id of pDels) {
+            if (queued.has(id)) skipped = true;
+            else void store.delete(id);
+          }
+          if (skipped) this.scheduleRefresh();
+        }
+        if (pcPuts.length > 0 || pcDels.length > 0) {
+          const queued = new Set(
+            (await tx.objectStore('postCommentQueue').getAllKeys()).map(String),
+          );
+          const store = tx.objectStore('postComments');
+          let skipped = false;
+          for (const row of pcPuts) {
+            if (queued.has(row.id)) skipped = true;
+            else void store.put(row);
+          }
+          for (const id of pcDels) {
+            if (queued.has(id)) skipped = true;
+            else void store.delete(id);
+          }
+          if (skipped) this.scheduleRefresh();
+        }
         if (nPuts.length > 0) {
           // 다른 탭이 남긴 미전송 읽음(IDB 큐)이 이 세대의 행을 읽은 것이면 읽음을 보존한 채
           // 서버의 새 내용을 쓴다 — put을 통째로 건너뛰면 커서만 전진해 IDB 행이 낡은 채
@@ -1764,6 +2051,8 @@ export class CrewStore implements PhotoUploadStorage {
         if (cc) void meta.put(cc, COMMENT_CURSOR_KEY);
         if (rc) void meta.put(rc, REACTION_CURSOR_KEY);
         if (nc) void meta.put(nc, notifCursorKey(this.me));
+        if (pc) void meta.put(pc, POST_CURSOR_KEY);
+        if (pcc) void meta.put(pcc, POST_COMMENT_CURSOR_KEY);
       },
       notify,
     );
@@ -1869,6 +2158,121 @@ export class CrewStore implements PhotoUploadStorage {
     this.commentQueue.delete(id);
     this.txWrite(['commentQueue'], (tx) => {
       void tx.objectStore('commentQueue').delete(id);
+    });
+    this.bump();
+  }
+
+  /* ---------- 라운지 글·글 댓글 push 경로 (댓글과 같은 정산 규칙) ---------- */
+
+  /** 큐에 있는 내 글 행. 행이 없는 고아 키는 정리한다(pendingComments와 같은 이유). */
+  pendingPosts(): Post[] {
+    const out: Post[] = [];
+    for (const id of [...this.postQueue]) {
+      const row = this.posts.get(id);
+      if (!row) {
+        this.dropPostFromQueue(id);
+        continue;
+      }
+      out.push(row);
+    }
+    return out;
+  }
+
+  /** 글 push 정산 — ackComment와 같은 판정(IDB 저장 행 기준, 삭제는 단조·부활 없음).
+      글은 사진을 지니므로 서버 행 채택 시 참조 규칙으로 blob·캐시 수명도 함께 정리한다
+      (서버가 톰스톤된 사진을 걷어냈거나 빈 글을 tombstone으로 강등했을 수 있다). */
+  ackPost(sent: Post, server: Post): void {
+    const settleMemory = (): void => {
+      this.postQueue.delete(sent.id);
+      this.reconcileEntryPhotoReferences(this.posts.get(sent.id), server, sent.id, true);
+      if (server.deletedAt) this.posts.delete(sent.id);
+      else this.posts.set(sent.id, server);
+      this.markLoungeChanged();
+      this.bump();
+    };
+    const started = this.txWrite(['posts', 'postQueue'], async (tx) => {
+      const stored = await tx.objectStore('posts').get(sent.id);
+      const outcome = commentAckOutcome(sent, stored);
+      if (outcome === 'hold') {
+        this.scheduleRefresh();
+        return;
+      }
+      if (outcome === 'gone') {
+        // 다른 탭이 이미 tombstone까지 정산했다 — 큐만 지우고 서버 행을 되살리지 않는다
+        void tx.objectStore('postQueue').delete(sent.id);
+        this.postQueue.delete(sent.id);
+        this.reconcileEntryPhotoReferences(this.posts.get(sent.id), null, sent.id, true);
+        this.posts.delete(sent.id);
+        this.markLoungeChanged();
+        this.bump();
+        return;
+      }
+      if (server.deletedAt) void tx.objectStore('posts').delete(sent.id);
+      else void tx.objectStore('posts').put(server);
+      void tx.objectStore('postQueue').delete(sent.id);
+      settleMemory();
+    });
+    if (!started && commentAckSettles(sent, this.posts.get(sent.id))) settleMemory();
+  }
+
+  /** 큐에 있는 내 글 댓글 행 — pendingComments와 같은 고아 정리 포함. */
+  pendingPostComments(): PostComment[] {
+    const out: PostComment[] = [];
+    for (const id of [...this.postCommentQueue]) {
+      const c = this.postComments.get(id);
+      if (!c) {
+        this.dropPostCommentFromQueue(id);
+        continue;
+      }
+      out.push(c);
+    }
+    return out;
+  }
+
+  /** 글 댓글 push 정산 — ackComment와 같은 규칙. */
+  ackPostComment(sent: PostComment, server: PostComment): void {
+    const settleMemory = (): void => {
+      this.postCommentQueue.delete(sent.id);
+      if (server.deletedAt) this.postComments.delete(sent.id);
+      else this.postComments.set(sent.id, server);
+      this.markLoungeChanged();
+      this.bump();
+    };
+    const started = this.txWrite(['postComments', 'postCommentQueue'], async (tx) => {
+      const stored = await tx.objectStore('postComments').get(sent.id);
+      const outcome = commentAckOutcome(sent, stored);
+      if (outcome === 'hold') {
+        this.scheduleRefresh();
+        return;
+      }
+      if (outcome === 'gone') {
+        void tx.objectStore('postCommentQueue').delete(sent.id);
+        this.postCommentQueue.delete(sent.id);
+        this.postComments.delete(sent.id);
+        this.markLoungeChanged();
+        this.bump();
+        return;
+      }
+      if (server.deletedAt) void tx.objectStore('postComments').delete(sent.id);
+      else void tx.objectStore('postComments').put(server);
+      void tx.objectStore('postCommentQueue').delete(sent.id);
+      settleMemory();
+    });
+    if (!started && commentAckSettles(sent, this.postComments.get(sent.id))) settleMemory();
+  }
+
+  dropPostFromQueue(id: string): void {
+    this.postQueue.delete(id);
+    this.txWrite(['postQueue'], (tx) => {
+      void tx.objectStore('postQueue').delete(id);
+    });
+    this.bump();
+  }
+
+  dropPostCommentFromQueue(id: string): void {
+    this.postCommentQueue.delete(id);
+    this.txWrite(['postCommentQueue'], (tx) => {
+      void tx.objectStore('postCommentQueue').delete(id);
     });
     this.bump();
   }
@@ -2094,17 +2498,28 @@ export class CrewStore implements PhotoUploadStorage {
     comments: PullCursor | null;
     reactions: ReactionCursor | null;
     notifications: PullCursor | null;
+    posts: PullCursor | null;
+    postComments: PullCursor | null;
   }> {
-    const none = { entries: null, comments: null, reactions: null, notifications: null };
+    const none = {
+      entries: null,
+      comments: null,
+      reactions: null,
+      notifications: null,
+      posts: null,
+      postComments: null,
+    };
     const db = this.db;
     if (!db) return none;
     try {
       const tx = db.transaction('meta');
-      const [e, c, r, n] = await Promise.all([
+      const [e, c, r, n, p, pc] = await Promise.all([
         tx.objectStore('meta').get(ENTRY_CURSOR_KEY),
         tx.objectStore('meta').get(COMMENT_CURSOR_KEY),
         tx.objectStore('meta').get(REACTION_CURSOR_KEY),
         tx.objectStore('meta').get(notifCursorKey(this.me)),
+        tx.objectStore('meta').get(POST_CURSOR_KEY),
+        tx.objectStore('meta').get(POST_COMMENT_CURSOR_KEY),
       ]);
       await tx.done;
       return {
@@ -2112,6 +2527,8 @@ export class CrewStore implements PhotoUploadStorage {
         comments: asPullCursor(c),
         reactions: asReactionCursor(r),
         notifications: asPullCursor(n),
+        posts: asPullCursor(p),
+        postComments: asPullCursor(pc),
       };
     } catch {
       return none; // 닫힌 DB(다른 탭 업그레이드에 양보) — 처음부터 pull해도 안전하다
@@ -2132,6 +2549,22 @@ export class CrewStore implements PhotoUploadStorage {
     this.txWrite(['comments', 'commentQueue'], (tx) => {
       void tx.objectStore('comments').put(c);
       if (queued) void tx.objectStore('commentQueue').put(true, c.id);
+    });
+  }
+
+  /** 라운지 글 행 + 큐 표시를 한 트랜잭션으로 — persistComment와 같은 이유. */
+  private persistPost(p: Post, queued: boolean): void {
+    this.txWrite(['posts', 'postQueue'], (tx) => {
+      void tx.objectStore('posts').put(p);
+      if (queued) void tx.objectStore('postQueue').put(true, p.id);
+    });
+  }
+
+  /** 라운지 글 댓글 행 + 큐 표시를 한 트랜잭션으로. */
+  private persistPostComment(c: PostComment, queued: boolean): void {
+    this.txWrite(['postComments', 'postCommentQueue'], (tx) => {
+      void tx.objectStore('postComments').put(c);
+      if (queued) void tx.objectStore('postCommentQueue').put(true, c.id);
     });
   }
 
@@ -2208,6 +2641,10 @@ export class CrewStore implements PhotoUploadStorage {
         'reactionQueue',
         'notifications',
         'notifReadQueue',
+        'posts',
+        'postQueue',
+        'postComments',
+        'postCommentQueue',
         'photoBlobs',
         'meta',
       ]);
@@ -2222,6 +2659,10 @@ export class CrewStore implements PhotoUploadStorage {
         dbNotifs,
         dbNQKeys,
         dbNQVals,
+        dbPosts,
+        dbPQueue,
+        dbPostComments,
+        dbPCQueue,
         dbPhotoKeys,
         dbPhotoRows,
         dbSt,
@@ -2239,6 +2680,10 @@ export class CrewStore implements PhotoUploadStorage {
         tx.objectStore('notifications').getAll(),
         tx.objectStore('notifReadQueue').getAllKeys(),
         tx.objectStore('notifReadQueue').getAll(),
+        tx.objectStore('posts').getAll(),
+        tx.objectStore('postQueue').getAllKeys(),
+        tx.objectStore('postComments').getAll(),
+        tx.objectStore('postCommentQueue').getAllKeys(),
         tx.objectStore('photoBlobs').getAllKeys(),
         tx.objectStore('photoBlobs').getAll(),
         tx.objectStore('meta').get(MY_STATUS_KEY),
@@ -2380,6 +2825,67 @@ export class CrewStore implements PhotoUploadStorage {
         }
       }
 
+      // 라운지 글 — 댓글과 같은 병합. 채택 시 사진 참조 규칙으로 blob 수명도 맞춘다.
+      const adoptedP = new Set<string>();
+      for (const k of dbPQueue) {
+        const id = String(k);
+        if (this.postQueue.has(id)) continue;
+        this.postQueue.add(id);
+        adoptedP.add(id);
+        changed = true;
+      }
+      const dbPostIds = new Set<string>();
+      for (const row of dbPosts) {
+        dbPostIds.add(row.id);
+        if (!adoptCommentFromDB(row, { queued: this.postQueue.has(row.id), adopted: adoptedP.has(row.id) }))
+          continue;
+        const cur = this.posts.get(row.id);
+        if (!cur || cur.updatedAt !== row.updatedAt || (cur.deletedAt === null) !== (row.deletedAt === null)) {
+          this.reconcileEntryPhotoReferences(cur, row, row.id, true);
+          this.posts.set(row.id, row);
+          this.markLoungeChanged();
+          changed = true;
+        }
+      }
+      // IDB에서 사라진 글(다른 탭이 tombstone을 ack) — 내 큐에도 없으면 메모리에서도 제거
+      for (const [id, row] of [...this.posts]) {
+        if (!dbPostIds.has(id) && !this.postQueue.has(id) && this.syncable(id)) {
+          this.reconcileEntryPhotoReferences(row, null, id, true);
+          this.posts.delete(id);
+          this.markLoungeChanged();
+          changed = true;
+        }
+      }
+
+      // 라운지 글 댓글 — 댓글과 같은 병합 그대로.
+      const adoptedPC = new Set<string>();
+      for (const k of dbPCQueue) {
+        const id = String(k);
+        if (this.postCommentQueue.has(id)) continue;
+        this.postCommentQueue.add(id);
+        adoptedPC.add(id);
+        changed = true;
+      }
+      const dbPostCommentIds = new Set<string>();
+      for (const c of dbPostComments) {
+        dbPostCommentIds.add(c.id);
+        if (!adoptCommentFromDB(c, { queued: this.postCommentQueue.has(c.id), adopted: adoptedPC.has(c.id) }))
+          continue;
+        const cur = this.postComments.get(c.id);
+        if (!cur || cur.updatedAt !== c.updatedAt || (cur.deletedAt === null) !== (c.deletedAt === null)) {
+          this.postComments.set(c.id, c);
+          this.markLoungeChanged();
+          changed = true;
+        }
+      }
+      for (const [id, c] of [...this.postComments]) {
+        if (!dbPostCommentIds.has(id) && !this.postCommentQueue.has(id) && this.syncable(id, c.postId)) {
+          this.postComments.delete(id);
+          this.markLoungeChanged();
+          changed = true;
+        }
+      }
+
       // 리액션 — 내 행은 액션 시각(actedAt)으로, 남의 행은 서버 시계(updatedAt)로 판정한다
       const dbRDirty = new Set([...dbRQueue].map(String));
       let tookDirty = false; // 다른 탭이 남긴 미전송 토글을 이 탭이 떠맡았는가
@@ -2450,14 +2956,18 @@ export class CrewStore implements PhotoUploadStorage {
 
       if (changed) this.bump();
       if (tookDirty || tookTagPrefsDirty) this.onLocalWrite?.();
-      for (const id of adoptedPhotos) {
-        const row = this.photoBlobs.get(id);
-        if (
-          row &&
-          this.photoIsAttached(id, row) &&
-          (row.state === 'wait' || row.state === 'up')
-        ) {
-          this.photoUploader?.queuePhoto(id);
+      /* 업로드 인계는 "이번에 처음 본 blob"만으로는 부족하다: 지난 refresh에서 소유 행 없이
+         채택된 blob은 그때 첨부 판정에 떨어졌고, 소유 행(Entry/Post)이 나중 refresh에 오면
+         adoptedPhotos에 없어 아무도 큐잉하지 않는다 — 원 탭이 닫히면 영원히 시작되지 않는다.
+         queuePhoto는 done/fail/진행 중을 스스로 거르므로(멱등) 미완료 첨부 전체를 훑는다. */
+      if (changed || adoptedPhotos.length > 0) {
+        for (const [id, row] of this.photoBlobs) {
+          if (
+            this.photoIsAttached(id, row) &&
+            (row.state === 'wait' || row.state === 'up')
+          ) {
+            this.photoUploader?.queuePhoto(id);
+          }
         }
       }
     } catch {
@@ -2512,15 +3022,29 @@ export class CrewStore implements PhotoUploadStorage {
     await this.db.put('meta', true, MIGRATED_FLAG);
   }
 
+  private markLoungeChanged(): void {
+    this.loungeCache = null;
+  }
+
+  private markEntriesChanged(): void {
+    this.entriesCache = null;
+  }
+
   private bump(): void {
     const notifications = sortNotifications(this.notifications.values(), Date.now());
+    const lounge = (this.loungeCache ??= {
+      posts: sortPosts(this.posts.values()),
+      postComments: groupPostComments(this.postComments.values()),
+    });
     this.snapshot = {
       rev: this.snapshot.rev + 1,
-      entries: [...this.map.values()].filter((e) => !e.deletedAt),
+      entries: (this.entriesCache ??= [...this.map.values()].filter((e) => !e.deletedAt)),
       statuses: Object.fromEntries(this.statuses) as Partial<Record<MemberId, MemberStatus>>,
       customTags: [...this.tagPrefs.tags],
       comments: groupComments(this.comments.values()),
       reactions: groupReactions(this.reactions.values()),
+      posts: lounge.posts,
+      postComments: lounge.postComments,
       notifications,
       unreadNotifications: notifications.filter((n) => n.readAt === null).length,
       photoUploads: new Map(
@@ -2538,7 +3062,9 @@ export class CrewStore implements PhotoUploadStorage {
           (this.tagPrefsDirty ? 1 : 0) +
           this.commentQueue.size +
           this.reactionDirty.size +
-          this.notifReadQueue.size,
+          this.notifReadQueue.size +
+          this.postQueue.size +
+          this.postCommentQueue.size,
       },
     };
     for (const fn of this.listeners) fn();

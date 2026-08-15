@@ -8,6 +8,10 @@ import {
   pullSince,
   pushComments,
   pullComments,
+  pushPosts,
+  pullPosts,
+  pushPostComments,
+  pullPostComments,
   pushReactions,
   pullReactions,
   pullNotifications,
@@ -37,6 +41,7 @@ import {
   isFreshSince,
   normalizeCustomTagList,
   normalizeEmojis,
+  normalizePhotos,
   type Comment,
   type Entry,
   type MemberId,
@@ -44,6 +49,8 @@ import {
   type NotifPrefs,
   type NotifPrefsResponse,
   type NotificationRead,
+  type Post,
+  type PostComment,
   type PullCursor,
   type PullResponse,
   type PushRequest,
@@ -239,6 +246,40 @@ function invalidCommentReason(x: Comment, me: MemberId): string | null {
   return null;
 }
 
+/** 라운지 글 검증 — 본문 또는 사진 중 하나는 있어야 한다(둘 다 빈 글은 실수).
+    단 삭제 행(tombstone)은 내용이 비어도 통과한다 — filter 트리거가 사진을 걸러낸
+    행의 삭제 재전송까지 막으면 클라이언트 큐가 영원히 정산되지 않는다. */
+function invalidPostReason(x: Post, me: MemberId): string | null {
+  if (!x || typeof x !== 'object') return 'not an object';
+  if (typeof x.id !== 'string' || !UUID_RE.test(x.id)) return 'bad post id';
+  if (x.m !== me) return 'not your post';
+  if (typeof x.body !== 'string') return 'bad post body';
+  // 한도는 실제로 저장되는 trim 결과 기준이다 — 원문 기준이면 앞뒤 공백 때문에
+  // 정규화 후 한도 이내인 글이 거부된다. 원문 자체는 공백 패딩 남용만 막는 느슨한 상한.
+  if (x.body.length > PUSH_LIMITS.postBody * 2) return 'bad post body';
+  if (x.body.trim().length > PUSH_LIMITS.postBody) return 'bad post body';
+  if (!Array.isArray(x.photos)) return 'bad post photos';
+  if (x.deletedAt === null) {
+    if (x.body.trim().length === 0 && normalizePhotos(x.photos).length === 0) return 'empty post';
+  } else if (typeof x.deletedAt !== 'string') {
+    return 'bad post deletedAt';
+  }
+  return null;
+}
+
+/** 라운지 글 댓글 검증 — 기록 댓글과 같은 규칙, 대상만 postId. */
+function invalidPostCommentReason(x: PostComment, me: MemberId): string | null {
+  if (!x || typeof x !== 'object') return 'not an object';
+  if (typeof x.id !== 'string' || !UUID_RE.test(x.id)) return 'bad comment id';
+  if (typeof x.postId !== 'string' || !UUID_RE.test(x.postId)) return 'bad comment postId';
+  if (x.m !== me) return 'not your comment';
+  if (typeof x.body !== 'string') return 'bad comment body';
+  const len = x.body.trim().length;
+  if (len === 0 || len > PUSH_LIMITS.commentBody) return 'bad comment body';
+  if (x.deletedAt !== null && typeof x.deletedAt !== 'string') return 'bad comment deletedAt';
+  return null;
+}
+
 function invalidReactionReason(x: ReactionSet, me: MemberId): string | null {
   if (!x || typeof x !== 'object') return 'not an object';
   if (typeof x.entryId !== 'string' || !UUID_RE.test(x.entryId)) return 'bad reaction entryId';
@@ -268,10 +309,12 @@ app.post('/api/sync/push', async (c) => {
   } catch {
     return c.json({ error: 'invalid json' }, 400);
   }
-  // 네 스트림이 한 요청에 함께 온다. 구버전 클라이언트는 entries만 보내므로 나머지는 없으면 빈 배열.
+  // 여섯 스트림이 한 요청에 함께 온다. 구버전 클라이언트는 entries만 보내므로 나머지는 없으면 빈 배열.
   const reqComments = req.comments ?? [];
   const reqReactions = req.reactions ?? [];
   const reqReads = req.notificationReads ?? [];
+  const reqPosts = req.posts ?? [];
+  const reqPostComments = req.postComments ?? [];
   if (
     !Array.isArray(req.entries) ||
     req.entries.length > PUSH_LIMITS.batch ||
@@ -280,7 +323,11 @@ app.post('/api/sync/push', async (c) => {
     !Array.isArray(reqReactions) ||
     reqReactions.length > PUSH_LIMITS.batch ||
     !Array.isArray(reqReads) ||
-    reqReads.length > PUSH_LIMITS.batch
+    reqReads.length > PUSH_LIMITS.batch ||
+    !Array.isArray(reqPosts) ||
+    reqPosts.length > PUSH_LIMITS.batch ||
+    !Array.isArray(reqPostComments) ||
+    reqPostComments.length > PUSH_LIMITS.batch
   ) {
     return c.json({ error: 'bad batch' }, 400);
   }
@@ -327,6 +374,41 @@ app.post('/api/sync/push', async (c) => {
       deletedAt: x.deletedAt === null ? null : normalizeAt(x.deletedAt, now),
     });
   }
+  const seenPosts = new Set<string>();
+  const pRows: Post[] = [];
+  for (const x of reqPosts) {
+    const reason = invalidPostReason(x, me);
+    if (reason) return c.json({ error: reason, id: (x as { id?: string })?.id }, 400);
+    // 댓글과 같은 이유의 소문자 정규화 — 검사 키·저장 키·응답 키가 전부 같은 형태여야 한다
+    const id = canonicalUuid(x.id);
+    if (seenPosts.has(id)) return c.json({ error: 'duplicate id', id }, 400);
+    seenPosts.add(id);
+    pRows.push({
+      ...x,
+      id,
+      body: x.body.trim(),
+      photos: normalizePhotos(x.photos),
+      createdAt: normalizeCreatedAt(x.createdAt, now),
+      deletedAt: x.deletedAt === null ? null : normalizeAt(x.deletedAt, now),
+    });
+  }
+  const seenPostComments = new Set<string>();
+  const pcRows: PostComment[] = [];
+  for (const x of reqPostComments) {
+    const reason = invalidPostCommentReason(x, me);
+    if (reason) return c.json({ error: reason, id: (x as { id?: string })?.id }, 400);
+    const id = canonicalUuid(x.id);
+    if (seenPostComments.has(id)) return c.json({ error: 'duplicate id', id }, 400);
+    seenPostComments.add(id);
+    pcRows.push({
+      ...x,
+      id,
+      postId: canonicalUuid(x.postId),
+      body: x.body.trim(),
+      createdAt: normalizeCreatedAt(x.createdAt, now),
+      deletedAt: x.deletedAt === null ? null : normalizeAt(x.deletedAt, now),
+    });
+  }
   const seenReactions = new Set<string>();
   const rRows: ReactionSet[] = [];
   for (const x of reqReactions) {
@@ -353,16 +435,18 @@ app.post('/api/sync/push', async (c) => {
     else withV.push(e);
   }
   const db = drizzle(neon(c.env.DATABASE_URL));
-  const [outcome, legacyApplied, cOut, rOut, readResults] = await Promise.all([
+  const [outcome, legacyApplied, cOut, rOut, readResults, pOut, pcOut] = await Promise.all([
     pushEntries(db, withV, me),
     pushEntriesLegacy(db, legacy, me),
     pushComments(db, cRows, me),
     pushReactions(db, rRows),
     markNotificationsRead(db, me, reads),
+    pushPosts(db, pRows, me),
+    pushPostComments(db, pcRows, me),
   ]);
-  // entry 문장의 DB 트리거가 빠진 photo id를 같은 트랜잭션에서 톰스톤으로
+  // entry/post 문장의 DB 트리거가 빠진 photo id를 같은 트랜잭션에서 톰스톤으로
   // 남겼다. 응답은 막지 않고 빠른 삭제를 시도하되, 실패한 행은 cron이 재시도한다.
-  if (entryRows.length > 0) {
+  if (entryRows.length > 0 || pRows.length > 0) {
     c.executionCtx.waitUntil(
       cleanupPhotoTombstones(db, c.env.PHOTOS).catch((error: unknown) => {
         console.error(JSON.stringify({
@@ -400,6 +484,14 @@ app.post('/api/sync/push', async (c) => {
       ...rOut.current.map((row) => ({ entryId: row.entryId, m: row.m, applied: false, row })),
     ],
     notificationReadResults: readResults,
+    postResults: [
+      ...pOut.applied.map((row) => ({ id: row.id, applied: true, row })),
+      ...pOut.current.map((row) => ({ id: row.id, applied: false, row })),
+    ],
+    postCommentResults: [
+      ...pcOut.applied.map((row) => ({ id: row.id, applied: true, row })),
+      ...pcOut.current.map((row) => ({ id: row.id, applied: false, row })),
+    ],
   };
   return c.json(res);
 });
@@ -426,13 +518,29 @@ app.get('/api/sync/pull', async (c) => {
   const nsinceId = c.req.query('nsinceId');
   const nCursor: PullCursor | null =
     nsince && nsinceId && UUID_RE.test(nsinceId) ? { ts: nsince, id: nsinceId } : null;
+  // 시각까지 형식을 본다 — 깨진 ts는 queries의 ::timestamptz 캐스트에서 500이 되어
+  // 커서 하나가 pull 전체를 죽인다. 형식이 어긋나면 그 스트림만 처음부터 돌면 된다.
+  const psince = c.req.query('psince');
+  const psinceId = c.req.query('psinceId');
+  const pCursor: PullCursor | null =
+    psince && Number.isFinite(Date.parse(psince)) && psinceId && UUID_RE.test(psinceId)
+      ? { ts: psince, id: psinceId }
+      : null;
+  const pcsince = c.req.query('pcsince');
+  const pcsinceId = c.req.query('pcsinceId');
+  const pcCursor: PullCursor | null =
+    pcsince && Number.isFinite(Date.parse(pcsince)) && pcsinceId && UUID_RE.test(pcsinceId)
+      ? { ts: pcsince, id: pcsinceId }
+      : null;
   const db = drizzle(neon(c.env.DATABASE_URL));
-  const [result, statuses, cRes, rRes, nRes] = await Promise.all([
+  const [result, statuses, cRes, rRes, nRes, pRes, pcRes] = await Promise.all([
     pullSince(db, cursor),
     allStatuses(db),
     pullComments(db, cCursor),
     pullReactions(db, rCursor),
     pullNotifications(db, c.get('memberId'), nCursor),
+    pullPosts(db, pCursor),
+    pullPostComments(db, pcCursor),
   ]);
   return c.json({
     ...result,
@@ -443,6 +551,10 @@ app.get('/api/sync/pull', async (c) => {
     reactionCursor: rRes.cursor,
     notifications: nRes.rows,
     notificationCursor: nRes.cursor,
+    posts: pRes.rows,
+    postCursor: pRes.cursor,
+    postComments: pcRes.rows,
+    postCommentCursor: pcRes.cursor,
   } satisfies PullResponse);
 });
 

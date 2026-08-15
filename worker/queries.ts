@@ -7,6 +7,8 @@ import {
   notifPrefs,
   notifications,
   photoTombstones,
+  postComments,
+  posts,
   pushSubs,
   reactions,
   status,
@@ -35,6 +37,8 @@ import type {
   Notification,
   NotificationRead,
   Place,
+  Post,
+  PostComment,
   PullCursor,
   ReactionCursor,
   ReactionEmoji,
@@ -520,6 +524,179 @@ export async function pullComments(
   const move = holdOrAdvance(horizonMs, cursor?.ts ?? null, rows.length, last?.updatedAt);
   return {
     rows: rows.map(toComment),
+    cursor:
+      move === 'horizon'
+        ? { ts: new Date(horizonMs).toISOString(), id: NIL_UUID }
+        : move === 'keep'
+          ? cursor
+          : { ts: last!.updatedAt, id: last!.id },
+  };
+}
+
+/* ---------- 라운지 글 ---------- */
+
+function toPost(r: typeof posts.$inferSelect): Post {
+  return {
+    id: r.id,
+    m: r.memberId as MemberId,
+    body: r.body,
+    // jsonb는 손상된 값도 담을 수 있으므로 pull 경계에서 공용 규칙으로 다시 맞춘다.
+    photos: normalizePhotos(r.photos),
+    createdAt: isoTs(r.createdAt),
+    updatedAt: isoTs(r.updatedAt),
+    deletedAt: r.deletedAt === null ? null : isoTs(r.deletedAt),
+  };
+}
+
+export interface PostPushOutcome {
+  /** 반영된 행 — 서버가 확정한 updated_at을 담아 돌려준다. */
+  applied: Post[];
+  /** 반영되지 않은 행의 서버 현재 값 — 클라이언트는 이걸 그대로 채택하고 큐를 비운다. */
+  current: Post[];
+}
+
+/** 라운지 글 업서트 — 댓글과 같은 불변 규약: 본문·사진·작성시각은 절대 갱신하지 않는다.
+    갱신되는 건 삭제(tombstone)뿐이고, 그것도 "내 글이면서 아직 살아 있는 행"만 —
+    삭제가 단조라 지워진 글은 어떤 재전송으로도 되살아나지 않는다.
+    (filter 트리거가 INSERT 경계에서 톰스톤된 사진 id를 걸러내므로, 지워진 사진을
+    되살리는 push도 DB에는 걸러진 배열로 저장된다.) */
+export async function pushPosts(db: Db, rows: Post[], me: MemberId): Promise<PostPushOutcome> {
+  if (rows.length === 0) return { applied: [], current: [] };
+  const returned = await db
+    .insert(posts)
+    .values(
+      rows.map((p) => ({
+        id: p.id,
+        memberId: p.m,
+        body: p.body,
+        photos: p.photos,
+        createdAt: p.createdAt,
+        deletedAt: p.deletedAt,
+      })),
+    )
+    .onConflictDoUpdate({
+      target: posts.id,
+      set: { deletedAt: sql`excluded.deleted_at`, updatedAt: sql`now()` },
+      setWhere: sql`${posts.memberId} = ${me} and ${posts.deletedAt} is null and excluded.deleted_at is not null`,
+    })
+    .returning();
+  const appliedIds = new Set(returned.map((r) => r.id));
+  const missed = rows.filter((p) => !appliedIds.has(p.id)).map((p) => p.id);
+  // 반영되지 않은 id는 이미 있는 행(같은 내용 재전송·이미 삭제됨·남의 글) — 현재 행을 읽어 돌려준다
+  const current = missed.length
+    ? await db.select().from(posts).where(inArray(posts.id, missed))
+    : [];
+  return { applied: returned.map(toPost), current: current.map(toPost) };
+}
+
+export interface PostPullResult {
+  rows: Post[];
+  cursor: PullCursor | null;
+}
+
+/** 라운지 글 변경분 — 기록 스트림과 같은 (updated_at, id) 키셋 + 90초 안전 지평선 규칙. */
+export async function pullPosts(db: Db, cursor: PullCursor | null): Promise<PostPullResult> {
+  const horizonMs = Date.now() - HORIZON_MS;
+  const rows = await db
+    .select()
+    .from(posts)
+    .where(
+      cursor
+        ? sql`(${posts.updatedAt}, ${posts.id}) > (${cursor.ts}::timestamptz, ${cursor.id}::uuid)`
+        : undefined,
+    )
+    .orderBy(posts.updatedAt, posts.id)
+    .limit(PAGE);
+  const last = rows[rows.length - 1];
+  const move = holdOrAdvance(horizonMs, cursor?.ts ?? null, rows.length, last?.updatedAt);
+  return {
+    rows: rows.map(toPost),
+    cursor:
+      move === 'horizon'
+        ? { ts: new Date(horizonMs).toISOString(), id: NIL_UUID }
+        : move === 'keep'
+          ? cursor
+          : { ts: last!.updatedAt, id: last!.id },
+  };
+}
+
+/* ---------- 라운지 글 댓글 ---------- */
+
+function toPostComment(r: typeof postComments.$inferSelect): PostComment {
+  return {
+    id: r.id,
+    postId: r.postId,
+    m: r.memberId as MemberId,
+    body: r.body,
+    createdAt: isoTs(r.createdAt),
+    updatedAt: isoTs(r.updatedAt),
+    deletedAt: r.deletedAt === null ? null : isoTs(r.deletedAt),
+  };
+}
+
+export interface PostCommentPushOutcome {
+  applied: PostComment[];
+  current: PostComment[];
+}
+
+/** 라운지 글 댓글 업서트 — pushComments와 같은 규약: 갱신은 "내 댓글의 첫 삭제"뿐. */
+export async function pushPostComments(
+  db: Db,
+  rows: PostComment[],
+  me: MemberId,
+): Promise<PostCommentPushOutcome> {
+  if (rows.length === 0) return { applied: [], current: [] };
+  const returned = await db
+    .insert(postComments)
+    .values(
+      rows.map((c) => ({
+        id: c.id,
+        postId: c.postId,
+        memberId: c.m,
+        body: c.body,
+        createdAt: c.createdAt,
+        deletedAt: c.deletedAt,
+      })),
+    )
+    .onConflictDoUpdate({
+      target: postComments.id,
+      set: { deletedAt: sql`excluded.deleted_at`, updatedAt: sql`now()` },
+      setWhere: sql`${postComments.memberId} = ${me} and ${postComments.deletedAt} is null and excluded.deleted_at is not null`,
+    })
+    .returning();
+  const appliedIds = new Set(returned.map((r) => r.id));
+  const missed = rows.filter((c) => !appliedIds.has(c.id)).map((c) => c.id);
+  const current = missed.length
+    ? await db.select().from(postComments).where(inArray(postComments.id, missed))
+    : [];
+  return { applied: returned.map(toPostComment), current: current.map(toPostComment) };
+}
+
+export interface PostCommentPullResult {
+  rows: PostComment[];
+  cursor: PullCursor | null;
+}
+
+/** 라운지 글 댓글 변경분 — 같은 (updated_at, id) 키셋 + 90초 안전 지평선 규칙. */
+export async function pullPostComments(
+  db: Db,
+  cursor: PullCursor | null,
+): Promise<PostCommentPullResult> {
+  const horizonMs = Date.now() - HORIZON_MS;
+  const rows = await db
+    .select()
+    .from(postComments)
+    .where(
+      cursor
+        ? sql`(${postComments.updatedAt}, ${postComments.id}) > (${cursor.ts}::timestamptz, ${cursor.id}::uuid)`
+        : undefined,
+    )
+    .orderBy(postComments.updatedAt, postComments.id)
+    .limit(PAGE);
+  const last = rows[rows.length - 1];
+  const move = holdOrAdvance(horizonMs, cursor?.ts ?? null, rows.length, last?.updatedAt);
+  return {
+    rows: rows.map(toPostComment),
     cursor:
       move === 'horizon'
         ? { ts: new Date(horizonMs).toISOString(), id: NIL_UUID }

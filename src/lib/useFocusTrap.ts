@@ -26,7 +26,10 @@ export function useFocusTrap(
      그때 읽으면 "열었던 자리"가 아니라 모달 안의 요소가 잡히고, 닫힐 때
      그 요소는 사라진 뒤라 초점이 body로 떨어진다. */
   const opener = useRef<Element | null | undefined>(undefined);
-  if (opener.current === undefined) opener.current = document.activeElement;
+  // document가 없는 정적 렌더(테스트의 renderToStaticMarkup)에서도 컴포넌트가 그려져야 한다
+  if (opener.current === undefined) {
+    opener.current = typeof document === 'undefined' ? null : document.activeElement;
+  }
 
   useEffect(() => {
     const onKey = (ev: KeyboardEvent) => {

@@ -189,6 +189,36 @@ export interface Comment {
   deletedAt: string | null;
 }
 
+/* ---------- 라운지 글 ---------- */
+
+/** 라운지(자유 게시판) 글 — 텍스트+사진뿐, 별점·태그·수정 없음.
+    내용은 불변(수정 기능이 없다) — 서버는 본문·사진을 절대 덮어쓰지 않는다.
+    삭제는 soft delete로 전파되고, 한 번 지워진 글은 되살아나지 않는다. */
+export interface Post {
+  id: string; // 클라이언트 생성 UUID — 멱등 업서트의 키
+  m: MemberId; // 작성자
+  /** 본문 — 사진이 있으면 비어 있어도 된다("사진 없이 글만"의 역도 성립). */
+  body: string;
+  /** 표시용 사진 메타 — Entry.photos와 같은 규약(바이너리는 R2, 최대 4장). */
+  photos: EntryPhoto[];
+  createdAt: string; // 작성 기기 시각(서버가 범위 검증) — 표시·정렬 기준
+  updatedAt: string; // 서버 시계 — pull 커서·중복 판별 기준
+  deletedAt: string | null;
+}
+
+/** 라운지 글에 달리는 댓글 — Comment(기록 댓글)와 같은 불변+soft delete 의미론.
+    스트림을 분리한 이유: 댓글의 키·인덱스·알림 팬아웃이 전부 entryId를 전제하므로
+    (entryId, postId)를 한 컬럼에 섞으면 여섯 계층이 동시에 흔들린다. */
+export interface PostComment {
+  id: string; // 클라이언트 생성 UUID — 멱등 업서트의 키
+  postId: string; // 대상 글 id
+  m: MemberId; // 작성자
+  body: string;
+  createdAt: string; // 작성 기기 시각(서버가 범위 검증) — 표시·정렬 기준
+  updatedAt: string; // 서버 시계 — pull 커서·중복 판별 기준
+  deletedAt: string | null;
+}
+
 /* ---------- 리액션 ---------- */
 
 export const REACTIONS = ['👏', '🔥', '💪', '👀', '😴'] as const;
@@ -229,6 +259,9 @@ export interface PushRequest {
   /** 없으면 빈 배열로 취급 — 이행기의 구버전 클라이언트 호환 */
   comments?: Comment[];
   reactions?: ReactionSet[];
+  /** 라운지 글·댓글 — 위와 같은 구버전 호환 규약 */
+  posts?: Post[];
+  postComments?: PostComment[];
   /** 읽음 처리할 알림. "모두 읽음"도 클라이언트가 아는 안읽음 id를 열거해 보낸다 —
       서버에 별도 상태가 없어 멱등하고, 그 사이 도착한 새 알림을 실수로 읽음 처리하지 않는다.
       at은 읽은 시점에 관측한 그 행의 updatedAt(서버 시계) — 서버는 행이 그 뒤로 갱신되지
@@ -261,6 +294,18 @@ export interface ReactionPushResult {
   row: ReactionSet;
 }
 
+/** applied=false면 row는 서버의 현재 행 — 클라이언트가 그대로 채택한다(이길 수 없다). */
+export interface PostPushResult {
+  id: string;
+  applied: boolean;
+  row: Post;
+}
+export interface PostCommentPushResult {
+  id: string;
+  applied: boolean;
+  row: PostComment;
+}
+
 export interface PushResponse {
   ok: true;
   serverTime: string;
@@ -269,6 +314,8 @@ export interface PushResponse {
       없으면 "구버전 Worker가 무시했다"로 보고 큐를 비우지 않는다 — 조용한 유실 방지. */
   commentResults?: CommentPushResult[];
   reactionResults?: ReactionPushResult[];
+  postResults?: PostPushResult[];
+  postCommentResults?: PostCommentPushResult[];
   /** 정산된 읽음 처리 id — 이미 읽음이던 행도 포함해 요청한 id를 그대로 돌려준다(멱등).
       comment/reaction 결과와 같은 구버전 규약: 보냈는데 이 필드가 없으면 큐를 지킨다. */
   notificationReadResults?: string[];
@@ -288,6 +335,10 @@ export interface PullResponse {
   commentCursor?: PullCursor | null;
   reactions?: ReactionSet[];
   reactionCursor?: ReactionCursor | null;
+  posts?: Post[];
+  postCursor?: PullCursor | null;
+  postComments?: PostComment[];
+  postCommentCursor?: PullCursor | null;
   /** 내(토큰 주인) 알림만 — 다른 스트림과 같은 (updated_at, id) 키셋. */
   notifications?: Notification[];
   notificationCursor?: PullCursor | null;
@@ -462,4 +513,7 @@ export const PUSH_LIMITS = {
   photos: ENTRY_PHOTO_LIMIT,
   /** 댓글 한 개 길이 (batch 200은 세 스트림이 공유한다) */
   commentBody: 500,
+  /** 라운지 글 본문 길이 — 기록 body(4000)보다 짧게: 자유 글은 짧은 근황이 본질이다.
+      사진 장수는 photos(=ENTRY_PHOTO_LIMIT)를, 댓글 길이는 commentBody를 그대로 쓴다. */
+  postBody: 2000,
 } as const;

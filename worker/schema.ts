@@ -109,6 +109,44 @@ export const reactions = pgTable(
   ],
 );
 
+/* 라운지 글·댓글도 서로 FK를 걸지 않는다 — 오프라인에서 방금 쓴(아직 push 안 된) 글에
+   바로 댓글을 달 수 있어야 하고, 고아 댓글은 클라이언트가 표시하지 않으면 그만이다. */
+
+/** 라운지 글 — 내용(본문·사진) 불변 + soft delete. pull 커서는 (updated_at, id) 키셋.
+    photos는 entries.photos와 같은 규약이라 기존 사진 톰스톤 트리거 함수를 그대로 단다. */
+export const posts = pgTable(
+  'posts',
+  {
+    id: uuid('id').primaryKey(),
+    memberId: text('member_id').notNull(),
+    body: text('body').notNull().default(''),
+    photos: jsonb('photos').notNull().default([]),
+    // 작성 기기 시각 — 표시·정렬 기준. updated_at은 서버 시계라 커서 전용이다.
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+    deletedAt: timestamp('deleted_at', { withTimezone: true, mode: 'string' }),
+  },
+  (t) => [index('posts_updated_at_id_idx').on(t.updatedAt, t.id)],
+);
+
+/** 라운지 글 댓글 — comments와 같은 불변+soft delete, 대상만 post_id. */
+export const postComments = pgTable(
+  'post_comments',
+  {
+    id: uuid('id').primaryKey(),
+    postId: uuid('post_id').notNull(),
+    memberId: text('member_id').notNull(),
+    body: text('body').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+    deletedAt: timestamp('deleted_at', { withTimezone: true, mode: 'string' }),
+  },
+  (t) => [
+    index('post_comments_updated_at_id_idx').on(t.updatedAt, t.id),
+    index('post_comments_post_id_idx').on(t.postId),
+  ],
+);
+
 /** 알림 내역 — 수신자(member_id)별 행. 댓글·리액션과 같은 이유로 entries에 FK를 걸지 않는다.
     agg_key는 "같은 날 같은 이유"의 중복·집계를 원자적으로 처리하는 자연키다:
     · 'start:<actor>' — 하루 1회 시작 알림의 중복 방지 (ON CONFLICT DO NOTHING)

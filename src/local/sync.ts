@@ -1,12 +1,14 @@
 /* 백그라운드 동기화 클라이언트.
    - push: 큐에 쌓인 내 행들을 버전 CAS 업서트로 전송 (실패하면 큐에 남아 재시도)
    - pull: (updated_at, id) 키셋 커서 이후 변경분만 수신
-   - 세 스트림(기록·댓글·리액션)은 커서가 서로 독립이지만 요청은 함께 실어 왕복을 아낀다
+   - 스트림들(기록·댓글·리액션·알림·라운지 글·글 댓글)은 커서가 서로 독립이지만 요청은 함께 실어 왕복을 아낀다
    - 탭이 보일 때만 폴링 — Neon 무료 컴퓨트를 아끼고, 안 보이는 탭은 조용히 둔다 */
 import type {
   Comment,
   Entry,
   MemberId,
+  Post,
+  PostComment,
   PullResponse,
   PushRequest,
   PushResponse,
@@ -142,19 +144,33 @@ export class SyncClient {
       else reactions.push(r);
     }
     const reads = this.store.pendingNotificationReads();
+    const posts: Post[] = [];
+    for (const p of this.store.pendingPosts()) {
+      if (p.m !== this.memberId) this.store.dropPostFromQueue(p.id);
+      else posts.push(p);
+    }
+    const postComments: PostComment[] = [];
+    for (const c of this.store.pendingPostComments()) {
+      if (c.m !== this.memberId) this.store.dropPostCommentFromQueue(c.id);
+      else postComments.push(c);
+    }
     const B = PUSH_LIMITS.batch;
-    // 네 스트림을 각자 배치로 쪼개 한 요청에 함께 싣는다 — 라운드 수는 가장 긴 스트림 기준
+    // 여섯 스트림을 각자 배치로 쪼개 한 요청에 함께 싣는다 — 라운드 수는 가장 긴 스트림 기준
     const rounds = Math.max(
       Math.ceil(rows.length / B),
       Math.ceil(comments.length / B),
       Math.ceil(reactions.length / B),
       Math.ceil(reads.length / B),
+      Math.ceil(posts.length / B),
+      Math.ceil(postComments.length / B),
     );
     for (let i = 0; i < rounds; i++) {
       const batch = rows.slice(i * B, i * B + B);
       const cBatch = comments.slice(i * B, i * B + B);
       const rBatch = reactions.slice(i * B, i * B + B);
       const nBatch = reads.slice(i * B, i * B + B);
+      const pBatch = posts.slice(i * B, i * B + B);
+      const pcBatch = postComments.slice(i * B, i * B + B);
       const revById = new Map(batch.map((p) => [p.entry.id, p.rev]));
       const res = await fetch('/api/sync/push', {
         method: 'POST',
@@ -164,6 +180,8 @@ export class SyncClient {
           comments: cBatch,
           reactions: rBatch,
           notificationReads: nBatch,
+          posts: pBatch,
+          postComments: pcBatch,
         } satisfies PushRequest),
         signal: timeoutSignal(),
       });
@@ -213,6 +231,24 @@ export class SyncClient {
         }
         const settled = new Set(data.notificationReadResults);
         this.store.ackNotificationReads(nBatch.filter((r) => settled.has(r.id)));
+      }
+      if (pBatch.length > 0) {
+        if (!Array.isArray(data.postResults)) throw new Error('push post results missing');
+        const sent = new Map(pBatch.map((p) => [p.id, p]));
+        for (const r of data.postResults) {
+          const mine = sent.get(r.id);
+          if (mine) this.store.ackPost(mine, r.row);
+        }
+      }
+      if (pcBatch.length > 0) {
+        if (!Array.isArray(data.postCommentResults)) {
+          throw new Error('push post comment results missing');
+        }
+        const sent = new Map(pcBatch.map((c) => [c.id, c]));
+        for (const r of data.postCommentResults) {
+          const mine = sent.get(r.id);
+          if (mine) this.store.ackPostComment(mine, r.row);
+        }
       }
     }
   }
@@ -284,8 +320,10 @@ export class SyncClient {
     let cCursor = start.comments;
     let rCursor = start.reactions;
     let nCursor = start.notifications;
+    let pCursor = start.posts;
+    let pcCursor = start.postComments;
     let adoptedEntryMetadata = false;
-    // 500행 한도에 걸렸을 수 있으니 네 스트림이 다 비워질 때까지 반복
+    // 500행 한도에 걸렸을 수 있으니 여섯 스트림이 다 비워질 때까지 반복
     for (;;) {
       const qs = new URLSearchParams();
       if (cursor) {
@@ -307,6 +345,14 @@ export class SyncClient {
         qs.set('nsince', nCursor.ts);
         qs.set('nsinceId', nCursor.id);
       }
+      if (pCursor) {
+        qs.set('psince', pCursor.ts);
+        qs.set('psinceId', pCursor.id);
+      }
+      if (pcCursor) {
+        qs.set('pcsince', pcCursor.ts);
+        qs.set('pcsinceId', pcCursor.id);
+      }
       const q = qs.toString();
       const res = await fetch(`/api/sync/pull${q ? `?${q}` : ''}`, {
         headers: authHeaders(this.token),
@@ -323,10 +369,18 @@ export class SyncClient {
         Array.isArray(data.notifications) && 'notificationCursor' in data
           ? data.notifications
           : undefined;
+      // 라운지 두 스트림도 알림과 같은 엄격한 판정 — 행과 커서가 함께 있어야 산 스트림이다
+      const pRows = Array.isArray(data.posts) && 'postCursor' in data ? data.posts : undefined;
+      const pcRows =
+        Array.isArray(data.postComments) && 'postCommentCursor' in data
+          ? data.postComments
+          : undefined;
       const eFull = data.rows.length >= PAGE;
       const cFull = (cRows?.length ?? 0) >= PAGE;
       const rFull = (rRows?.length ?? 0) >= PAGE;
       const nFull = (nRows?.length ?? 0) >= PAGE;
+      const pFull = (pRows?.length ?? 0) >= PAGE;
+      const pcFull = (pcRows?.length ?? 0) >= PAGE;
       // 행 반영과 커서 전진을 스토어가 한 트랜잭션으로 처리한다.
       // 중간 페이지(=500행)인 스트림은 이전 커서를 영속화한다 — 페이지 사이에서 탭이 죽으면
       // 다시 받으면 그만이지만(중복은 updatedAt으로 무시), 전진한 커서가 지평선 너머로
@@ -341,13 +395,21 @@ export class SyncClient {
         reactionCursor: rRows && (rFull ? rCursor : (data.reactionCursor ?? null)),
         notifications: nRows,
         notificationCursor: nRows && (nFull ? nCursor : (data.notificationCursor ?? null)),
+        posts: pRows,
+        postCursor: pRows && (pFull ? pCursor : (data.postCursor ?? null)),
+        postComments: pcRows,
+        postCommentCursor: pcRows && (pcFull ? pcCursor : (data.postCommentCursor ?? null)),
       });
       adoptedEntryMetadata ||= pageAdoptedEntryMetadata;
       if (data.cursor) cursor = data.cursor;
       if (data.commentCursor) cCursor = data.commentCursor;
       if (data.reactionCursor) rCursor = data.reactionCursor;
       if (data.notificationCursor) nCursor = data.notificationCursor;
-      if (!eFull && !cFull && !rFull && !nFull) break;
+      // 행이 유효했던 페이지의 커서만 전진 — 행 없이 커서만 실린 반쪽 응답을 믿으면
+      // 다음 페이지가 적용하지 않은 구간을 건너뛴 커서를 영속화할 수 있다
+      if (pRows && data.postCursor) pCursor = data.postCursor;
+      if (pcRows && data.postCommentCursor) pcCursor = data.postCommentCursor;
+      if (!eFull && !cFull && !rFull && !nFull && !pFull && !pcFull) break;
     }
     // 서버 안전 지평선이 같은 행을 되돌려도 store가 실제 새 메타를 채택하지 않았으면
     // 같은 404 예산을 다시 열지 않는다.

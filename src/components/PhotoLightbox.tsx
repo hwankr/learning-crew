@@ -31,8 +31,9 @@ export function lightboxKeyAction(
 }
 
 /** 큰 사진이 도착하기 전에는 이미 갖고 있는 썸네일을 흐리게 깔아 둔다 —
-    빈 무대에서 사진이 튀어나오는 대신 자리와 색이 먼저 잡힌다. */
-function StagePhoto({ photo, alt, icon }: { photo: EntryPhoto; alt: string; icon: number }) {
+    빈 무대에서 사진이 튀어나오는 대신 자리와 색이 먼저 잡힌다.
+    (라운지 라이트박스도 같은 무대를 쓰므로 내보낸다) */
+export function StagePhoto({ photo, alt, icon }: { photo: EntryPhoto; alt: string; icon: number }) {
   const thumb = usePhotoUrl(photo.id, 'thumb');
   const full = usePhotoUrl(photo.id, 'full');
   return (
@@ -148,14 +149,14 @@ export function PhotoLightbox({
       </div>
       {comments.length > 0 && (
         <div className="light-comments">
-          <CommentList comments={comments} meId={meId} actions={actions} />
+          <CommentList comments={comments} meId={meId} onDelete={actions.onDeleteComment} />
         </div>
       )}
     </div>
   );
   const commentBar = (
     <div className="light-foot">
-      <CommentForm entryId={entry.id} meId={meId} actions={actions} />
+      <CommentForm meId={meId} onSubmit={(body) => actions.onAddComment(entry.id, body)} />
     </div>
   );
 

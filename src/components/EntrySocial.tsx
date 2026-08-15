@@ -127,13 +127,22 @@ export function ReactionRow({
   );
 }
 
+/** 목록·작성 줄이 실제로 쓰는 필드만 — 기록 댓글(Comment)과 라운지 글 댓글(PostComment)이
+    대상 id 필드(entryId/postId)만 다르고 나머지가 같아, 이 모양으로 두 화면이 공유한다. */
+export interface CommentLike {
+  id: string;
+  m: MemberId;
+  body: string;
+  createdAt: string;
+}
+
 /** 댓글 목록. 없으면 자리도 차지하지 않는다. */
 export function CommentList({
-  comments, meId, actions,
+  comments, meId, onDelete,
 }: {
-  comments: Comment[]; // 스냅샷이 이미 (createdAt, id) 오름차순으로 준다 — 다시 정렬하지 않는다
+  comments: CommentLike[]; // 스냅샷이 이미 (createdAt, id) 오름차순으로 준다 — 다시 정렬하지 않는다
   meId: MemberId;
-  actions: EntryActions;
+  onDelete: (id: string) => void;
 }) {
   if (comments.length === 0) return null;
   return (
@@ -150,7 +159,7 @@ export function CommentList({
                 <span className="comment-time">{hhmm(c.createdAt)}</span>
                 {c.m === meId && (
                   <button className="comment-del" aria-label="댓글 삭제"
-                    onClick={() => actions.onDeleteComment(c.id)}>
+                    onClick={() => onDelete(c.id)}>
                     <Icon d={X_D} size={10} sw={2.6} />
                   </button>
                 )}
@@ -166,11 +175,10 @@ export function CommentList({
 
 /** 댓글 작성 줄. 카드에서는 소셜 블록의 마지막 줄, 라이트박스에서는 바닥에 고정된다. */
 export function CommentForm({
-  entryId, meId, actions,
+  meId, onSubmit,
 }: {
-  entryId: string;
   meId: MemberId;
-  actions: EntryActions;
+  onSubmit: (body: string) => void;
 }) {
   const [text, setText] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
@@ -178,7 +186,7 @@ export function CommentForm({
 
   const submit = () => {
     if (!text.trim()) return;
-    actions.onAddComment(entryId, text);
+    onSubmit(text);
     // 입력만 비우고 펼친 상태는 유지한다 — 연달아 다는 흐름을 끊지 않는다
     setText('');
     inputRef.current?.focus();
@@ -227,8 +235,8 @@ export function EntrySocial({
   return (
     <div className="entry-social">
       <ReactionRow entryId={entryId} sets={sets} meId={meId} actions={actions} />
-      <CommentList comments={comments} meId={meId} actions={actions} />
-      <CommentForm entryId={entryId} meId={meId} actions={actions} />
+      <CommentList comments={comments} meId={meId} onDelete={actions.onDeleteComment} />
+      <CommentForm meId={meId} onSubmit={(body) => actions.onAddComment(entryId, body)} />
     </div>
   );
 }

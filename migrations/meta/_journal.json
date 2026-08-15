@@ -78,6 +78,13 @@
       "when": 1786784549106,
       "tag": "0010_fresh_titania",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1786793923393,
+      "tag": "0011_talented_phalanx",
+      "breakpoints": true
     }
   ]
 }

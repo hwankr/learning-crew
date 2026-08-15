@@ -5,6 +5,8 @@ import type {
   MemberId,
   MemberStatus,
   Notification,
+  Post,
+  PostComment,
   PullCursor,
   ReactionCursor,
   ReactionSet,
@@ -27,6 +29,8 @@ export interface PhotoBlobRecord {
   thumb: Blob;
   state: PhotoUploadState;
   pct: number;
+  /** 소유 행 id — Entry 또는 Post(라운지 글). 키 이름은 v5 시절의 것이라 마이그레이션 없이
+      의미만 넓혔다: 조회는 store의 photoOwnerRow가 두 맵을 순서대로 본다. */
   entryId: string;
   addedAt: number;
   /** done 전환 시각. v5 행에는 없으므로 읽을 때 addedAt을 폴백으로 쓴다. */
@@ -65,6 +69,13 @@ export interface CrewDB extends DBSchema {
       B의 토큰으로 보내 "정산된 척" 지워 버리면 A의 읽음 의도가 유실된다.
       값은 읽은 시점에 관측한 그 행의 updatedAt — 서버·다른 탭과의 세대 판별값이다. */
   notifReadQueue: { key: string; value: string };
+  /** 라운지 글 — 댓글과 같은 "내용 불변 + soft delete" 스트림이라 rev/base 큐가 없다. */
+  posts: { key: string; value: Post };
+  /** 존재 자체가 "아직 push 안 됨" 표시 (값은 항상 true) — commentQueue와 같은 규약. */
+  postQueue: { key: string; value: boolean };
+  /** 라운지 글 댓글 — comments와 같은 구조, 대상만 postId. */
+  postComments: { key: string; value: PostComment };
+  postCommentQueue: { key: string; value: boolean };
   /** key = photoId — 원본 대신 리사이즈된 JPEG 두 장만 보관한다. */
   photoBlobs: { key: string; value: PhotoBlobRecord };
   /** key = `${photoId}:${kind}` — 인증 fetch로 받은 다른 멤버 사진의 로컬 캐시. */
@@ -90,7 +101,7 @@ export function upgradePhotoCacheStore(
 
 export function openCrewDB(): Promise<CrewDatabase> {
   let handle: CrewDatabase | null = null;
-  const opened = openDB<CrewDB>('learning-crew', 6, {
+  const opened = openDB<CrewDB>('learning-crew', 7, {
     async upgrade(db, oldVersion, _newVersion, tx) {
       if (oldVersion < 1) {
         db.createObjectStore('entries', { keyPath: 'id' });
@@ -127,6 +138,13 @@ export function openCrewDB(): Promise<CrewDatabase> {
         db.createObjectStore('photoBlobs');
       }
       upgradePhotoCacheStore(db, oldVersion);
+      if (oldVersion < 7) {
+        // 라운지 글·댓글 스트림 — 댓글과 같은 행/큐 분리 구조(v3 주석 참고)
+        db.createObjectStore('posts', { keyPath: 'id' });
+        db.createObjectStore('postQueue');
+        db.createObjectStore('postComments', { keyPath: 'id' });
+        db.createObjectStore('postCommentQueue');
+      }
     },
     // 다른 탭이 더 높은 버전으로 업그레이드하려 할 때 이 연결이 막고 있으면 양보한다 —
     // 이 탭은 메모리 전용으로 강등되지만(쓰기는 txWrite가 조용히 무시) 새 탭이 살아난다.

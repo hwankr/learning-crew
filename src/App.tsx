@@ -6,7 +6,7 @@ import {
   useState,
   useSyncExternalStore,
 } from 'react';
-import type { Entry, EntryPhoto, ReactionEmoji, Tag, Todo } from '../shared/types';
+import type { Entry, EntryPhoto, Post, ReactionEmoji, Tag, Todo } from '../shared/types';
 import {
   ENTRY_PHOTO_LIMIT,
   PUSH_LIMITS,
@@ -26,7 +26,15 @@ import { PhotoLimitError, PhotoStorageUnavailableError, contentEqual } from './l
 import { BY_ID, COPY, MEMBERS, W, dayKey, pad2, shiftKey } from './lib/constants';
 import type { AppConfig } from './lib/config';
 import type { CrewStore } from './local/store';
-import { isDayKey, loadUi, saveUi, type MobileTab } from './lib/uiState';
+import {
+  isDayKey,
+  loadUi,
+  revealEntries,
+  saveUi,
+  type DesktopView,
+  type FeedFilter,
+  type MobileTab,
+} from './lib/uiState';
 import { useIsDesktop } from './lib/useMediaQuery';
 import { TopBar } from './components/TopBar';
 import { TabBar } from './components/TabBar';
@@ -38,6 +46,14 @@ import { NotiPage } from './components/NotiPage';
 import { NotiDropdown } from './components/NotiDropdown';
 import { NotiSettings } from './components/NotiSettings';
 import { EMPTY_MODAL, EntryModal, saveGate, type ModalState } from './components/EntryModal';
+import {
+  EMPTY_LOUNGE_DRAFT,
+  LoungeComposer,
+  LoungeConfirmDelete,
+  LoungeLightbox,
+  loungeCanSubmit,
+  type LoungeDraft,
+} from './components/Lounge';
 import { PhotoLightbox } from './components/PhotoLightbox';
 import { ConfirmDelete } from './components/ConfirmDelete';
 import { Toast } from './components/Toast';
@@ -225,7 +241,7 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
   // 저장된 화면 상태는 첫 렌더에서 한 번만 읽는다 — 이후엔 아래 state가 원본이다
   const [ui] = useState(loadUi);
   const urlView = cfg.viewFromUrl ? cfg.initialView : null;
-  const [view, setView] = useState<'feed' | 'cal'>(
+  const [view, setView] = useState<DesktopView>(
     urlView === 'feed' || urlView === 'cal' ? urlView : ui.view ?? 'cal',
   );
   // 좁은 화면의 탭 — 데스크톱 view와 한 상태로 묶지 않는다(홈·알림은 저쪽에 없는 자리다).
@@ -234,6 +250,11 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
     urlView === 'feed' || urlView === 'cal' ? urlView
       : urlView === 'noti' ? 'alerts'
         : ui.mtab ?? 'home',
+  );
+  // 라운지 글은 피드의 한 갈래다 — 보던 필터를 화면 상태와 함께 기억한다.
+  // 옛 ?view=lounge 링크는 저장된 필터보다 세다: '기록'이 복원되면 링크가 가리키는 글이 안 보인다.
+  const [feedFilter, setFeedFilter] = useState<FeedFilter>(
+    cfg.loungeFromUrl ? 'posts' : ui.feedFilter ?? 'all',
   );
   // 상단 바(+벨 드롭다운)와 하단 탭바·기록 버튼은 서로를 대신하는 셸이다 — 어느 쪽을
   // 그릴지가 갈리므로 CSS로는 못 나누고 렌더 중에 폭을 알아야 한다
@@ -255,6 +276,12 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
      닫힌다. 자리는 숫자가 아니라 photoId로 잡는다: 보는 동안 앞쪽 사진의 업로드가 끝나
      목록이 늘어나면 같은 숫자가 다른 사진을 가리킨다. */
   const [light, setLight] = useState<{ entryId: string; photoId: string } | null>(null);
+  /* 라운지 — 작성 시트·삭제 확인·확대 뷰는 기록 쪽과 같은 규칙으로 각자 상태를 든다.
+     시트는 한 번에 하나만 열린다(기록 시트와 라운지 시트가 같은 CTA 자리를 나눠 쓴다). */
+  const [loungeDraft, setLoungeDraft] = useState<LoungeDraft>(EMPTY_LOUNGE_DRAFT);
+  const [loungeDelId, setLoungeDelId] = useState<string | null>(null);
+  const [loungeLight, setLoungeLight] = useState<{ postId: string; photoId: string } | null>(null);
+  const [loungeWaiting, setLoungeWaiting] = useState(false);
   /* 사진 준비(디코드·리사이즈)는 시트 한 세션에 묶인다. 세션이 끝난 뒤 도착한 결과는 붙일
      자리가 없어 되돌리고, 준비가 남아 있는 동안 누른 저장은 끝날 때까지 기다렸다 이어 간다 —
      기다리지 않으면 방금 고른 사진이 조용히 빠지고 주인 없는 blob만 남는다. */
@@ -286,7 +313,10 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
 
   // 보던 탭·패널·날짜를 남긴다 — 새로고침이 화면을 처음으로 되돌리면 안 된다
   // (넓은 셸과 좁은 셸의 탭은 각자 저장한다: 폭이 바뀌어도 보던 자리가 서로를 덮지 않는다)
-  useEffect(() => saveUi({ view, mtab, panelOpen, selDay }), [view, mtab, panelOpen, selDay]);
+  useEffect(
+    () => saveUi({ view, mtab, panelOpen, selDay, feedFilter }),
+    [view, mtab, panelOpen, selDay, feedFilter],
+  );
 
   // "n분째" 경과 표시를 위한 분 단위 재렌더
   const [nowTick, setNowTick] = useState(() => Date.now());
@@ -316,8 +346,13 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
   // 닫히거나 살리기를 끝낼 때까지 남겨 둔다. 목록 교체를 한 번에 해 사진 패치 사이에
   // 순간적으로 pin이 전부 풀리지 않게 한다.
   useLayoutEffect(() => {
-    store.setActiveDraftPhotoIds(modal.open ? modal.photos.map((photo) => photo.id) : []);
-  }, [store, modal.open, modal.photos]);
+    // 열려 있는 시트(기록 또는 라운지)의 사진이 보호 대상이다 — 둘이 동시에 열리지는 않는다
+    store.setActiveDraftPhotoIds(
+      modal.open ? modal.photos.map((photo) => photo.id)
+        : loungeDraft.open ? loungeDraft.photos.map((photo) => photo.id)
+          : [],
+    );
+  }, [store, modal.open, modal.photos, loungeDraft.open, loungeDraft.photos]);
   useEffect(() => () => store.setActiveDraftPhotoIds([]), [store]);
   useEffect(() => {
     if (!modal.open) return;
@@ -415,6 +450,9 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
     }
     removeDraft(draftKey(modal.editingId)); // 제출됐으니 초안은 소임을 다했다
     setModal(EMPTY_MODAL);
+    // 라운지만 보기 중에 저장했다면 필터를 풀어 준다 — 방금 저장한 기록이 즉시 숨으면
+    // 저장이 사라진 것처럼 보인다
+    setFeedFilter(revealEntries);
     /* 시트가 닫히면 방금 저장한 기록이 화면 어디에 놓였는지 바로 안 보인다 — 지난 날짜로
        남기면 오늘 묶음에 없고, 캘린더 탭이면 선택일이 그 날이 아닐 수도 있다 */
     showToast(isEdit ? wit.edited : common.day === dayKey(stamp) ? wit.savedToday : wit.savedPast);
@@ -544,6 +582,94 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
     else store.detachDraftPhoto(photoId);
   };
 
+  /* ---------- 라운지 쓰기 경로 — 기록 시트와 같은 사진 세션 규칙을 쓴다 ---------- */
+  const openLounge = () => {
+    if (revivingRef.current) return;
+    photoSession.current += 1; // 기록 시트에서 준비 중이던 사진 결과는 되돌아간다
+    setLoungeDraft({ open: true, postId: crypto.randomUUID(), body: '', photos: [] });
+  };
+  const closeLounge = useCallback(() => {
+    photoSession.current += 1;
+    setLoungeWaiting(false);
+    setLoungeDraft((d) => {
+      // 초안 지속이 없는 시트다 — 닫으면 스테이징한 사진도 함께 버린다(주인 없는 blob 방지)
+      if (d.open) for (const p of d.photos) store.removeDraftPhoto(p.id);
+      return EMPTY_LOUNGE_DRAFT;
+    });
+  }, [store]);
+  const submitLoungeNow = () => {
+    if (!loungeDraft.open || !loungeCanSubmit(loungeDraft)) return;
+    photoSession.current += 1; // 올리기로 세션이 끝난다
+    store.addPost({ id: loungeDraft.postId, body: loungeDraft.body, photos: loungeDraft.photos });
+    setLoungeDraft(EMPTY_LOUNGE_DRAFT);
+    showToast(wit.loungePosted);
+  };
+  /* 기록 시트와 같은 규칙 — 사진이 리사이즈 중이면 준비가 끝나는 대로 이어서 올린다. */
+  const submitLounge = () => {
+    if (preparing > 0) {
+      setLoungeWaiting(true);
+      return;
+    }
+    submitLoungeNow();
+  };
+  useEffect(() => {
+    if (!loungeWaiting || preparing > 0) return;
+    setLoungeWaiting(false);
+    if (loungeDraft.open && loungeCanSubmit(loungeDraft)) submitLoungeNow();
+    // loungeDraft가 deps에 있어 이 effect는 늘 그 렌더의 submitLoungeNow를 본다
+  }, [loungeWaiting, preparing, loungeDraft]);
+
+  const onAddLoungeFiles = (files: File[]) => {
+    const room = ENTRY_PHOTO_LIMIT - loungeDraft.photos.length;
+    if (room <= 0) {
+      showToast(wit.photoFull);
+      return;
+    }
+    if (files.length > room) showToast(wit.photoRoom(room));
+    const session = photoSession.current;
+    const postId = loungeDraft.postId;
+    const before = loungeDraft.photos;
+    setPreparing((n) => n + 1);
+    void addDraftPhotos({
+      files,
+      room,
+      prepare: (file, added) => store.addPhoto(postId, file, [...before, ...added]),
+      isCurrent: () => session === photoSession.current,
+      attach: (photo) => setLoungeDraft((d) => (d.open ? { ...d, photos: [...d.photos, photo] } : d)),
+      discard: (id) => store.removeDraftPhoto(id),
+      onError: (err) =>
+        showToast(
+          err instanceof PhotoLimitError ? wit.photoFull
+            : err instanceof ImageDecodeError ? wit.photoUnreadable
+              : err instanceof PhotoStorageUnavailableError ? err.message
+              : wit.photoFailed,
+        ),
+    })
+      .catch(() => undefined)
+      .finally(() => setPreparing((n) => n - 1));
+  };
+  const onRemoveLoungePhoto = (photoId: string) => {
+    setLoungeDraft((d) => ({ ...d, photos: d.photos.filter((p) => p.id !== photoId) }));
+    // 새 글 시트가 유일한 참조다(수정·초안 복원이 없다) — 바로 버려야 그 자리를 다시 쓸 수 있다
+    store.removeDraftPhoto(photoId);
+  };
+
+  const loungeActions = {
+    onCompose: openLounge,
+    onDelete: (p: Post) => setLoungeDelId(p.id),
+    onAddComment: (postId: string, body: string) => store.addPostComment(postId, body),
+    onDeleteComment: (id: string) => store.removePostComment(id),
+    onOpenPhoto: (p: Post, photoId: string) => setLoungeLight({ postId: p.id, photoId }),
+    onRetryPhoto: (photoId: string) => store.retryPhoto(photoId),
+  };
+  // 글·사진이 사라졌으면(삭제·동기화) 확대 뷰도 닫힌 것으로 본다 — 기록 라이트박스와 같은 규칙
+  const loungePost = loungeLight ? snap.posts.find((p) => p.id === loungeLight.postId) ?? null : null;
+  const loungePhotos = loungePost
+    ? shownPhotos(loungePost.photos, loungePost.m === me.id, snap.photoUploads)
+    : [];
+  const loungeIdx = loungeLight ? lightboxIndex(loungePhotos, loungeLight.photoId) : 0;
+  const pendingLoungeDel = loungeDelId ? snap.posts.find((p) => p.id === loungeDelId) ?? null : null;
+
   // 사진이 다 사라졌으면(삭제·기록 소멸) 확대 뷰도 닫힌 것으로 본다
   const lightEntry = light ? entries.find((e) => e.id === light.entryId) ?? null : null;
   const lightPhotos = lightEntry
@@ -575,9 +701,13 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
   // 두 셸이 같은 화면을 나눠 쓴다 — 상단 바 아래 본문이든 하단 탭 위 본문이든 내용은 하나다
   const feedScreen = (
     <div className="feed-wrap">
-      <Feed entries={entries} todayKey={todayKey} yKey={yKey} meId={me.id}
+      <Feed entries={entries} posts={snap.posts} postComments={snap.postComments}
+        statuses={snap.statuses} now={nowTick}
+        filter={feedFilter} onFilter={setFeedFilter}
+        todayKey={todayKey} yKey={yKey} meId={me.id}
         editingId={modal.editingId} comments={snap.comments} reactions={snap.reactions}
-        photoUploads={snap.photoUploads} wit={wit} actions={actions} />
+        photoUploads={snap.photoUploads} wit={wit} actions={actions}
+        loungeActions={loungeActions} />
       {footer}
     </div>
   );
@@ -623,7 +753,7 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
 
   // 떠 있는 기록 버튼은 홈·피드에만 선다 — 캘린더·알림은 아래 여백도 그만큼 줄어든다
   const fabTab = mtab === 'home' || mtab === 'feed';
-  const fabOn = fabTab && !modal.open;
+  const fabOn = fabTab && !modal.open && !loungeDraft.open;
 
   return (
     <div className="screen">
@@ -650,7 +780,8 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
                 onRead={(id) => store.markNotificationRead(id)}
                 onReadAll={() => { store.markAllNotificationsRead(); showToast(wit.notiReadAll); }}
                 onOpenSettings={openNotiSettings}
-                onOpenFeed={() => { setNotiOpen(false); setView('feed'); }}
+                // 알림이 가리키는 건 기록이다 — 라운지만 보기로 이동하면 대상이 안 보인다
+                onOpenFeed={() => { setNotiOpen(false); setView('feed'); setFeedFilter(revealEntries); }}
                 onClose={closeNoti} />
             ) : null}
             onCompose={openNew} composeRef={ctaRef} />
@@ -730,6 +861,31 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
             showToast(wit.deleted);
           }}
         />
+      )}
+      {loungeDraft.open && (
+        <LoungeComposer draft={loungeDraft} preparing={preparing > 0}
+          demo={cfg.demo} durableStorage={snap.durableStorage} wit={wit} fallbackRef={ctaRef}
+          onBody={(body) => setLoungeDraft((d) => ({ ...d, body }))}
+          onAddFiles={onAddLoungeFiles} onRemovePhoto={onRemoveLoungePhoto}
+          onClose={closeLounge} onSubmit={submitLounge} />
+      )}
+      {loungePost && loungePhotos.length > 0 && (
+        <LoungeLightbox post={loungePost} photos={loungePhotos} index={loungeIdx}
+          onIndex={(i) => {
+            const next = loungePhotos[i];
+            if (next) setLoungeLight({ postId: loungePost.id, photoId: next.id });
+          }}
+          onClose={() => setLoungeLight(null)}
+          todayKey={todayKey} yKey={yKey} fallbackRef={ctaRef} />
+      )}
+      {pendingLoungeDel && (
+        <LoungeConfirmDelete wit={wit} fallbackRef={ctaRef}
+          onCancel={() => setLoungeDelId(null)}
+          onConfirm={() => {
+            store.removePost(pendingLoungeDel.id);
+            setLoungeDelId(null);
+            showToast(wit.loungeDeleted);
+          }} />
       )}
       {toast && <Toast key={toast.id} text={toast.text} />}
     </div>
