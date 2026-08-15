@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { observePhotoViewport, PHOTO_VIEWPORT_ROOT_MARGIN } from '../components/PhotoImg';
+import type { PhotoKind } from '../local/idb';
+import { mosaicPhotoKind } from './photos';
 import {
   PhotoRequestCoordinator,
   type PhotoBlobSource,
@@ -32,6 +34,69 @@ async function flush(): Promise<void> {
   for (let i = 0; i < 12; i += 1) await Promise.resolve();
 }
 
+/** IntersectionObserver를 손으로 굴린다 — 관찰 대상이 화면에 들고 나는 순간을 테스트가 정한다. */
+function fakeViewport() {
+  const target = {} as Element;
+  let callback: IntersectionObserverCallback | null = null;
+  let options: IntersectionObserverInit | undefined;
+  const observe = vi.fn();
+  const unobserve = vi.fn();
+  const disconnect = vi.fn();
+  class FakeIntersectionObserver {
+    constructor(cb: IntersectionObserverCallback, init?: IntersectionObserverInit) {
+      callback = cb;
+      options = init;
+    }
+    readonly root = null;
+    readonly rootMargin = PHOTO_VIEWPORT_ROOT_MARGIN;
+    readonly thresholds = [0];
+    observe = observe;
+    unobserve = unobserve;
+    disconnect = disconnect;
+    takeRecords(): IntersectionObserverEntry[] { return []; }
+  }
+  vi.stubGlobal('IntersectionObserver', FakeIntersectionObserver);
+  const emit = (isIntersecting: boolean): void => {
+    callback?.([
+      {
+        target,
+        isIntersecting,
+        intersectionRatio: isIntersecting ? 1 : 0,
+      } as IntersectionObserverEntry,
+    ], {} as IntersectionObserver);
+  };
+  return {
+    target, observe, unobserve, disconnect,
+    init: (): IntersectionObserverInit | undefined => options,
+    enter: (): void => emit(true),
+    leave: (): void => emit(false),
+  };
+}
+
+/** 카드 한 칸이 하는 일 — 화면에 들어오면 구독하고 벗어나면 놓는다(PhotoImg와 같은 규칙). */
+function mountPhotoCell(
+  requests: PhotoRequestCoordinator,
+  viewport: ReturnType<typeof fakeViewport>,
+  kind: PhotoKind,
+): { unmount: () => void } {
+  let unsubscribe: (() => void) | null = null;
+  const stopObserver = observePhotoViewport(viewport.target, (active) => {
+    if (active && !unsubscribe) {
+      unsubscribe = requests.subscribe(PHOTO_ID, kind, () => undefined);
+    } else if (!active && unsubscribe) {
+      unsubscribe();
+      unsubscribe = null;
+    }
+  });
+  return {
+    unmount: () => {
+      unsubscribe?.();
+      unsubscribe = null;
+      stopObserver();
+    },
+  };
+}
+
 const coordinators: PhotoRequestCoordinator[] = [];
 
 function coordinator(src: PhotoBlobSource): PhotoRequestCoordinator {
@@ -61,70 +126,58 @@ describe('PhotoImg viewport gate', () => {
     const createUrl = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:photo');
     const revokeUrl = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
 
-    let callback!: IntersectionObserverCallback;
-    let options: IntersectionObserverInit | undefined;
-    const observe = vi.fn();
-    const unobserve = vi.fn();
-    const disconnect = vi.fn();
-    class FakeIntersectionObserver {
-      constructor(cb: IntersectionObserverCallback, init?: IntersectionObserverInit) {
-        callback = cb;
-        options = init;
-      }
-      readonly root = null;
-      readonly rootMargin = PHOTO_VIEWPORT_ROOT_MARGIN;
-      readonly thresholds = [0];
-      observe = observe;
-      unobserve = unobserve;
-      disconnect = disconnect;
-      takeRecords(): IntersectionObserverEntry[] { return []; }
-    }
-    vi.stubGlobal('IntersectionObserver', FakeIntersectionObserver);
+    const viewport = fakeViewport();
+    const cell = mountPhotoCell(requests, viewport, 'thumb');
 
-    const target = {} as Element;
-    let unsubscribe: (() => void) | null = null;
-    const stopObserver = observePhotoViewport(target, (active) => {
-      if (active && !unsubscribe) {
-        unsubscribe = requests.subscribe(PHOTO_ID, 'thumb', () => undefined);
-      } else if (!active && unsubscribe) {
-        unsubscribe();
-        unsubscribe = null;
-      }
-    });
-
-    expect(options?.rootMargin).toBe('600px 0px');
-    expect(observe).toHaveBeenCalledWith(target);
+    expect(viewport.init()?.rootMargin).toBe('600px 0px');
+    expect(viewport.observe).toHaveBeenCalledWith(viewport.target);
     expect(src.getLocalPhotoBlob).not.toHaveBeenCalled();
     expect(src.getCachedPhotoBlob).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
     expect(createUrl).not.toHaveBeenCalled();
     expect(vi.getTimerCount()).toBe(0);
 
-    callback([
-      { target, isIntersecting: true, intersectionRatio: 1 } as IntersectionObserverEntry,
-    ], {} as IntersectionObserver);
+    viewport.enter();
     await flush();
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(createUrl).toHaveBeenCalledTimes(1);
 
-    callback([
-      { target, isIntersecting: false, intersectionRatio: 0 } as IntersectionObserverEntry,
-    ], {} as IntersectionObserver);
+    viewport.leave();
     expect(revokeUrl).toHaveBeenCalledWith('blob:photo');
 
     // 재진입 결과가 404면 timer가 하나 생기지만, component unmount는 구독과 observer를 모두 정리한다.
     fetchMock.mockResolvedValueOnce(response(404));
-    callback([
-      { target, isIntersecting: true, intersectionRatio: 1 } as IntersectionObserverEntry,
-    ], {} as IntersectionObserver);
+    viewport.enter();
     await flush();
     expect(vi.getTimerCount()).toBe(1);
-    (unsubscribe as (() => void) | null)?.();
-    unsubscribe = null;
-    stopObserver();
+    cell.unmount();
     expect(vi.getTimerCount()).toBe(0);
-    expect(unobserve).toHaveBeenCalledWith(target);
-    expect(disconnect).toHaveBeenCalledTimes(1);
+    expect(viewport.unobserve).toHaveBeenCalledWith(viewport.target);
+    expect(viewport.disconnect).toHaveBeenCalledTimes(1);
+  });
+
+  it('화면 밖 1장 카드는 full GET을 만들지 않고, 들어온 뒤에야 원본을 받는다', async () => {
+    // §6에서 1~2장 카드만 원본을 받는다 — 그 큰 요청일수록 viewport gate 뒤에 있어야 한다
+    const kind = mosaicPhotoKind(1);
+    expect(kind).toBe('full');
+    const src = source();
+    const requests = coordinator(src);
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) =>
+      response(200, new Blob(['photo'])));
+    vi.stubGlobal('fetch', fetchMock);
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:full');
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+
+    const viewport = fakeViewport();
+    const cell = mountPhotoCell(requests, viewport, kind);
+    await flush();
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    viewport.enter();
+    await flush();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(`/api/photos/${PHOTO_ID}?kind=full`);
+    cell.unmount();
   });
 
   it('IntersectionObserver 미지원 브라우저는 즉시 활성화한다', () => {

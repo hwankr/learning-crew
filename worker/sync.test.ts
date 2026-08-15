@@ -23,7 +23,9 @@ import {
   pullReactions,
   NIL_UUID,
   hasPhotoTombstone,
+  pendingPhotoTombstones,
   pendingPhotoTombstoneIds,
+  rearmPhotoTombstone,
   type Db,
 } from './queries';
 import { invalidReason, normalizePushedEntry } from './validation';
@@ -147,6 +149,59 @@ describe('다중 태그 DB 마이그레이션', () => {
         `select tag, tags from entries where id = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'`,
       );
       expect(result.rows).toEqual([{ tag: '영어', tags: ['영어'] }]);
+    } finally {
+      await pg.close();
+    }
+  });
+});
+
+describe('photo tombstone owner DB 마이그레이션', () => {
+  it('0008 legacy 행을 sentinel pending으로 이관하고 실제 멤버의 PUT은 막지 않는다', async () => {
+    const pg = new PGlite();
+    try {
+      const migrations = readdirSync('migrations').filter((f) => f.endsWith('.sql')).sort();
+      const legacyMigration = migrations.find((f) => f.startsWith('0008_'));
+      const ownerMigration = migrations.find((f) => f.startsWith('0009_'));
+      expect(legacyMigration).toBeDefined();
+      expect(ownerMigration).toBeDefined();
+
+      const legacyIndex = migrations.indexOf(legacyMigration!);
+      for (const migration of migrations.slice(0, legacyIndex + 1)) {
+        const ddl = readFileSync(`migrations/${migration}`, 'utf8');
+        for (const stmt of ddl.split('--> statement-breakpoint')) await pg.exec(stmt);
+      }
+
+      const photoId = 'f8888888-8888-4888-8888-888888888888';
+      await pg.exec(`insert into photo_tombstones (photo_id) values ('${photoId}')`);
+
+      const ddl = readFileSync(`migrations/${ownerMigration!}`, 'utf8');
+      for (const stmt of ddl.split('--> statement-breakpoint')) await pg.exec(stmt);
+
+      const migratedDb = drizzle(pg) as unknown as Db;
+      const migrated = await pg.query<{
+        photo_id: string;
+        owner: string;
+        cleaned_at: string | null;
+        cleanup_generation: number;
+      }>(`
+        select photo_id, owner, cleaned_at, cleanup_generation
+        from photo_tombstones where photo_id = '${photoId}'
+      `);
+      expect(migrated.rows).toEqual([{
+        photo_id: photoId,
+        owner: '__legacy_unknown__',
+        cleaned_at: null,
+        cleanup_generation: 0,
+      }]);
+      expect(await pendingPhotoTombstones(migratedDb)).toEqual([{
+        photoId,
+        owner: '__legacy_unknown__',
+        cleanupGeneration: 0,
+      }]);
+
+      // Photo PUT의 사전 가드와 사후 rearm 모두 현재 멤버 owner로 범위화된다.
+      expect(await hasPhotoTombstone(migratedDb, photoId, 'sh')).toBe(false);
+      expect(await rearmPhotoTombstone(migratedDb, photoId, 'sh')).toBeNull();
     } finally {
       await pg.close();
     }

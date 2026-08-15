@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { EntryPhoto } from '../../shared/types';
 import type { PhotoUploadInfo } from '../local/store';
-import { lightboxIndex, shownPhotos } from './photos';
+import { mosaicPhotoKind, lightboxIndex, shownPhotos } from './photos';
 
 const A = '11111111-1111-4111-8111-111111111111';
 const B = '22222222-2222-4222-8222-222222222222';
@@ -11,6 +11,18 @@ const photos: EntryPhoto[] = [
   { id: B, w: 1600, h: 900 },
   { id: C, w: 1600, h: 900 },
 ];
+
+describe('mosaicPhotoKind (모자이크 칸이 받을 해상도)', () => {
+  it('칸이 큰 1~2장 배치만 표시용 원본을 받는다', () => {
+    expect(mosaicPhotoKind(1)).toBe('full');
+    expect(mosaicPhotoKind(2)).toBe('full');
+  });
+
+  it('칸이 잘게 쪼개지는 3~4장은 썸네일로 충분하다', () => {
+    expect(mosaicPhotoKind(3)).toBe('thumb');
+    expect(mosaicPhotoKind(4)).toBe('thumb');
+  });
+});
 
 describe('lightboxIndex (확대 뷰가 보고 있는 자리)', () => {
   it('앞 사진의 업로드가 끝나 목록이 늘어도 보던 사진을 계속 가리킨다', () => {

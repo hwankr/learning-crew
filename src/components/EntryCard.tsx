@@ -1,7 +1,7 @@
 import type { Comment, Entry, MemberId, ReactionEmoji, ReactionSet } from '../../shared/types';
 import { entryTags, isOffTags } from '../../shared/types';
 import { memberOf } from '../lib/constants';
-import { mosaicArea, mosaicGrid, photoStatusOf, shownPhotos } from '../lib/photos';
+import { mosaicArea, mosaicGrid, mosaicPhotoKind, photoStatusOf, shownPhotos } from '../lib/photos';
 import type { PhotoUploadInfo } from '../local/store';
 import { Avatar, BANG_D, CheckMark, ClockIcon, Icon, StarsRow } from './icons';
 import { Chip, MoreChip } from './Chip';
@@ -51,6 +51,8 @@ export function EntryCard({
   const photoN = e.photos.length;
   // 라이트박스에 세울 수 있는 사진 — 여기서의 자리(index)가 곧 라이트박스의 자리다
   const shown = shownPhotos(e.photos, mine, photoUploads);
+  // 모자이크 칸 크기는 장수가 정한다 — 큰 칸(1~2장)만 표시용 원본을 받는다
+  const mosaicKind = mosaicPhotoKind(photoN);
 
   return (
     <div className={'entry' + (compact ? ' compact' : '') + (editing ? ' editing' : '')}>
@@ -109,7 +111,10 @@ export function EntryCard({
               const failed = state === 'fail';
               const cell = (
                 <>
-                  <PhotoImg photoId={p.id} kind="thumb" alt="" icon={26}
+                  {/* 원본을 기다리는 동안에는 이미 받아 둔 썸네일을 흐리게 깐다 —
+                      라이트박스 무대와 같은 방식이라 새 상태를 만들지 않는다 */}
+                  <PhotoImg photoId={p.id} kind={mosaicKind} alt="" icon={26}
+                    preview={mosaicKind === 'full' ? 'thumb' : undefined}
                     iconColor="rgba(22,24,29,0.22)" iconSw={1.8} lens />
                   {/* 배지는 내 기기의 업로드 상태다 — 남의 화면에는 아예 뜨지 않는다 */}
                   {state !== 'done' && (

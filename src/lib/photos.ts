@@ -1,5 +1,6 @@
 /* 사진 표시 규칙 — 카드 배지·라이트박스·크루 썸네일이 같은 판정을 쓰게 한곳에 둔다. */
 import type { EntryPhoto } from '../../shared/types';
+import type { PhotoKind } from '../local/idb';
 import type { PhotoUploadInfo } from '../local/store';
 
 /** 다 올라간 사진 — 상태 행이 없으면 이 값으로 읽는다. */
@@ -48,6 +49,15 @@ export function mosaicGrid(n: number): MosaicGrid {
     return { gridTemplateColumns: '1.55fr 1fr', gridTemplateRows: '1fr 1fr', height: '220px' };
   }
   return { gridTemplateColumns: '1fr 1fr', gridTemplateRows: '1fr 1fr', height: '220px' };
+}
+
+/** 모자이크 한 칸이 요청할 해상도. 넓은 피드는 최대 720px이라 1장 칸은 폭을 다 쓰고
+    2장 칸도 약 358px인데, 썸네일은 긴 변이 400px뿐이라 DPR 2에서는 눈에 띄게 흐리다.
+    그래서 1~2장만 표시용 원본(긴 변 1600px)을 받는다. 3~4장은 칸이 잘게 쪼개져 썸네일로
+    충분하고, 한 카드에서 큰 파일을 네 개 받는 쪽이 오히려 손해다.
+    컴팩트 미리보기·시트 타일·라이트박스 줄은 칸이 훨씬 작아 계속 썸네일이다. */
+export function mosaicPhotoKind(n: number): PhotoKind {
+  return n <= 2 ? 'full' : 'thumb';
 }
 
 /** 3장 배치에서만 칸 자리를 지정한다 — 나머지는 흐르는 순서가 곧 디자인이다. */

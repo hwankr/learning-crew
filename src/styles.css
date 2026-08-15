@@ -450,6 +450,9 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
    아이콘만 남아 "여기 사진이 온다"는 자리 표시가 된다. */
 .photo-ph { position: absolute; inset: 0; display: grid; place-items: center; }
 .photo-img { position: absolute; inset: 0; display: block; width: 100%; height: 100%; object-fit: cover; }
+/* 큰 사진을 기다리는 동안 깔리는 썸네일 — 흐린 가장자리는 감싸는 칸이 잘라 낸다
+   (라이트박스 무대의 .light-img.blur와 같은 값) */
+.photo-img.blur { filter: blur(8px); transform: scale(1.03); }
 
 /* 시트의 사진 섹션 — 5열 격자에 고른 사진과 "추가" 타일이 함께 흐른다 */
 .photo-count { font-size: 11.5px; font-weight: 700; color: #9AA1AD; }
