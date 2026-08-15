@@ -91,3 +91,12 @@ CommentList/CommentForm 일반화, useFocusTrap document 가드, Lounge.test.tsx
 2. 프로덕션 마이그레이션: `DATABASE_URL=<prod> npx drizzle-kit migrate` (0011 적용).
    **순서 주의: Worker 배포보다 먼저** — 새 Worker는 posts 테이블이 없으면 pull이 500이다.
 3. 실사용 스모크(두 기기 교차: 글+사진 올리기/삭제/댓글/오프라인 큐).
+
+## 운영 메모
+
+- `migrations/0011_talented_phalanx.sql`(posts·post_comments·트리거 3개)은 2026-08-15
+  `drizzle-kit migrate`로 프로덕션 Neon(neondb)에 적용 완료 — 테이블·트리거 존재를
+  information_schema/pg_trigger로 확인(행 0). **Worker 배포보다 먼저** 적용했다.
+- 같은 날 커밋 696a62c(기능)·48cad38(docs) 푸시 → CI Deploy 성공, Worker 버전
+  7d3e93a5. 스모크: /api/health ok · 에셋 200 · 무인증 pull 401.
+- 남은 수동 게이트: 실기기 교차 스모크(글+사진 올리기/삭제/댓글/오프라인 큐, 두 계정).
