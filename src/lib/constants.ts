@@ -1,4 +1,11 @@
-import { MEMBER_IDS, MEMBER_NAMES, isOffTags, normalizeTags, primaryTag } from '../../shared/types';
+import {
+  ENTRY_PHOTO_LIMIT,
+  MEMBER_IDS,
+  MEMBER_NAMES,
+  isOffTags,
+  normalizeTags,
+  primaryTag,
+} from '../../shared/types';
 import type {
   Comment,
   Entry,
@@ -130,6 +137,10 @@ export interface CopySet {
   savedPast: string; // 기록 저장 토스트 — 지난 날짜
   edited: string; // 기록 수정 토스트
   deleted: string; // 기록 삭제 토스트
+  photoFull: string; // 이미 4장인데 더 고르려 할 때
+  photoRoom: (n: number) => string; // 고른 장수가 남은 자리보다 많을 때
+  photoUnreadable: string; // 이 브라우저가 못 읽는 사진(HEIC 등)
+  photoFailed: string; // 그 밖의 사진 추가 실패
   delAsk: string; // 기록 삭제 확인 물음
   delNote: string; // 되돌릴 수 없다는 안내
   footer: string;
@@ -156,6 +167,10 @@ export const COPY: CopySet = {
   offNote: '쉬는 날은 별점 없이 기록돼요.',
   savedToday: '오늘 기록을 남겼어요', savedPast: '기록을 남겼어요',
   edited: '기록을 수정했어요', deleted: '기록을 삭제했어요',
+  photoFull: `사진은 한 기록에 최대 ${ENTRY_PHOTO_LIMIT}장까지예요`,
+  photoRoom: (n) => `남은 자리는 ${n}장이에요`,
+  photoUnreadable: '이 사진은 열 수 없어요',
+  photoFailed: '사진을 넣지 못했어요',
   delAsk: '이 기록을 지울까요?', delNote: '지운 기록은 되돌릴 수 없어요.',
   footer: '오늘도 크루 중 누군가는 공부를 합니다.',
   count: (n) => `${MEMBERS.length}명 중 ${n}명 도장 찍음`,

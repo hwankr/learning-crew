@@ -4,6 +4,7 @@ import {
   MEMBERS, TAGMETA, W, dayKey, memberOf, membersOfEntries, pad2, type CopySet,
 } from '../lib/constants';
 import { calOffOf, sameDayInMonth } from '../lib/uiState';
+import type { PhotoUploadInfo } from '../local/store';
 import { Avatar, Icon } from './icons';
 import { EntryCard, type EntryActions } from './EntryCard';
 
@@ -14,7 +15,7 @@ const MAX_PILLS = 3;
 const CELLS = 42;
 
 export function CalendarView({
-  entries, selDay, setSelDay, todayKey, meId, editingId, comments, reactions,
+  entries, selDay, setSelDay, todayKey, meId, editingId, comments, reactions, photoUploads,
   wit, actions,
 }: {
   entries: Entry[];
@@ -25,6 +26,7 @@ export function CalendarView({
   editingId: string | null;
   comments: Map<string, Comment[]>;
   reactions: Map<string, ReactionSet[]>;
+  photoUploads: Map<string, PhotoUploadInfo>;
   wit: CopySet;
   actions: EntryActions;
 }) {
@@ -162,7 +164,8 @@ export function CalendarView({
               {selList.map((e) => (
                 <EntryCard key={e.id} e={e} compact mine={e.m === meId} meId={meId}
                   editing={e.id === editingId} comments={comments.get(e.id) ?? []}
-                  reactions={reactions.get(e.id) ?? []} actions={actions} />
+                  reactions={reactions.get(e.id) ?? []} photoUploads={photoUploads}
+                  actions={actions} />
               ))}
             </div>
           )}

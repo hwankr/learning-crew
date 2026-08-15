@@ -3,7 +3,7 @@
 import type { Entry, MemberId, MemberStatus, Place } from '../../shared/types';
 import { MEMBERS, pad2, type CopySet } from '../lib/constants';
 import { daysOf, monthDaysOf, streakOf } from '../lib/stats';
-import type { SyncInfo } from '../local/store';
+import type { PhotoUploadInfo, SyncInfo } from '../local/store';
 import { Avatar } from './icons';
 import { Board, MeBadge } from './Board';
 import { StatusBar } from './StatusBar';
@@ -35,7 +35,7 @@ function MonthSummary({ entries, meId, today }: { entries: Entry[]; meId: Member
 }
 
 export function CrewPanel({
-  entries, todays, statuses, meId, now, today, wit, sync, onSetStatus,
+  entries, todays, statuses, meId, now, today, wit, sync, photoUploads, onSetStatus, onOpenPhoto,
 }: {
   entries: Entry[];
   todays: Entry[];
@@ -47,12 +47,15 @@ export function CrewPanel({
   wit: CopySet;
   /** null이면 동기화 줄을 그리지 않는다 — 데모(토큰 없음)에는 맞출 서버가 없다 */
   sync: SyncInfo | null;
+  photoUploads: Map<string, PhotoUploadInfo>;
   onSetStatus: (on: boolean, place: Place | null) => void;
+  onOpenPhoto: (e: Entry, photoId: string) => void;
 }) {
   return (
     <>
       <StatusBar status={statuses[meId]} wit={wit} now={now} onSet={onSetStatus} />
-      <Board todays={todays} statuses={statuses} now={now} meId={meId} wit={wit} />
+      <Board todays={todays} statuses={statuses} now={now} meId={meId} wit={wit}
+        photoUploads={photoUploads} onOpenPhoto={onOpenPhoto} />
       <MonthSummary entries={entries} meId={meId} today={today} />
       {sync && <SyncStatus sync={sync} variant="panel" />}
     </>

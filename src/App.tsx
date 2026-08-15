@@ -8,6 +8,7 @@ import {
 } from 'react';
 import type { Entry, EntryPhoto, ReactionEmoji, Tag, Todo } from '../shared/types';
 import {
+  ENTRY_PHOTO_LIMIT,
   PUSH_LIMITS,
   UUID_RE,
   canonicalUuid,
@@ -17,7 +18,10 @@ import {
   normalizeTags,
   primaryTag,
 } from '../shared/types';
-import { contentEqual } from './local/store';
+import { ImageDecodeError } from './lib/image';
+import { addDraftPhotos } from './lib/photoDraft';
+import { lightboxIndex, shownPhotos } from './lib/photos';
+import { PhotoLimitError, contentEqual } from './local/store';
 import { BY_ID, COPY, MEMBERS, W, dayKey, pad2, shiftKey } from './lib/constants';
 import type { AppConfig } from './lib/config';
 import type { CrewStore } from './local/store';
@@ -32,7 +36,8 @@ import { CalendarView } from './components/CalendarView';
 import { NotiPage } from './components/NotiPage';
 import { NotiDropdown } from './components/NotiDropdown';
 import { NotiSettings } from './components/NotiSettings';
-import { EMPTY_MODAL, EntryModal, type ModalState } from './components/EntryModal';
+import { EMPTY_MODAL, EntryModal, saveGate, type ModalState } from './components/EntryModal';
+import { PhotoLightbox } from './components/PhotoLightbox';
 import { ConfirmDelete } from './components/ConfirmDelete';
 import { Toast } from './components/Toast';
 
@@ -215,6 +220,16 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
   // 삭제 확인 대기 중인 기록 — 스냅샷에서 다시 찾으므로, 그 사이 다른 기기에서
   // 지워졌다면 물음도 함께 사라진다(이미 없는 걸 두고 물을 이유가 없다)
   const [delId, setDelId] = useState<string | null>(null);
+  /* 열려 있는 사진 확대 뷰 — 기록 id로 들고 있어 그 사이 기록이나 사진이 사라지면 함께
+     닫힌다. 자리는 숫자가 아니라 photoId로 잡는다: 보는 동안 앞쪽 사진의 업로드가 끝나
+     목록이 늘어나면 같은 숫자가 다른 사진을 가리킨다. */
+  const [light, setLight] = useState<{ entryId: string; photoId: string } | null>(null);
+  /* 사진 준비(디코드·리사이즈)는 시트 한 세션에 묶인다. 세션이 끝난 뒤 도착한 결과는 붙일
+     자리가 없어 되돌리고, 준비가 남아 있는 동안 누른 저장은 끝날 때까지 기다렸다 이어 간다 —
+     기다리지 않으면 방금 고른 사진이 조용히 빠지고 주인 없는 blob만 남는다. */
+  const photoSession = useRef(0);
+  const [preparing, setPreparing] = useState(0);
+  const [waitingSave, setWaitingSave] = useState(false);
   // 삭제를 확정하면 눌렀던 카드가 사라진다 — 초점이 문서 맨 앞으로 떨어지지 않게 여기로 되돌린다
   const ctaRef = useRef<HTMLButtonElement>(null);
   const patch = useCallback((p: Partial<ModalState>) => setModal((m) => ({ ...m, ...p })), []);
@@ -273,6 +288,7 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
   }, [modal, draftKey]);
 
   const closeModal = useCallback(() => {
+    photoSession.current += 1; // 이 세션은 끝났다 — 준비 중이던 사진 결과는 되돌아간다
     setModal((m) => {
       if (m.open) saveDraft(draftKey(m.editingId), m, editBase.current);
       return EMPTY_MODAL;
@@ -282,6 +298,7 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
   const openNew = () => {
     // 자정을 지난 직후에도 마지막 분 단위 렌더의 날짜를 쓰지 않도록, 여는 순간 다시 읽는다
     const openDay = dayKey(new Date());
+    photoSession.current += 1;
     editBase.current = null;
     const d = loadDraft(draftKey(null));
     if (d && draftHasContent(d)) {
@@ -292,9 +309,10 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
     setModal({ ...EMPTY_MODAL, open: true, entryId: crypto.randomUUID(), day: openDay });
   };
 
-  const submit = () => {
+  const submitNow = () => {
     const isOff = isOffTags(modal.tags);
     if (modal.tags.length === 0 || (!isOff && modal.stars <= 0)) return;
+    photoSession.current += 1; // 저장으로 세션이 끝난다
     const stamp = new Date();
     // 서버 한도로 캡 — 초과분이 큐에 들어가면 400이 배치 전체를 막아 동기화가 멈춘다
     // (본문 초과는 옛 한 줄 메모를 본문에 합치는 수정 경로에서만 생길 수 있다)
@@ -344,8 +362,27 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
     showToast(isEdit ? wit.edited : common.day === dayKey(stamp) ? wit.savedToday : wit.savedPast);
   };
 
+  /* 사진이 아직 리사이즈 중이면 저장을 그 자리에서 실행하지 않는다 — 지금 저장하면
+     준비가 끝난 사진은 붙을 시트가 없어 버려진다. 준비가 끝나는 대로 이어서 저장한다. */
+  const submit = () => {
+    if (preparing > 0) {
+      setWaitingSave(true);
+      return;
+    }
+    submitNow();
+  };
+  useEffect(() => {
+    if (!waitingSave || preparing > 0) return;
+    setWaitingSave(false);
+    // 준비하던 사진이 다 실패해 저장 문턱이 무너졌으면 시트를 그대로 둔다(이유는 시트가 말한다).
+    // 기다리는 사이 시트를 닫았다면 저장도 함께 취소된 것으로 본다.
+    if (modal.open && saveGate(modal).canSave) submitNow();
+    // modal이 deps에 있어 이 effect는 늘 그 렌더의 submitNow를 본다
+  }, [waitingSave, preparing, modal]);
+
   const actions = {
     onEdit: (e: Entry) => {
+      photoSession.current += 1;
       editBase.current = e;
       // 이 기록을 고치다 만 초안이 있고 기록 "내용"이 그 뒤로 안 바뀌었으면 이어서 쓴다
       // (updatedAt 비교는 안 된다 — 동기화 정산이 내용 변화 없이도 재작성한다)
@@ -387,7 +424,65 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
     onAddComment: (entryId: string, body: string) => store.addComment(entryId, body),
     onDeleteComment: (id: string) => store.removeComment(id),
     onToggleReaction: (entryId: string, emoji: ReactionEmoji) => store.toggleReaction(entryId, emoji),
+    onOpenPhoto: (e: Entry, photoId: string) => setLight({ entryId: e.id, photoId }),
+    // 실패한 사진만 다시 큐에 들어간다 — 큐가 판정하고 배지는 그 결과를 따라 바뀐다
+    onRetryPhoto: (photoId: string) => store.retryPhoto(photoId),
   };
+
+  /* 파일 선택 → 리사이즈 → 시트에 붙이기. 남은 자리보다 많이 고르면 앞에서부터 채우고
+     나머지는 토스트로 알린다 — 조용히 버리면 몇 장이 들어갔는지 알 수 없다. */
+  const onAddFiles = (files: File[]) => {
+    const room = ENTRY_PHOTO_LIMIT - modal.photos.length;
+    if (room <= 0) {
+      showToast(wit.photoFull);
+      return;
+    }
+    if (files.length > room) showToast(wit.photoRoom(room));
+    const session = photoSession.current;
+    const entryId = modal.entryId;
+    const before = modal.photos;
+    setPreparing((n) => n + 1);
+    void addDraftPhotos({
+      files,
+      room,
+      // 이 묶음에서 이미 붙인 사진도 자리 계산에 넣는다 — 디코드는 한 장씩 끝나지만
+      // 스토어의 네 장 경계는 "지금 시트에 있는 전부"를 기준으로 세야 한다
+      prepare: (file, added) => store.addPhoto(entryId, file, [...before, ...added]),
+      isCurrent: () => photoSession.current === session,
+      attach: (photo) => setModal((m) => (m.open ? { ...m, photos: [...m.photos, photo] } : m)),
+      discard: (id) => store.removeDraftPhoto(id),
+      onError: (err) =>
+        showToast(
+          err instanceof PhotoLimitError ? wit.photoFull
+            : err instanceof ImageDecodeError ? wit.photoUnreadable
+              : wit.photoFailed,
+        ),
+    })
+      .catch(() => undefined)
+      .finally(() => setPreparing((n) => n - 1));
+  };
+
+  const onRemovePhoto = (photoId: string) => {
+    patch({ photos: modal.photos.filter((p) => p.id !== photoId) });
+    const saved = modal.editingId ? store.getById(modal.editingId) : undefined;
+    const inEntry = !!saved?.photos.some((p) => p.id === photoId);
+    const status = snap.photoUploads.get(photoId);
+    /* 로컬 JPEG는 바로 버려야 그 자리에 다른 사진을 넣을 수 있다. 다만 아직 못 올린
+       사진이나 데모(서버 없음)의 사진은 이 파일이 유일본이라, 시트를 취소하면 기록에
+       남은 사진이 깨진다 — 그 경우에만 남겨 두고 저장 때의 정산에 맡긴다.
+       남겨 두더라도 스토어의 네 장 경계에서는 빼야 그 자리에 다른 사진이 들어간다. */
+    const recoverable = !cfg.demo && (!status || status.state === 'done');
+    if (!inEntry || recoverable) store.removeDraftPhoto(photoId);
+    else store.detachDraftPhoto(photoId);
+  };
+
+  // 사진이 다 사라졌으면(삭제·기록 소멸) 확대 뷰도 닫힌 것으로 본다
+  const lightEntry = light ? entries.find((e) => e.id === light.entryId) ?? null : null;
+  const lightPhotos = lightEntry
+    ? shownPhotos(lightEntry.photos, lightEntry.m === me.id, snap.photoUploads)
+    : [];
+  // 자리는 볼 때마다 지금 목록에서 다시 센다 — 보관하는 값은 photoId 하나다
+  const lightIdx = light ? lightboxIndex(lightPhotos, light.photoId) : 0;
 
   const pendingDel = delId ? entries.find((e) => e.id === delId) ?? null : null;
 
@@ -402,7 +497,7 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
     <div className="feed-wrap">
       <Feed entries={entries} todayKey={todayKey} yKey={yKey} meId={me.id}
         editingId={modal.editingId} comments={snap.comments} reactions={snap.reactions}
-        wit={wit} actions={actions} />
+        photoUploads={snap.photoUploads} wit={wit} actions={actions} />
       {footer}
     </div>
   );
@@ -411,13 +506,15 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
       <CalendarView entries={entries} selDay={selDay ?? todayKey}
         setSelDay={setSelDay} todayKey={todayKey}
         meId={me.id} editingId={modal.editingId} comments={snap.comments}
-        reactions={snap.reactions} wit={wit} actions={actions} />
+        reactions={snap.reactions} photoUploads={snap.photoUploads} wit={wit} actions={actions} />
       {footer}
     </>
   );
   const crewScreen = (
     <CrewPanel entries={entries} todays={todays} statuses={snap.statuses} meId={me.id}
       now={nowTick} today={now} wit={wit} sync={cfg.token ? snap.sync : null}
+      photoUploads={snap.photoUploads}
+      onOpenPhoto={(e, photoId) => setLight({ entryId: e.id, photoId })}
       onSetStatus={(on, place) => {
         store.setMyStatus(on, place);
         setNowTick(Date.now());
@@ -516,7 +613,26 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
       )}
       {modal.open && (
         <EntryModal modal={modal} patch={patch} close={closeModal} submit={submit} wit={wit}
-          fallbackRef={ctaRef} />
+          demo={cfg.demo} preparing={preparing > 0}
+          fallbackRef={ctaRef} onAddFiles={onAddFiles} onRemovePhoto={onRemovePhoto} />
+      )}
+      {lightEntry && lightPhotos.length > 0 && (
+        <PhotoLightbox
+          entry={lightEntry}
+          photos={lightPhotos}
+          index={lightIdx}
+          onIndex={(i) => {
+            const next = lightPhotos[i];
+            if (next) setLight({ entryId: lightEntry.id, photoId: next.id });
+          }}
+          onClose={() => setLight(null)}
+          desktop={desktop}
+          meId={me.id}
+          comments={snap.comments.get(lightEntry.id) ?? []}
+          reactions={snap.reactions.get(lightEntry.id) ?? []}
+          actions={actions}
+          fallbackRef={ctaRef}
+        />
       )}
       {pendingDel && (
         <ConfirmDelete

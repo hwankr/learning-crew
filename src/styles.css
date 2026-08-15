@@ -395,6 +395,9 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 }
 .react-pick-btn:hover { background: #F1F3F6; }
 .react-pick-btn.on { background: #F1F3F6; }
+/* 라이트박스처럼 리액션 줄이 스크롤 상자 맨 위에 오는 자리에서는 아래로 연다 —
+   위로 열면 팝오버가 상자 밖이라 잘려 보이지 않는다 */
+.react-row.below .react-pick { top: calc(100% + 7px); bottom: auto; }
 
 .comment-list { display: flex; flex-direction: column; gap: 10px; }
 .comment { display: flex; gap: 8px; align-items: flex-start; }
@@ -440,6 +443,195 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 .entry.compact .comment-name { font-size: 12px; }
 .entry.compact .comment-body { font-size: 12.5px; }
 .entry.compact .comment-input { font-size: 12px; }
+
+/* ---------- 사진 (시트 · 카드 모자이크 · 크루 썸네일) ---------- */
+/* 자리 표시 아이콘과 받아 온 이미지는 같은 칸에 겹친다 — 감싸는 쪽이 position:relative와
+   회색 배경을 맡고, 이미지가 도착하면 아이콘을 덮는다. 아직 상대가 못 올린 사진은
+   아이콘만 남아 "여기 사진이 온다"는 자리 표시가 된다. */
+.photo-ph { position: absolute; inset: 0; display: grid; place-items: center; }
+.photo-img { position: absolute; inset: 0; display: block; width: 100%; height: 100%; object-fit: cover; }
+
+/* 시트의 사진 섹션 — 5열 격자에 고른 사진과 "추가" 타일이 함께 흐른다 */
+.photo-count { font-size: 11.5px; font-weight: 700; color: #9AA1AD; }
+.photo-count.full { color: #B37F00; }
+.photo-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; margin-top: 9px; }
+.photo-tile {
+  position: relative; display: block; aspect-ratio: 1 / 1;
+  border-radius: 10px; overflow: hidden; background: #F1F3F6;
+}
+.photo-drop {
+  position: absolute; top: 4px; right: 4px; width: 22px; height: 22px;
+  border: none; border-radius: 50%; background: rgba(22, 24, 29, 0.62); color: #FFFFFF;
+  display: grid; place-items: center; cursor: pointer; padding: 0;
+}
+.photo-drop:hover { background: rgba(22, 24, 29, 0.82); }
+.photo-add {
+  display: grid; place-items: center; aspect-ratio: 1 / 1; border-radius: 10px; padding: 0;
+  border: 1.5px dashed #CDD2DB; background: #FFFFFF; color: #9AA1AD; cursor: pointer;
+  transition: border-color 120ms, background 120ms;
+}
+.photo-add:hover:enabled { border-color: #FFD666; background: #FFFDF4; }
+.photo-add:active:enabled { transform: scale(0.97); }
+/* 다 채우면 누를 곳이 아니라는 것만 알린다 — 왜 그런지는 아래 힌트가 말한다 */
+.photo-add:disabled { cursor: default; border-color: #F1F3F6; background: #FBFCFD; color: #CDD2DB; }
+/* 진짜 선택기는 OS가 연다 — 화면에서는 지우되 click()은 받아야 하고, 탭 순서·낭독기에는
+   "사진 추가" 버튼 하나만 남아야 한다 */
+.photo-file { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.photo-hint { font-size: 11.5px; color: #9AA1AD; margin-top: 8px; line-height: 1.5; }
+.photo-hint.full { color: #B37F00; }
+
+/* 피드 카드의 모자이크 — 열·행·높이는 장수에 따라 인라인으로 온다(lib/photos.ts) */
+.photo-mosaic { display: grid; gap: 4px; margin-top: 11px; border-radius: 12px; overflow: hidden; }
+.photo-cell {
+  position: relative; display: block; min-width: 0; padding: 0; margin: 0;
+  border: none; background: #F1F3F6; overflow: hidden; cursor: pointer;
+}
+/* 아직 올라가는 중이거나 대기 중인 사진은 눌러도 열 것이 없다(실패는 재시도라 누른다) */
+.photo-cell.idle { cursor: default; }
+.photo-badge {
+  position: absolute; inset: 0; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 6px; background: rgba(22, 24, 29, 0.42);
+}
+/* 진행률은 원뿔 그라디언트 링으로 — 배경 각도만 바뀌므로 다시 그리는 비용이 거의 없다 */
+.photo-ring { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; }
+.photo-pct {
+  width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center;
+  background: rgba(22, 24, 29, 0.72); color: #FFFFFF;
+  font-size: 9.5px; font-weight: 800; letter-spacing: -0.02em;
+}
+.photo-mark { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; }
+.photo-mark.fail { background: #D3352A; color: #FFFFFF; }
+.photo-mark.wait { background: #FFFFFF; color: #6B7280; }
+.photo-note {
+  padding: 2.5px 8px; border-radius: 999px; background: rgba(22, 24, 29, 0.72);
+  color: #FFFFFF; font-size: 10.5px; font-weight: 800; white-space: nowrap;
+}
+
+/* 컴팩트 카드(캘린더 목록)는 한 장 미리보기 + 장수 — 좁은 열에 모자이크를 그대로 넣으면
+   카드 하나가 목록 한 화면을 다 먹는다 */
+.photo-fill {
+  display: flex; align-items: center; gap: 9px; margin-top: 8px;
+  padding: 0; border: none; background: none; cursor: pointer;
+}
+/* 크게 볼 수 있는 사진이 아직 없을 때 — 버튼이 아니라 상태만 읽는 자리다 */
+.photo-fill.idle { cursor: default; }
+.photo-fill-thumb {
+  position: relative; display: block; width: 46px; height: 46px; flex: none;
+  border-radius: 9px; overflow: hidden; background: #F1F3F6;
+}
+.photo-fill-n {
+  position: absolute; right: 3px; bottom: 3px; min-width: 16px; height: 16px; padding: 0 4px;
+  border-radius: 999px; display: flex; align-items: center; justify-content: center;
+  background: rgba(22, 24, 29, 0.72); color: #FFFFFF; font-size: 9.5px; font-weight: 800;
+}
+.photo-fill-text { font-size: 12px; font-weight: 600; color: #9AA1AD; }
+
+/* 크루 패널 행의 사진 — 이름 줄 오른쪽, 별점 앞 */
+.crew-photo {
+  position: relative; display: block; width: 26px; height: 26px; flex: none;
+  border: none; border-radius: 7px; overflow: hidden; padding: 0;
+  background: #F1F3F6; cursor: pointer;
+}
+.crew-photo-n {
+  position: absolute; right: 1px; bottom: 1px; min-width: 13px; height: 13px; padding: 0 3px;
+  border-radius: 999px; display: flex; align-items: center; justify-content: center;
+  background: rgba(22, 24, 29, 0.72); color: #FFFFFF; font-size: 8.5px; font-weight: 800;
+}
+
+/* ---------- 사진 확대 뷰(라이트박스) ---------- */
+/* 기록 시트(z 50)보다 위, 토스트(z 60)보다 아래 — 사진 위에서 낸 알림도 보여야 한다 */
+.light-overlay {
+  position: fixed; inset: 0; z-index: 55; background: rgba(16, 17, 20, 0.88);
+  display: flex; align-items: center; justify-content: center; padding: 28px;
+  animation: rc-fade 160ms ease;
+}
+.light-card {
+  display: flex; width: 1040px; max-width: 100%; height: 640px; max-height: 100%;
+  border-radius: 18px; overflow: hidden; background: #111214;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.5);
+}
+/* 무대는 어둡게 두고 사진은 contain — 잘라서 채우면 확대해 보려던 부분이 잘려 나간다 */
+.light-stage {
+  position: relative; flex: 1; min-width: 0; display: grid; place-items: center;
+  background: #16181D; overflow: hidden;
+}
+.light-img { position: absolute; inset: 0; display: block; width: 100%; height: 100%; object-fit: contain; }
+/* 큰 사진이 오기 전의 썸네일 — 흐리게 깔아 두면 뒤바뀌는 순간이 튀지 않는다 */
+.light-img.blur { filter: blur(8px); transform: scale(1.03); }
+.light-counter {
+  position: absolute; top: 16px; left: 18px; padding: 5px 11px; border-radius: 999px;
+  background: rgba(16, 17, 20, 0.55); color: #FFFFFF; font-size: 11.5px; font-weight: 800;
+}
+.light-nav {
+  position: absolute; top: 50%; transform: translateY(-50%);
+  width: 40px; height: 40px; border-radius: 50%; border: none; padding: 0; cursor: pointer;
+  background: rgba(16, 17, 20, 0.5); color: #FFFFFF; display: grid; place-items: center;
+}
+.light-nav:hover { background: rgba(16, 17, 20, 0.72); }
+.light-nav.prev { left: 14px; }
+.light-nav.next { right: 14px; }
+.light-strip {
+  position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%);
+  display: flex; gap: 6px; padding: 6px; border-radius: 999px; background: rgba(16, 17, 20, 0.45);
+}
+.light-strip-btn {
+  position: relative; width: 34px; height: 34px; border-radius: 8px; padding: 0; overflow: hidden;
+  border: 2px solid rgba(255, 255, 255, 0.25); background: #23262E; cursor: pointer;
+}
+.light-strip-btn.on { border-color: #FFFFFF; }
+.light-panel { flex: none; width: 340px; min-height: 0; background: #FFFFFF; display: flex; flex-direction: column; }
+.light-head { display: flex; align-items: center; gap: 10px; padding: 16px 18px 12px; border-bottom: 1px solid #F1F3F6; }
+.light-head > svg { flex: none; }
+.light-who { flex: 1; min-width: 0; }
+.light-nm { font-size: 14px; font-weight: 800; color: #16181D; }
+.light-when { font-size: 11.5px; color: #9AA1AD; margin-top: 2px; }
+.light-close { width: 32px; height: 32px; flex: none; border-radius: 50%; }
+.light-close:hover { background: #F1F3F6; color: #16181D; }
+.light-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 14px 18px 18px; }
+.light-memo { font-size: 14px; font-weight: 700; color: #16181D; line-height: 1.5; overflow-wrap: break-word; }
+.light-text {
+  font-size: 13px; color: #4E555F; margin-top: 6px; line-height: 1.65;
+  white-space: pre-wrap; overflow-wrap: break-word;
+}
+/* 디자인 원본의 패널 구조 — 메모·본문·탤리·댓글은 굴러가고 입력만 바닥에 붙는다.
+   그래서 여기에는 카드의 .entry-social(세로 gap 한 덩어리)을 쓰지 않는다. */
+.light-react { margin-top: 14px; }
+.light-comments { margin-top: 16px; padding-top: 14px; border-top: 1px solid #F5F6F8; }
+.light-foot { flex: none; padding: 12px 18px 16px; border-top: 1px solid #F1F3F6; }
+.light-foot .comment-input, .light-foot .comment-send { height: 36px; }
+/* 좁은 화면은 카드가 아니라 화면 전체를 쓴다 — 사진 300px 위에 머리, 아래는 흰 시트 */
+.light-full {
+  position: fixed; inset: 0; z-index: 55; background: #101114;
+  display: flex; flex-direction: column; animation: rc-fade 160ms ease;
+}
+.mlight-bar {
+  flex: none; display: flex; align-items: center; gap: 10px;
+  padding: calc(14px + env(safe-area-inset-top)) 14px 10px;
+}
+.mlight-close {
+  width: 36px; height: 36px; flex: none; border-radius: 50%; border: none; padding: 0;
+  background: rgba(255, 255, 255, 0.12); color: #FFFFFF; display: grid; place-items: center; cursor: pointer;
+}
+.mlight-counter { font-size: 13px; font-weight: 700; color: rgba(255, 255, 255, 0.86); flex: none; }
+.mlight-who {
+  font-size: 12px; color: rgba(255, 255, 255, 0.6); min-width: 0;
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+.light-stage.mob { flex: none; height: 300px; }
+.light-strip.mob {
+  position: static; transform: none; justify-content: center;
+  background: none; padding: 12px 0 4px; border-radius: 0;
+}
+.light-strip.mob .light-strip-btn { width: 32px; height: 32px; }
+.light-sheet {
+  flex: 1; min-height: 0; display: flex; flex-direction: column;
+  margin-top: 8px; background: #FFFFFF; border-radius: 20px 20px 0 0;
+}
+.light-sheet .light-scroll { padding: 16px 18px 10px; }
+/* 좁은 화면에서는 입력이 화면 맨 아래라 홈 인디케이터 여백까지 안고 간다 */
+.light-sheet .light-foot { padding: 10px 18px calc(26px + env(safe-area-inset-bottom)); }
+.light-sheet .light-react { margin-top: 12px; }
+.light-sheet .light-comments { margin-top: 14px; padding-top: 12px; }
 
 /* ---------- 캘린더 ---------- */
 .cal-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 14px; }
@@ -1071,6 +1263,8 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
     width: 460px; max-width: 100%; border-radius: 20px; padding: 26px;
     max-height: 100%;
   }
+  /* 마우스로 겨누는 자리라 빼기 버튼이 조금 작다 (디자인: 데스크톱 20px / 모바일 22px) */
+  .photo-drop { width: 20px; height: 20px; }
 }
 
 /* 900px 셸에서 크루 패널까지 열면 고정 340px 선택일 열이 격자를 108px까지 누른다.

@@ -8,8 +8,11 @@ import {
   type MemberStatus,
 } from '../../shared/types';
 import { MEMBERS, fmtElapsed, type CopySet, type Member } from '../lib/constants';
+import { shownPhotos } from '../lib/photos';
+import type { PhotoUploadInfo } from '../local/store';
 import { Avatar, StarsRow } from './icons';
 import { Chip, MoreChip } from './Chip';
+import { PhotoImg } from './PhotoImg';
 
 export function MeBadge() {
   return <span className="me-badge">나</span>;
@@ -26,7 +29,7 @@ function LiveAvatar({ live, ...av }: { live: boolean } & Parameters<typeof Avata
 }
 
 function CrewRow({
-  m, todays, status, now, meId, wit,
+  m, todays, status, now, meId, wit, photoUploads, onOpenPhoto,
 }: {
   m: Member;
   todays: Entry[];
@@ -34,6 +37,8 @@ function CrewRow({
   now: number;
   meId: MemberId;
   wit: CopySet;
+  photoUploads: Map<string, PhotoUploadInfo>;
+  onOpenPhoto: (e: Entry, photoId: string) => void;
 }) {
   const mine = todays.filter((e) => e.m === m.id).sort((a, b) => b.time.localeCompare(a.time));
   const latest = mine[0];
@@ -55,6 +60,8 @@ function CrewRow({
         ? wit.emptyMe
         : wit.empty;
   const extra = mine.length > 1 ? `외 ${mine.length - 1}개` : '';
+  // 오늘 최신 기록의 사진 — 올라가는 중인 내 사진은 아직 아무도 못 보므로 세지 않는다
+  const shown = latest ? shownPhotos(latest.photos, isMe, photoUploads) : [];
 
   return (
     <div className="crew-row">
@@ -77,19 +84,28 @@ function CrewRow({
         </div>
         <div className={'crew-sub' + (live ? ' live' : latest ? ' has' : '')}>{subLine}</div>
       </div>
+      {latest && shown.length > 0 && (
+        <button className="crew-photo" aria-label="사진 보기" onClick={() => onOpenPhoto(latest, shown[0]!.id)}>
+          <PhotoImg photoId={shown[0]!.id} kind="thumb" alt="" icon={13}
+            iconColor="rgba(22,24,29,0.3)" iconSw={2} />
+          {shown.length > 1 && <span className="crew-photo-n">{shown.length}</span>}
+        </button>
+      )}
       {hasStars && <StarsRow n={latest.stars ?? 0} w={60} h={12} />}
     </div>
   );
 }
 
 export function Board({
-  todays, statuses, now, meId, wit,
+  todays, statuses, now, meId, wit, photoUploads, onOpenPhoto,
 }: {
   todays: Entry[];
   statuses: Partial<Record<MemberId, MemberStatus>>;
   now: number;
   meId: MemberId;
   wit: CopySet;
+  photoUploads: Map<string, PhotoUploadInfo>;
+  onOpenPhoto: (e: Entry, photoId: string) => void;
 }) {
   // 도장은 기록만이 아니라 "지금 켜 둔 사람"도 찍는다 — 켜 놓고 아직 안 쓴 사람이
   // 0명 쪽에 세어지면 패널의 라이브 점과 숫자가 서로 다른 말을 한다
@@ -104,7 +120,8 @@ export function Board({
         <div className="crew-count">{wit.count(done)}</div>
       </div>
       {MEMBERS.map((m) => (
-        <CrewRow key={m.id} m={m} todays={todays} status={statuses[m.id]} now={now} meId={meId} wit={wit} />
+        <CrewRow key={m.id} m={m} todays={todays} status={statuses[m.id]} now={now} meId={meId}
+          wit={wit} photoUploads={photoUploads} onOpenPhoto={onOpenPhoto} />
       ))}
     </div>
   );

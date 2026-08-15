@@ -10,6 +10,10 @@ export const X_D = 'M6 6l12 12M18 6L6 18';
 export const BELL_D = 'M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0';
 export const BACK_D = 'M15 5l-7 7 7 7';
 export const LOCK_D = 'M4 11h16v10H4zM8 11V7a4 4 0 0 1 8 0v4';
+/** 업로드 실패 배지의 느낌표 — 아래 점은 길이 0.1의 선분이고, 둥근 끝이 점을 만든다 */
+export const BANG_D = 'M12 6.5v7.5M12 17.6v0.1';
+export const LEFT_D = 'M15 6l-6 6 6 6';
+export const RIGHT_D = 'M9 6l6 6-6 6';
 
 const block: CSSProperties = { display: 'block', flex: 'none' };
 
@@ -30,6 +34,49 @@ export function GearIcon({ size }: { size: number }) {
       strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" style={{ display: 'block' }}>
       <circle cx={12} cy={12} r={3.2} />
       <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-2.87 1.2V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-2.87-1.2l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 2.6 15H2.5a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.2-2.87l-.06-.06A2 2 0 1 1 6.57 5.24l.06.06A1.7 1.7 0 0 0 9.5 4.1V4a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 2.87 1.2l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 21.4 11h.1a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.53 1z" />
+    </svg>
+  );
+}
+
+/** 사진 자리 표시 — 아직 못 받은 사진 칸에 깔린다. 여러 조각이라 단일 path인 Icon으로는
+    못 그린다. 색은 부르는 쪽이 준다: 밝은 칸에는 먹빛 반투명, 어두운 라이트박스에는 흰빛.
+    렌즈 점은 작은 칸에서 뭉개지므로 큰 자리에서만 켠다. */
+export function PhotoIcon({
+  size, color, sw, lens,
+}: {
+  size: number;
+  color: string;
+  sw: number;
+  lens?: boolean;
+}) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color}
+      strokeWidth={sw} strokeLinecap="round" strokeLinejoin="round" style={{ display: 'block' }}>
+      <rect x={3.2} y={5.5} width={17.6} height={13} rx={2.4} />
+      <path d="M3.6 15.2l4.2-4.1 3.3 3.2 3.1-3 6.2 5.6" />
+      {lens && <circle cx={15.7} cy={9.6} r={1.5} />}
+    </svg>
+  );
+}
+
+/** "사진 추가" 타일의 카메라 — 자리 표시 아이콘과 달리 고르는 동작을 뜻한다. */
+export function CameraIcon({ size }: { size: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" style={{ display: 'block' }}>
+      <path d="M4 8.5h3l1.5-2h7L17 8.5h3v9H4z" />
+      <circle cx={12} cy={13} r={3} />
+    </svg>
+  );
+}
+
+/** 오프라인 대기 배지의 시계. */
+export function ClockIcon({ size }: { size: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round" style={{ display: 'block' }}>
+      <circle cx={12} cy={12} r={8.6} />
+      <path d="M12 7.6V12l3 2" />
     </svg>
   );
 }

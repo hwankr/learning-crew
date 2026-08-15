@@ -129,6 +129,55 @@ describe('CrewStore 사진 blob 수명', () => {
     expect(store.getSnapshot().photoUploads.size).toBe(4);
   });
 
+  it('시트에서 뺀(로컬 보관) 사진은 네 장 경계에서 빠져 그 자리를 다시 채울 수 있다', () => {
+    // 오프라인·실패 사진은 로컬 JPEG가 유일본이라 취소 복구를 위해 남겨 둔다.
+    // 그 blob을 계속 세면 3/4 화면에서도 교체가 PhotoLimitError로 막힌다.
+    const store = new CrewStore();
+    const ids = [
+      '10000000-0000-4000-8000-000000000001',
+      '10000000-0000-4000-8000-000000000002',
+      '10000000-0000-4000-8000-000000000003',
+      '10000000-0000-4000-8000-000000000004',
+    ];
+    const saved = ids.map((id) => store.addPreparedPhoto(ENTRY_ID, prepared(), id));
+    store.upsert(entry(saved));
+
+    const sheet = saved.slice(1); // 첫 장을 시트에서 뺐다(아직 못 올린 사진이라 blob은 남긴다)
+    const replacement = '10000000-0000-4000-8000-000000000009';
+    expect(() => store.addPreparedPhoto(ENTRY_ID, prepared(), replacement, sheet))
+      .toThrow(PhotoLimitError);
+
+    store.detachDraftPhoto(saved[0]!.id);
+    const next = store.addPreparedPhoto(ENTRY_ID, prepared(), replacement, sheet);
+    expect(store.getLocalPhotoBlob(replacement, 'full')).toBeInstanceOf(Blob);
+    // 취소 복구용 원본은 저장 전까지 그대로 남아 있다
+    expect(store.getLocalPhotoBlob(saved[0]!.id, 'full')).toBeInstanceOf(Blob);
+
+    // 저장하면 빠진 사진은 참조가 끊겨 정리되고, 남은 넷이 최종 참조다
+    store.upsert({ ...entry([...sheet, next]), updatedAt: '2026-08-15T00:01:00.000Z' });
+    expect(store.getLocalPhotoBlob(saved[0]!.id, 'full')).toBeNull();
+    expect(store.getById(ENTRY_ID)?.photos.map((p) => p.id))
+      .toEqual([...sheet.map((p) => p.id), replacement]);
+  });
+
+  it('뺐다가 되돌아온 사진은 다시 한 장으로 센다', () => {
+    const store = new CrewStore();
+    const p1 = store.addPreparedPhoto(ENTRY_ID, prepared(), PHOTO_1);
+    store.upsert(entry([p1]));
+    store.detachDraftPhoto(PHOTO_1);
+    // 취소하고 그대로 저장하면 다시 이 기록의 사진이다 — 자리 계산에서도 되살아난다
+    store.upsert({ ...entry([p1]), body: '취소 후 저장', updatedAt: '2026-08-15T00:01:00.000Z' });
+
+    const ids = [
+      '10000000-0000-4000-8000-000000000002',
+      '10000000-0000-4000-8000-000000000003',
+      '10000000-0000-4000-8000-000000000004',
+    ];
+    for (const id of ids) store.addPreparedPhoto(ENTRY_ID, prepared(), id);
+    expect(() => store.addPreparedPhoto(ENTRY_ID, prepared(), MISSING_PHOTO))
+      .toThrow(PhotoLimitError);
+  });
+
   it('save/edit은 유지·추가 사진을 보존하고 빠진 사진 blob만 정리한다', () => {
     const store = new CrewStore();
     const p1 = store.addPreparedPhoto(ENTRY_ID, prepared(), PHOTO_1);

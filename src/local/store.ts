@@ -423,6 +423,10 @@ export class CrewStore implements PhotoUploadStorage {
   // 지워도 시트가 살리기를 결정할 때까지 blob을 보호하고, pin이 풀리면 미뤄 둔 정리를 끝낸다.
   private activeDraftPhotoIds = new Set<string>();
   private deferredPhotoCleanup = new Set<string>();
+  // 시트에서 뺐지만 취소 복구를 위해 로컬 JPEG를 남겨 둔 사진. 저장되는 순간 참조가
+  // 사라져 정리될 자리이므로 네 장 경계에서는 세지 않는다 — 세면 "한 장 빼고 교체"가
+  // 3/4 화면에서 PhotoLimitError로 막힌다(오프라인·실패 사진을 고치는 흐름이 통째로 파손).
+  private detachedDraftPhotos = new Set<string>();
   private me: MemberId = 'sh';
   private demo = false;
   private listeners = new Set<() => void>();
@@ -670,12 +674,12 @@ export class CrewStore implements PhotoUploadStorage {
   }
 
   private photoCount(entryId: string, currentPhotos?: readonly EntryPhoto[]): number {
-    const ids = new Set(
-      currentPhotos ?? this.map.get(entryId)?.photos ?? [],
+    const photoIds = new Set(
+      (currentPhotos ?? this.map.get(entryId)?.photos ?? []).map((photo) => photo.id),
     );
-    const photoIds = new Set([...ids].map((photo) => photo.id));
     for (const [id, row] of this.photoBlobs) {
-      if (row.entryId === entryId) photoIds.add(id);
+      // 시트가 명시적으로 뺀 사진은 저장 때 정리된다 — 지금 세면 그 자리를 다시 못 채운다
+      if (row.entryId === entryId && !this.detachedDraftPhotos.has(id)) photoIds.add(id);
     }
     return photoIds.size;
   }
@@ -722,6 +726,13 @@ export class CrewStore implements PhotoUploadStorage {
   /** 시트에서 한 장을 빼는 경로. 아직 업로드 중이면 XHR부터 끊고 로컬 바이너리를 지운다. */
   removeDraftPhoto(photoId: string): void {
     if (this.dropPhotoBlob(photoId)) this.bump();
+  }
+
+  /** 시트에서 뺐지만 로컬 JPEG는 남겨 두는 경로 — 아직 못 올린 사진과 데모 사진은
+      이 파일이 유일본이라, 시트를 취소하면 기록에 남은 사진이 깨진다. 저장되면 참조가
+      사라져 정리되므로 그때까지 자리 계산에서만 빼 둔다("빼고 교체"가 막히지 않게). */
+  detachDraftPhoto(photoId: string): void {
+    if (this.photoBlobs.has(photoId)) this.detachedDraftPhotos.add(photoId);
   }
 
   /** 기록 삭제/초안 폐기 때 entryId로 묶인 바이너리를 전부 정리한다. */
@@ -843,6 +854,7 @@ export class CrewStore implements PhotoUploadStorage {
     this.photoBlobs.delete(photoId);
     this.activeDraftPhotoIds.delete(photoId);
     this.deferredPhotoCleanup.delete(photoId);
+    this.detachedDraftPhotos.delete(photoId);
     if (!this.demo) {
       this.txWrite(['photoBlobs'], (tx) => {
         void tx.objectStore('photoBlobs').delete(photoId);
@@ -889,6 +901,8 @@ export class CrewStore implements PhotoUploadStorage {
     );
     for (const id of kept) {
       this.deferredPhotoCleanup.delete(id);
+      // 뺐다가 되돌아온 사진은 다시 이 기록의 한 장이다 — 자리 계산에도 다시 든다
+      this.detachedDraftPhotos.delete(id);
       this.associatePhoto(id, entryId);
     }
 

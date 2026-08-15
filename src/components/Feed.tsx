@@ -1,9 +1,10 @@
 import type { Comment, Entry, MemberId, ReactionSet } from '../../shared/types';
 import { MEMBERS, type CopySet } from '../lib/constants';
+import type { PhotoUploadInfo } from '../local/store';
 import { EntryCard, type EntryActions } from './EntryCard';
 
 export function Feed({
-  entries, todayKey, yKey, meId, editingId, comments, reactions, wit, actions,
+  entries, todayKey, yKey, meId, editingId, comments, reactions, photoUploads, wit, actions,
 }: {
   entries: Entry[];
   todayKey: string;
@@ -12,6 +13,7 @@ export function Feed({
   editingId: string | null;
   comments: Map<string, Comment[]>;
   reactions: Map<string, ReactionSet[]>;
+  photoUploads: Map<string, PhotoUploadInfo>;
   wit: CopySet;
   actions: EntryActions;
 }) {
@@ -50,7 +52,8 @@ export function Feed({
               .map((e) => (
                 <EntryCard key={e.id} e={e} compact={false} mine={e.m === meId} meId={meId}
                   editing={e.id === editingId} comments={comments.get(e.id) ?? []}
-                  reactions={reactions.get(e.id) ?? []} actions={actions} />
+                  reactions={reactions.get(e.id) ?? []} photoUploads={photoUploads}
+                  actions={actions} />
               ))}
           </div>
         </div>

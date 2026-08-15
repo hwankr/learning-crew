@@ -62,4 +62,19 @@ describe('saveGate (한 장짜리 시트의 저장 문턱)', () => {
       photos: [{ id: '22222222-2222-4222-8222-222222222222', w: 1600, h: 900 }],
     })).canSave).toBe(true);
   });
+
+  it('사진을 준비하는 중이면 아직 비어 있어도 막지 않는다 — 저장은 준비가 끝난 뒤 이어진다', () => {
+    const sheet = m({ tags: ['영어'], stars: 3 });
+    expect(saveGate(sheet).blocked).toBe('기록을 한 줄 적거나 사진을 넣어주세요');
+    const gate = saveGate(sheet, true);
+    expect(gate.canSave).toBe(true);
+    expect(gate.blocked).toBe('');
+    // 준비 중은 아직 "내용"이 아니다 — 초안 표시는 여전히 비어 있는 시트로 본다
+    expect(gate.hasContent).toBe(false);
+  });
+
+  it('준비 중이라도 태그·별점 문턱은 그대로다', () => {
+    expect(saveGate(m({}), true).blocked).toBe('무엇을 했는지 골라주세요');
+    expect(saveGate(m({ tags: ['영어'] }), true).blocked).toBe('만족도를 골라주세요');
+  });
 });

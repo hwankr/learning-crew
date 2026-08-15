@@ -15,7 +15,7 @@ const base: Entry = {
 function board(entry: Entry): string {
   return renderToStaticMarkup(
     <Board todays={[entry]} statuses={{}} now={Date.parse('2026-08-14T12:00:00+09:00')}
-      meId="sh" wit={COPY} />,
+      meId="sh" wit={COPY} photoUploads={new Map()} onOpenPhoto={() => {}} />,
   );
 }
 

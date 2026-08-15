@@ -1,9 +1,12 @@
 import type { Comment, Entry, MemberId, ReactionEmoji, ReactionSet } from '../../shared/types';
 import { entryTags, isOffTags } from '../../shared/types';
 import { memberOf } from '../lib/constants';
-import { Avatar, CheckMark, StarsRow } from './icons';
+import { mosaicArea, mosaicGrid, photoStatusOf, shownPhotos } from '../lib/photos';
+import type { PhotoUploadInfo } from '../local/store';
+import { Avatar, BANG_D, CheckMark, ClockIcon, Icon, StarsRow } from './icons';
 import { Chip, MoreChip } from './Chip';
 import { EntrySocial } from './EntrySocial';
+import { PhotoImg } from './PhotoImg';
 
 /** 컴팩트 카드의 한 줄 머리에 들어갈 칩 개수 — 나머지는 +N으로 접는다.
     이름·시각·별점과 한 줄을 나눠 써야 해서 태그가 자리를 다 먹으면 안 된다. */
@@ -16,10 +19,17 @@ export interface EntryActions {
   onAddComment: (entryId: string, body: string) => void;
   onDeleteComment: (id: string) => void;
   onToggleReaction: (entryId: string, emoji: ReactionEmoji) => void;
+  /** 누른 사진 자체를 넘긴다 — 숫자 자리로 넘기면 라이트박스가 열려 있는 동안 앞쪽
+      사진이 done이 되었을 때 같은 자리가 다른 사진을 가리킨다. */
+  onOpenPhoto: (e: Entry, photoId: string) => void;
+  onRetryPhoto: (photoId: string) => void;
 }
 
+/** 미완료 배지의 한 줄 — 상태가 곧 문구다. */
+const PHOTO_NOTE = { up: '올리는 중', fail: '재시도', wait: '대기', done: '' } as const;
+
 export function EntryCard({
-  e, compact, mine, meId, editing, comments, reactions, actions,
+  e, compact, mine, meId, editing, comments, reactions, photoUploads, actions,
 }: {
   e: Entry;
   compact: boolean;
@@ -28,6 +38,8 @@ export function EntryCard({
   editing: boolean;
   comments: Comment[];
   reactions: ReactionSet[];
+  /** 내 사진의 이 기기 업로드 상태 — 배지는 본인 화면에만 뜬다 */
+  photoUploads: Map<string, PhotoUploadInfo>;
   actions: EntryActions;
 }) {
   // 모르는 멤버 id는 중립 표시로 — 구버전 번들이 새 멤버의 기록을 남의 이름으로 붙이면 안 된다
@@ -36,6 +48,9 @@ export function EntryCard({
   const tags = entryTags(e);
   const hasStars = !isOffTags(tags) && (e.stars ?? 0) > 0;
   const doneN = e.todos.filter((t) => t.done).length;
+  const photoN = e.photos.length;
+  // 라이트박스에 세울 수 있는 사진 — 여기서의 자리(index)가 곧 라이트박스의 자리다
+  const shown = shownPhotos(e.photos, mine, photoUploads);
 
   return (
     <div className={'entry' + (compact ? ' compact' : '') + (editing ? ' editing' : '')}>
@@ -85,6 +100,98 @@ export function EntryCard({
         {/* 제목(memo)이 없으면 본문이 그 자리로 올라온다 — 한 줄짜리 기록이 회색 잔글씨로
             깔리지 않게 하는 디자인 규칙 */}
         {e.body && <div className={'entry-body' + (e.memo ? '' : ' lead')}>{e.body}</div>}
+        {/* 넓은 카드는 모자이크, 컴팩트(캘린더 목록)는 한 장 미리보기 + 장수 — 좁은 열에
+            모자이크를 그대로 넣으면 카드 하나가 목록 한 화면을 다 먹는다 */}
+        {photoN > 0 && !compact && (
+          <div className="photo-mosaic" style={mosaicGrid(photoN)}>
+            {e.photos.map((p, i) => {
+              const { state, pct } = photoStatusOf(p.id, mine, photoUploads);
+              const failed = state === 'fail';
+              const cell = (
+                <>
+                  <PhotoImg photoId={p.id} kind="thumb" alt="" icon={26}
+                    iconColor="rgba(22,24,29,0.22)" iconSw={1.8} lens />
+                  {/* 배지는 내 기기의 업로드 상태다 — 남의 화면에는 아예 뜨지 않는다 */}
+                  {state !== 'done' && (
+                    <span className="photo-badge">
+                      {state === 'up' && (
+                        <span className="photo-ring" style={{
+                          background: `conic-gradient(#FFB800 ${pct}%, rgba(255,255,255,0.34) 0)`,
+                        }}>
+                          <span className="photo-pct">{pct}%</span>
+                        </span>
+                      )}
+                      {failed && (
+                        <span className="photo-mark fail">
+                          <Icon d={BANG_D} size={16} sw={2.6} />
+                        </span>
+                      )}
+                      {state === 'wait' && (
+                        <span className="photo-mark wait"><ClockIcon size={17} /></span>
+                      )}
+                      <span className="photo-note">{PHOTO_NOTE[state]}</span>
+                    </span>
+                  )}
+                </>
+              );
+              const area = { gridArea: mosaicArea(photoN, i) };
+              /* 아직 올라가는 중이거나 대기 중인 사진은 눌러도 할 일이 없다 — 죽은 버튼
+                 대신 상태와 진행률을 이름으로 읽는 자리로 둔다(실패는 재시도라 버튼이다) */
+              if (state === 'up' || state === 'wait') {
+                return (
+                  <span key={p.id} className="photo-cell idle" style={area} role="img"
+                    aria-label={`사진 ${photoN}장 중 ${i + 1}번째 — ${
+                      state === 'up' ? `올리는 중 ${pct}%` : '올릴 차례를 기다리는 중'}`}>
+                    {cell}
+                  </span>
+                );
+              }
+              return (
+                <button
+                  key={p.id}
+                  className="photo-cell"
+                  style={area}
+                  aria-label={failed
+                    ? '업로드 실패 — 다시 시도'
+                    : `사진 ${photoN}장 중 ${i + 1}번째 크게 보기`}
+                  onClick={() => {
+                    if (failed) actions.onRetryPhoto(p.id);
+                    else actions.onOpenPhoto(e, p.id);
+                  }}
+                >
+                  {cell}
+                </button>
+              );
+            })}
+          </div>
+        )}
+        {/* 보이는 사진·열리는 사진·장수를 전부 done 기준으로 맞춘다 — 첫 장이 올라가는
+            중일 때 그 사진을 보여 주면서 다른 사진을 여는 어긋남이 생기지 않게 */}
+        {photoN > 0 && compact && (shown.length > 0 ? (
+          <button
+            className="photo-fill"
+            aria-label={`사진 ${shown.length}장 크게 보기`}
+            onClick={() => actions.onOpenPhoto(e, shown[0]!.id)}
+          >
+            <span className="photo-fill-thumb">
+              <PhotoImg photoId={shown[0]!.id} kind="thumb" alt="" icon={18}
+                iconColor="rgba(22,24,29,0.26)" />
+              {shown.length > 1 && <span className="photo-fill-n">{shown.length}</span>}
+            </span>
+            <span className="photo-fill-text">사진 {shown.length}장</span>
+          </button>
+        ) : (
+          /* 아직 크게 볼 수 있는 사진이 없다 — 열 것이 없으니 상태만 읽히는 자리로 둔다 */
+          <span className="photo-fill idle" role="img"
+            aria-label={`사진 ${photoN}장 · ${PHOTO_NOTE[photoStatusOf(e.photos[0]!.id, mine, photoUploads).state] || '올리는 중'}`}>
+            <span className="photo-fill-thumb">
+              <PhotoImg photoId={e.photos[0]!.id} kind="thumb" alt="" icon={18}
+                iconColor="rgba(22,24,29,0.26)" />
+              {photoN > 1 && <span className="photo-fill-n">{photoN}</span>}
+            </span>
+            <span className="photo-fill-text">사진 {photoN}장</span>
+          </span>
+        ))}
         {e.todos.length > 0 && (
           <div className="entry-todos">
             {e.todos.map((t, i) => (

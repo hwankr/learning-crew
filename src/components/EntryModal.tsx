@@ -1,9 +1,11 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import type { EntryPhoto, Tag, Todo } from '../../shared/types';
-import { PUSH_LIMITS, TAGS, isOffTags, normalizeTags } from '../../shared/types';
+import { ENTRY_PHOTO_LIMIT, PUSH_LIMITS, TAGS, isOffTags, normalizeTags } from '../../shared/types';
 import { TAGMETA, W, dayKey, pad2, type CopySet } from '../lib/constants';
 import { useFocusTrap } from '../lib/useFocusTrap';
-import { CheckMark, Icon, PLUS_D, STAR_D, X_D } from './icons';
+import { useOnline } from '../lib/useOnline';
+import { CameraIcon, CheckMark, Icon, PLUS_D, STAR_D, X_D } from './icons';
+import { PhotoImg } from './PhotoImg';
 
 export interface ModalState {
   open: boolean;
@@ -37,14 +39,19 @@ export function toggledTags(cur: readonly Tag[], t: Tag): Tag[] {
     태그 하나 이상 + (쉬는 날이거나 별점 하나 이상), 그리고 새 기록은 글/할 일/사진이 있어야 한다
     (수정은 예외 — 내용을 지우는 것도 수정이다).
     이유는 채울 순서대로 하나만 돌려준다 — 한 번에 다 늘어놓으면 무엇부터 손대야 할지 흐려진다. */
-export function saveGate(m: Pick<ModalState, 'editingId' | 'tags' | 'stars' | 'body' | 'todos' | 'photos'>): {
+export function saveGate(
+  m: Pick<ModalState, 'editingId' | 'tags' | 'stars' | 'body' | 'todos' | 'photos'>,
+  /** 고른 사진을 아직 리사이즈하는 중 — 곧 내용이 될 사진을 두고 "한 줄 적어주세요"라고
+      막지 않는다. 저장은 준비가 끝난 뒤에 이어서 실행된다(App이 대기시킨다). */
+  preparing = false,
+): {
   canSave: boolean;
   hasContent: boolean;
   blocked: string;
 } {
   const ready = m.tags.length > 0 && (isOffTags(m.tags) || m.stars > 0);
   const hasContent = !!m.body.trim() || m.todos.some((t) => t.t.trim()) || m.photos.length > 0;
-  const canSave = ready && (hasContent || !!m.editingId);
+  const canSave = ready && (hasContent || preparing || !!m.editingId);
   const blocked = !m.tags.length ? '무엇을 했는지 골라주세요'
     : !ready ? '만족도를 골라주세요'
       : !canSave ? '기록을 한 줄 적거나 사진을 넣어주세요' : '';
@@ -118,16 +125,24 @@ function DatePicker({
 }
 
 export function EntryModal({
-  modal, patch, close, submit, wit, fallbackRef,
+  modal, patch, close, submit, wit, demo, preparing, fallbackRef, onAddFiles, onRemovePhoto,
 }: {
   modal: ModalState;
   patch: (p: Partial<ModalState>) => void;
   close: () => void;
   submit: () => void;
   wit: CopySet;
+  /** 데모는 네트워크가 없다 — 사진이 즉시 done이라 오프라인 안내가 거짓말이 된다 */
+  demo: boolean;
+  /** 고른 사진을 리사이즈하는 중 — 저장을 눌러도 App이 끝날 때까지 기다렸다 이어 간다 */
+  preparing: boolean;
   /** 열었던 수정 버튼이 닫는 사이 사라질 수 있다 — 날짜를 바꿔 저장하면 카드가 다른 날 묶음으로
       옮겨가고, 다른 기기에서 그 기록이 지워질 수도 있다. 그때 초점이 갈 자리. */
   fallbackRef: RefObject<HTMLElement | null>;
+  /** 고른 파일을 리사이즈해 시트에 붙인다 — 자리 계산·실패 안내는 App이 맡는다
+      (스토어와 토스트가 거기 있고, 시트는 그 결과만 그린다) */
+  onAddFiles: (files: File[]) => void;
+  onRemovePhoto: (photoId: string) => void;
 }) {
   const [todoOpen, setTodoOpen] = useState(modal.todos.length > 0);
   const [calOpen, setCalOpen] = useState(false);
@@ -142,7 +157,9 @@ export function EntryModal({
   const bodyId = useId();
   const sheetRef = useRef<HTMLDivElement>(null);
   const bodyRef = useRef<HTMLTextAreaElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
   useFocusTrap(sheetRef, fallbackRef);
+  const online = useOnline();
 
   /* 시트가 통째로 하나로 굴러가므로 본문 칸 안에 또 스크롤이 생기면 스크롤이 두 겹이 된다 —
      내용만큼 칸이 자라게 매번 다시 잰다. border-box라 scrollHeight(테두리 제외)만 넣으면
@@ -160,8 +177,17 @@ export function EntryModal({
   const dateSuffix = modal.editingId ? '· 수정 중' : isToday ? '· 오늘' : '· 지난 기록';
 
   const isOff = isOffTags(modal.tags);
-  const { canSave, hasContent, blocked } = saveGate(modal);
+  const { canSave, hasContent, blocked } = saveGate(modal, preparing);
   const showBlocked = tried && !!blocked;
+
+  const photoFull = modal.photos.length >= ENTRY_PHOTO_LIMIT;
+  /* 자리가 찼다는 말이 먼저다 — 오프라인 안내는 아직 넣을 수 있는 사람에게만 필요하다.
+     데모는 올릴 서버가 없어 사진이 그 자리에서 끝난다 — "연결되면 올라가요"는 거짓이다. */
+  const photoHint = photoFull
+    ? '4장을 다 채웠어요. 빼면 다시 넣을 수 있어요.'
+    : !online && !demo && modal.photos.length > 0
+      ? '오프라인 — 저장하면 대기 상태로 남고 연결되면 올라가요.'
+      : '';
 
   useEffect(() => {
     const onKey = (ev: KeyboardEvent) => {
@@ -259,6 +285,51 @@ export function EntryModal({
         />
 
         <div className="sheet-label-row">
+          <span className="sheet-label">사진</span>
+          <span className={'photo-count' + (photoFull ? ' full' : '')}>
+            {modal.photos.length}/{ENTRY_PHOTO_LIMIT}
+          </span>
+        </div>
+        <div className="photo-grid">
+          {modal.photos.map((p, i) => (
+            <span className="photo-tile" key={p.id}>
+              <PhotoImg photoId={p.id} kind="thumb" alt={`첨부한 사진 ${i + 1}`} icon={20} />
+              <button className="photo-drop" aria-label="이 사진 빼기" onClick={() => onRemovePhoto(p.id)}>
+                <Icon d={X_D} size={10} sw={3} />
+              </button>
+            </span>
+          ))}
+          {/* 프로토타입의 "사진 선택" 모달 대신 OS 파일 선택기를 연다 — 고르는 자리는
+              브라우저가 이미 갖고 있고, 우리가 흉내 낼 수 있는 것도 아니다 */}
+          <button
+            className="photo-add"
+            aria-label="사진 추가"
+            disabled={photoFull}
+            onClick={() => fileRef.current?.click()}
+          >
+            <CameraIcon size={19} />
+          </button>
+          <input
+            ref={fileRef}
+            className="photo-file"
+            type="file"
+            accept="image/*"
+            multiple
+            tabIndex={-1}
+            aria-hidden="true"
+            onChange={(ev) => {
+              const files = [...(ev.target.files ?? [])];
+              // 같은 파일을 빼고 다시 골라도 change가 오도록 비운다
+              ev.target.value = '';
+              if (files.length) onAddFiles(files);
+            }}
+          />
+        </div>
+        {photoHint && (
+          <div className={'photo-hint' + (photoFull ? ' full' : '')}>{photoHint}</div>
+        )}
+
+        <div className="sheet-label-row">
           <span className="sheet-label">할 일</span>
           <button
             className="todo-toggle"
@@ -324,12 +395,15 @@ export function EntryModal({
           {/* 초안 표시와 "왜 저장이 안 되는지"가 한 자리를 나눠 쓴다 — 둘 다 버튼 옆 잔글씨고,
               동시에 할 말이 있는 상황이 아니다(저장이 막혀 있으면 그게 먼저다) */}
           <span className={'draft-note' + (showBlocked ? ' warn' : '')} role="status" aria-live="polite">
-            {showBlocked ? blocked : hasContent ? (typing ? '쓰는 중…' : '초안 저장됨') : ''}
+            {showBlocked ? blocked
+              : preparing ? '사진 준비 중…'
+                : hasContent ? (typing ? '쓰는 중…' : '초안 저장됨') : ''}
           </span>
           <button className="cancel-btn" onClick={close}>취소</button>
           <button
             className={'submit' + (canSave ? ' ready' : '')}
             aria-disabled={!canSave}
+            aria-busy={preparing}
             onClick={() => { if (canSave) submit(); else setTried(true); }}
           >
             {modal.editingId ? wit.editSubmit : wit.submit}

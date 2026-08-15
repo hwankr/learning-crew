@@ -21,25 +21,26 @@ export function clampPopoverLeft(btnLeft: number, rowW: number, popW: number): n
   return Math.min(Math.max(btnLeft, 0), max);
 }
 
-/** 기록 카드 아래에 붙는 소셜 블록 — 리액션 줄 + 댓글 목록 + 작성 줄.
-    쓰기는 전부 스토어(로컬 복제본)로 바로 간다. 네트워크를 기다리는 상태는 없다. */
-export function EntrySocial({
-  entryId, comments, sets, meId, actions,
+/** 리액션 칩 줄 + 피커. 카드에서는 소셜 블록의 첫 줄이고, 라이트박스에서는 스크롤 본문에
+    따로 놓인다 — 같은 상태·같은 쓰기 경로를 쓰도록 조각으로 나눠 둔다. */
+export function ReactionRow({
+  entryId, sets, meId, actions, below, onPickerOpen,
 }: {
   entryId: string;
-  comments: Comment[]; // 스냅샷이 이미 (createdAt, id) 오름차순으로 준다 — 다시 정렬하지 않는다
   sets: ReactionSet[];
   meId: MemberId;
   actions: EntryActions;
+  /** 피커를 줄 아래로 연다 — 스크롤 상자 맨 위에 놓이는 라이트박스에서는 위로 열면 잘린다 */
+  below?: boolean;
+  /** 피커의 열림을 바깥에 알린다 — 라이트박스는 Escape를 피커에게 먼저 넘겨야 한다 */
+  onPickerOpen?: (open: boolean) => void;
 }) {
   const [pickOpen, setPickOpen] = useState(false);
   const [pickLeft, setPickLeft] = useState(0);
-  const [text, setText] = useState('');
   const pickWrap = useRef<HTMLDivElement>(null);
   const rowRef = useRef<HTMLDivElement>(null);
   const pickRef = useRef<HTMLDivElement>(null);
   const addRef = useRef<HTMLButtonElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
 
   // 피커는 열려 있는 동안에만 문서 리스너를 건다 — 카드가 수십 개라 항상 걸어 두면 그만큼 쌓인다
   useEffect(() => {
@@ -58,9 +59,12 @@ export function EntrySocial({
     };
   }, [pickOpen]);
 
+  useEffect(() => {
+    onPickerOpen?.(pickOpen);
+  }, [pickOpen, onPickerOpen]);
+
   const tally = tallyReactions(sets, meId);
   const myEmojis = sets.find((s) => s.m === meId)?.emojis ?? [];
-  const me = memberOf(meId);
 
   // 열린 직후 한 번 재서 팝오버 위치를 잡는다 — 버튼 위치는 칩 개수에 따라 매 카드 다르니
   // CSS만으로는 못 맞춘다(동적 위치라 인라인 style이 맞다). 그리기 전에 끝내야 팝오버가
@@ -76,6 +80,102 @@ export function EntrySocial({
     setPickLeft(popW > 0 ? clampPopoverLeft(add.offsetLeft, row.clientWidth, popW) : 0);
   }, [pickOpen, tally.length]);
 
+  return (
+    <div className={'react-row' + (below ? ' below' : '')} ref={rowRef}>
+      {tally.map((t) => (
+        <button
+          key={t.emoji}
+          className={'react-chip' + (t.mine ? ' mine' : '')}
+          aria-pressed={t.mine}
+          title={t.names.join(', ')}
+          onClick={() => actions.onToggleReaction(entryId, t.emoji)}
+        >
+          <span className="react-chip-emoji">{t.emoji}</span>
+          {t.n}
+        </button>
+      ))}
+      <div className="react-pick-wrap" ref={pickWrap}>
+        {pickOpen && (
+          <div className="react-pick" ref={pickRef} style={{ left: pickLeft }}>
+            {REACTIONS.map((emoji) => (
+              <button
+                key={emoji}
+                className={'react-pick-btn' + (myEmojis.includes(emoji) ? ' on' : '')}
+                aria-label={emoji}
+                aria-pressed={myEmojis.includes(emoji)}
+                onClick={() => {
+                  actions.onToggleReaction(entryId, emoji);
+                  setPickOpen(false);
+                }}
+              >
+                {emoji}
+              </button>
+            ))}
+          </div>
+        )}
+        <button
+          ref={addRef}
+          className={'react-add' + (pickOpen ? ' open' : '')}
+          aria-label="리액션 추가"
+          aria-expanded={pickOpen}
+          onClick={() => setPickOpen((v) => !v)}
+        >
+          <Icon d={PLUS_D} size={13} sw={2.4} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** 댓글 목록. 없으면 자리도 차지하지 않는다. */
+export function CommentList({
+  comments, meId, actions,
+}: {
+  comments: Comment[]; // 스냅샷이 이미 (createdAt, id) 오름차순으로 준다 — 다시 정렬하지 않는다
+  meId: MemberId;
+  actions: EntryActions;
+}) {
+  if (comments.length === 0) return null;
+  return (
+    <div className="comment-list">
+      {comments.map((c) => {
+        // 모르는 멤버 id는 중립 표시로 — 남의 이름으로 서명된 댓글이 되면 안 된다
+        const cm = memberOf(c.m);
+        return (
+          <div className="comment" key={c.id}>
+            <Avatar m={cm} size={24} />
+            <div className="comment-main">
+              <div className="comment-head">
+                <span className="comment-name">{cm.name}</span>
+                <span className="comment-time">{hhmm(c.createdAt)}</span>
+                {c.m === meId && (
+                  <button className="comment-del" aria-label="댓글 삭제"
+                    onClick={() => actions.onDeleteComment(c.id)}>
+                    <Icon d={X_D} size={10} sw={2.6} />
+                  </button>
+                )}
+              </div>
+              <div className="comment-body">{c.body}</div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** 댓글 작성 줄. 카드에서는 소셜 블록의 마지막 줄, 라이트박스에서는 바닥에 고정된다. */
+export function CommentForm({
+  entryId, meId, actions,
+}: {
+  entryId: string;
+  meId: MemberId;
+  actions: EntryActions;
+}) {
+  const [text, setText] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
+  const me = memberOf(meId);
+
   const submit = () => {
     if (!text.trim()) return;
     actions.onAddComment(entryId, text);
@@ -85,103 +185,50 @@ export function EntrySocial({
   };
 
   return (
-    <div className="entry-social">
-      <div className="react-row" ref={rowRef}>
-        {tally.map((t) => (
-          <button
-            key={t.emoji}
-            className={'react-chip' + (t.mine ? ' mine' : '')}
-            aria-pressed={t.mine}
-            title={t.names.join(', ')}
-            onClick={() => actions.onToggleReaction(entryId, t.emoji)}
-          >
-            <span className="react-chip-emoji">{t.emoji}</span>
-            {t.n}
-          </button>
-        ))}
-        <div className="react-pick-wrap" ref={pickWrap}>
-          {pickOpen && (
-            <div className="react-pick" ref={pickRef} style={{ left: pickLeft }}>
-              {REACTIONS.map((emoji) => (
-                <button
-                  key={emoji}
-                  className={'react-pick-btn' + (myEmojis.includes(emoji) ? ' on' : '')}
-                  aria-label={emoji}
-                  aria-pressed={myEmojis.includes(emoji)}
-                  onClick={() => {
-                    actions.onToggleReaction(entryId, emoji);
-                    setPickOpen(false);
-                  }}
-                >
-                  {emoji}
-                </button>
-              ))}
-            </div>
-          )}
-          <button
-            ref={addRef}
-            className={'react-add' + (pickOpen ? ' open' : '')}
-            aria-label="리액션 추가"
-            aria-expanded={pickOpen}
-            onClick={() => setPickOpen((v) => !v)}
-          >
-            <Icon d={PLUS_D} size={13} sw={2.4} />
-          </button>
-        </div>
-      </div>
-
-      {comments.length > 0 && (
-        <div className="comment-list">
-          {comments.map((c) => {
-            // 모르는 멤버 id는 중립 표시로 — 남의 이름으로 서명된 댓글이 되면 안 된다
-            const cm = memberOf(c.m);
-            return (
-              <div className="comment" key={c.id}>
-                <Avatar m={cm} size={24} />
-                <div className="comment-main">
-                  <div className="comment-head">
-                    <span className="comment-name">{cm.name}</span>
-                    <span className="comment-time">{hhmm(c.createdAt)}</span>
-                    {c.m === meId && (
-                      <button className="comment-del" aria-label="댓글 삭제"
-                        onClick={() => actions.onDeleteComment(c.id)}>
-                        <Icon d={X_D} size={10} sw={2.6} />
-                      </button>
-                    )}
-                  </div>
-                  <div className="comment-body">{c.body}</div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
+    /* 입력은 늘 펼쳐 둔다 — "보내기"만 내용이 있을 때 나타난다(디자인) */
+    <div className="comment-form">
+      <Avatar m={me} size={24} />
+      <input
+        ref={inputRef}
+        className="comment-input"
+        value={text}
+        placeholder="댓글 달기…"
+        maxLength={PUSH_LIMITS.commentBody}
+        onChange={(ev) => setText(ev.target.value)}
+        onKeyDown={(ev) => {
+          // 한글은 조합 중 Enter로 글자를 "확정"한다 — 그 Enter까지 제출로 받으면
+          // "안녕하세" 같은 미완성 댓글이 그대로 저장된다(댓글은 수정이 없다).
+          // 조합 중이면 넘긴다: isComposing이 표준, keyCode 229는 구형 브라우저 폴백.
+          if (ev.nativeEvent.isComposing || ev.keyCode === 229) return;
+          if (ev.key === 'Enter') {
+            ev.preventDefault();
+            submit();
+          }
+        }}
+      />
+      {text.trim() && (
+        <button className="comment-send" onClick={submit}>보내기</button>
       )}
+    </div>
+  );
+}
 
-      {/* 입력은 늘 펼쳐 둔다 — "보내기"만 내용이 있을 때 나타난다(디자인) */}
-      <div className="comment-form">
-        <Avatar m={me} size={24} />
-        <input
-          ref={inputRef}
-          className="comment-input"
-          value={text}
-          placeholder="댓글 달기…"
-          maxLength={PUSH_LIMITS.commentBody}
-          onChange={(ev) => setText(ev.target.value)}
-          onKeyDown={(ev) => {
-            // 한글은 조합 중 Enter로 글자를 "확정"한다 — 그 Enter까지 제출로 받으면
-            // "안녕하세" 같은 미완성 댓글이 그대로 저장된다(댓글은 수정이 없다).
-            // 조합 중이면 넘긴다: isComposing이 표준, keyCode 229는 구형 브라우저 폴백.
-            if (ev.nativeEvent.isComposing || ev.keyCode === 229) return;
-            if (ev.key === 'Enter') {
-              ev.preventDefault();
-              submit();
-            }
-          }}
-        />
-        {text.trim() && (
-          <button className="comment-send" onClick={submit}>보내기</button>
-        )}
-      </div>
+/** 기록 카드 아래에 붙는 소셜 블록 — 리액션 줄 + 댓글 목록 + 작성 줄.
+    쓰기는 전부 스토어(로컬 복제본)로 바로 간다. 네트워크를 기다리는 상태는 없다. */
+export function EntrySocial({
+  entryId, comments, sets, meId, actions,
+}: {
+  entryId: string;
+  comments: Comment[];
+  sets: ReactionSet[];
+  meId: MemberId;
+  actions: EntryActions;
+}) {
+  return (
+    <div className="entry-social">
+      <ReactionRow entryId={entryId} sets={sets} meId={meId} actions={actions} />
+      <CommentList comments={comments} meId={meId} actions={actions} />
+      <CommentForm entryId={entryId} meId={meId} actions={actions} />
     </div>
   );
 }
