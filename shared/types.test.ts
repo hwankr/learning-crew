@@ -8,6 +8,8 @@ import {
   hasTodayStudyStamp,
   isOffTags,
   mergeMemberStatus,
+  normalizeCrewEvent,
+  normalizeCustomEventTagList,
   normalizeMemberStatus,
   normalizeCustomTagList,
   normalizePhotos,
@@ -21,6 +23,74 @@ const P2 = '22222222-2222-4222-8222-222222222222';
 const P3 = '33333333-3333-4333-8333-333333333333';
 const P4 = '44444444-4444-4444-8444-444444444444';
 const P5 = '55555555-5555-4555-8555-555555555555';
+
+describe('normalizeCrewEvent', () => {
+  const event = (over: Record<string, unknown> = {}) => ({
+    id: P1,
+    m: 'sh',
+    participants: ['sh'],
+    title: '면접',
+    tag: '영어',
+    memo: '',
+    day: '2026-08-16',
+    endDay: null,
+    v: 0,
+    updatedAt: '2026-08-16T01:00:00Z',
+    deletedAt: null,
+    ...over,
+  });
+
+  it('UUID·제목·시각을 표준화하고 내부 공백은 그대로 둔다', () => {
+    expect(normalizeCrewEvent(event({
+      id: P1.toUpperCase(),
+      title: '  최종   면접  ',
+    }))).toMatchObject({
+      id: P1,
+      title: '최종   면접',
+      updatedAt: '2026-08-16T01:00:00.000Z',
+    });
+  });
+
+  it('OFF·손상 tag는 기타로 복구하고 유효한 커스텀 태그는 보존한다', () => {
+    expect(normalizeCrewEvent(event({ tag: 'OFF' }))?.tag).toBe('기타');
+    expect(normalizeCrewEvent(event({ tag: '제어\n문자' }))?.tag).toBe('기타');
+    expect(normalizeCrewEvent(event({ tag: '  취업   준비 ' }))?.tag).toBe('취업 준비');
+  });
+
+  it('participants는 유효한 멤버만 중복 없이 크루 순서로 고정한다', () => {
+    expect(normalizeCrewEvent(event({
+      participants: ['kj', 'not-a-member', 'sh', 'kj', null, 'wg'],
+    }))?.participants).toEqual(['sh', 'wg', 'kj']);
+    expect(normalizeCrewEvent(event({ participants: ['wg'] }))?.participants).toEqual(['wg']);
+  });
+
+  it('participants가 비었거나 전부 무효이거나 없는 구버전 행은 등록자로 복구한다', () => {
+    expect(normalizeCrewEvent(event({ m: 'th', participants: [] }))?.participants).toEqual(['th']);
+    expect(normalizeCrewEvent(event({ m: 'jj', participants: ['unknown'] }))?.participants)
+      .toEqual(['jj']);
+    const legacy: Record<string, unknown> = event();
+    delete legacy.participants;
+    expect(normalizeCrewEvent(legacy)?.participants).toEqual(['sh']);
+  });
+
+  it('endDay는 시작일 뒤 최대 90일까지 보존하고 나머지는 null로 복구한다', () => {
+    expect(normalizeCrewEvent(event({ day: '2026-01-01', endDay: '2026-04-01' }))?.endDay)
+      .toBe('2026-04-01');
+    expect(normalizeCrewEvent(event({ endDay: '2026-08-16' }))?.endDay).toBeNull();
+    expect(normalizeCrewEvent(event({ endDay: '2026-02-31' }))?.endDay).toBeNull();
+    expect(normalizeCrewEvent(event({ day: '2026-01-01', endDay: '2026-04-02' }))?.endDay)
+      .toBeNull();
+  });
+
+  it('제목·메모 길이는 UTF-16이 아니라 코드포인트로 세고 필수 필드 손상은 행을 버린다', () => {
+    expect(normalizeCrewEvent(event({ title: '😀'.repeat(80), memo: '😀'.repeat(200) })))
+      .not.toBeNull();
+    expect(normalizeCrewEvent(event({ title: '😀'.repeat(81) }))).toBeNull();
+    expect(normalizeCrewEvent(event({ memo: '😀'.repeat(201) }))).toBeNull();
+    expect(normalizeCrewEvent(event({ title: '면접\n준비' }))).toBeNull();
+    expect(normalizeCrewEvent(event({ day: '2026-02-31' }))).toBeNull();
+  });
+});
 
 describe('normalizePhotos', () => {
   it('유효한 UUID만 남기고 대소문자만 다른 중복도 첫 항목 하나로 합친다', () => {
@@ -135,6 +205,21 @@ describe('normalizeCustomTagList', () => {
 
   it('배열이 아니면 빈 배열이다', () => {
     expect(normalizeCustomTagList(null)).toEqual([]);
+  });
+
+  it('피커별 프리셋 목록을 넘기면 그 이름만 제외한다', () => {
+    expect(normalizeCustomTagList(['영어', '면접', ' 발표 '], ['면접'])).toEqual([
+      '발표', '영어',
+    ]);
+  });
+});
+
+describe('normalizeCustomEventTagList', () => {
+  it('OFF는 항상 빼고 UI가 넘긴 일정 프리셋도 함께 제외한다', () => {
+    expect(normalizeCustomEventTagList(
+      [' OFF ', '면접', ' 영어 ', '발표'],
+      ['자격증', '면접', '시험'],
+    )).toEqual(['발표', '영어']);
   });
 });
 

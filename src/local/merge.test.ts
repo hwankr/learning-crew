@@ -501,11 +501,38 @@ describe('커스텀 태그 캐시 LWW 병합', () => {
     expect(normalizeTagPrefs({
       m: 'sh', tags: ['알고리즘', ' 영어 ', ' 수학 '], updatedAt: '2026-08-15T01:00:00Z',
     }, 'sh')).toEqual({
-      m: 'sh', tags: ['수학', '알고리즘'], updatedAt: '2026-08-15T01:00:00.000Z',
+      m: 'sh',
+      tags: ['수학', '알고리즘'],
+      eventTags: [],
+      updatedAt: '2026-08-15T01:00:00.000Z',
     });
+    expect(normalizeTagPrefs({
+      m: 'sh', tags: [], eventTags: '면접', updatedAt: '2026-08-15T01:00:00Z',
+    }, 'sh')).toBeNull();
     expect(normalizeTagPrefs({
       m: 'wg', tags: ['수학'], updatedAt: '2026-08-15T01:00:00.000Z',
     }, 'sh')).toBeNull();
+  });
+
+  it('일정용 목록을 왕복하고 어느 setter도 같은 행의 다른 목록을 지우지 않는다', () => {
+    const store = new CrewStore();
+    store.setCustomTags(['수학']);
+    store.setCustomEventTags([' 영어 ', ' 면접 준비 ', 'OFF']);
+    expect(store.getCustomTags()).toEqual(['수학']);
+    expect(store.getCustomEventTags()).toEqual(['면접 준비', '영어']);
+    expect(store.getSnapshot()).toMatchObject({
+      customTags: ['수학'],
+      customEventTags: ['면접 준비', '영어'],
+    });
+
+    store.setCustomTags(['독서']);
+    expect(store.getCustomEventTags()).toEqual(['면접 준비', '영어']);
+    store.setCustomEventTags(['발표']);
+    expect(store.getCustomTags()).toEqual(['독서']);
+    expect(store.myTagPrefsPending()).toMatchObject({
+      tags: ['독서'],
+      eventTags: ['발표'],
+    });
   });
 
   it('로컬 추가는 캐시·dirty에 즉시 반영되고 GET은 더 새 서버 시각만 채택한다', () => {
@@ -553,6 +580,8 @@ describe('커스텀 태그 캐시 LWW 병합', () => {
     await store.init({ demo: true, memberId: 'sh', token: null });
     store.setCustomTags(['수학']);
     expect(store.getSnapshot().customTags).toEqual(['수학']);
+    store.setCustomEventTags(['면접 준비']);
+    expect(store.getSnapshot().customEventTags).toEqual(['면접 준비']);
     expect(store.myTagPrefsPending()).toBeNull();
     expect(store.getSnapshot().sync.pending).toBe(0);
   });

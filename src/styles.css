@@ -267,6 +267,49 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 
 .me-badge { flex: none; font-size: 9.5px; font-weight: 800; background: #16181D; color: #FFFFFF; border-radius: 999px; padding: 1.5px 6px; }
 
+/* ---------- 다가오는 일정 (홈 · 크루 패널) ---------- */
+/* 체크인 바로 아래, 오늘의 크루 위 — 오늘 할 일과 앞으로 할 일이 나란히 선다 */
+.evlead { margin-top: 22px; }
+.evlead-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.evlead-title { font-size: 14px; font-weight: 800; letter-spacing: -0.01em; color: #16181D; white-space: nowrap; }
+/* 등록 입구는 앰버 글씨 하나 — 배너가 없는 날에도 이 줄만은 남는다 */
+.evlead-add {
+  flex: none; border: none; background: none; padding: 0; cursor: pointer;
+  font-size: 12px; font-weight: 700; color: #B37F00; white-space: nowrap;
+}
+.evlead-add:hover { color: #8F6600; }
+.evcard {
+  display: flex; align-items: center; gap: 12px; width: 100%; text-align: left;
+  padding: 11px 12px; border-radius: 16px; background: #FFFFFF; border: 1px solid #F1F3F6;
+  box-shadow: 0 6px 16px rgba(22, 24, 29, 0.06); cursor: pointer;
+  transition: border-color 140ms, box-shadow 140ms;
+}
+.evcard:hover { border-color: #E4E7EC; box-shadow: 0 8px 20px rgba(22, 24, 29, 0.09); }
+.evcard > svg { color: #CDD2DB; }
+/* D-day 배지는 이 카드에서 가장 큰 글자다 — 남은 날이 곧 이 카드의 용건이다 */
+.evcard-dday {
+  display: flex; align-items: center; justify-content: center; flex: none;
+  min-width: 48px; height: 44px; padding: 0 9px; border-radius: 13px;
+  font-size: 15px; font-weight: 900; letter-spacing: -0.02em; white-space: nowrap;
+  background: #FFF9E6; color: #B37F00;
+}
+.evcard-dday.near { background: #FFB800; color: #16181D; }
+.evcard-dday.past { background: #F1F3F6; color: #9AA1AD; }
+.evcard-main { flex: 1; min-width: 0; }
+.evcard-title {
+  display: block; font-size: 13.5px; font-weight: 800; letter-spacing: -0.01em; color: #16181D;
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+/* 참여 인원 아바타가 이름 요약 앞에 선다 — "누구의 약속인가"를 글자보다 먼저 읽게 한다.
+   말줄임은 글자 쪽(.evcard-by-text)에만 걸어 좁은 화면에서도 아바타가 먼저 잘리지 않는다. */
+.evcard-by { display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: #9AA1AD; margin-top: 3px; }
+.evcard-by-text { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.evcard-avatars { display: flex; flex: none; }
+/* 패널 열은 296px뿐이라 겹침을 패널 머리(-7px)보다 더 준다 — 다섯 명이 다 서도
+   뒤에 붙는 날짜가 말줄임으로 먼저 잘리지 않아야 한다 */
+.evcard-av { display: block; flex: none; border-radius: 50%; border: 2px solid #FFFFFF; }
+.evcard-av + .evcard-av { margin-left: -7px; }
+
 /* ---------- 태그 칩 ---------- */
 .chip { display: flex; align-items: center; border-radius: 999px; font-weight: 700; white-space: nowrap; }
 .chip svg { flex: none; display: block; }
@@ -662,6 +705,17 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
   padding: 6px 13px; font-size: 12px; font-weight: 700; color: #4E555F;
 }
 .cal-today-btn:hover { background: #F1F3F6; }
+/* 일정 등록 — 좁은 화면은 + 원형 하나, 와이드는 라벨이 붙은 알약(아래 미디어 쿼리).
+   라벨을 접어도 같은 버튼이라 초점·낭독기에는 aria-label 하나만 남는다. */
+.cal-event-btn {
+  display: flex; align-items: center; justify-content: center; flex: none;
+  width: 36px; height: 36px; padding: 0;
+  border: 1px solid #E4E7EC; border-radius: 999px; background: #FFFFFF; color: #4E555F;
+  cursor: pointer; transition: background 120ms;
+}
+.cal-event-btn:hover { background: #F1F3F6; }
+.cal-event-btn > svg { width: 15px; height: 15px; }
+.cal-event-btn-label { display: none; }
 .cal-nav { display: flex; gap: 2px; }
 .cal-nav .icon-btn { width: 36px; height: 36px; }
 
@@ -706,6 +760,8 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
    점이 없는 날도 높이가 같아야 격자가 흔들리지 않으므로 최소 높이는 남긴다. */
 .cal-day-dots { display: flex; flex-wrap: wrap; justify-content: center; gap: 2px; min-height: 6px; max-width: 100%; }
 .cal-day-dot { display: block; width: 6px; height: 6px; border-radius: 50%; }
+/* 동그라미는 기록, 네모는 일정 — 6px 점에서 색만으로는 종류를 못 가른다(색은 사람 몫이다) */
+.cal-day-dot.ev { border-radius: 2px; }
 @media (max-width: 374px) {
   .cal-day-dots { gap: 1px; min-height: 5px; }
   .cal-day-dot { width: 5px; height: 5px; }
@@ -713,10 +769,31 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 
 /* 셀 안 멤버·태그 알약 — 모바일에서는 점으로 대신한다 (와이드 미디어에서 전환) */
 .cal-pills { display: none; flex-direction: column; gap: 3px; min-width: 0; width: 100%; }
-.cal-pill { display: flex; align-items: center; gap: 3px; border-radius: 6px; padding: 3px 5px; min-width: 0; }
+/* 투명 테두리는 자리만 잡아 둔다 — 테두리를 두르는 일정 알약과 높이가 어긋나지 않게 */
+.cal-pill { display: flex; align-items: center; gap: 3px; border: 1px solid transparent; border-radius: 6px; padding: 3px 5px; min-width: 0; }
 .cal-pill-dot { display: block; width: 5px; height: 5px; border-radius: 50%; flex: none; }
 .cal-pill-label { font-size: 10px; font-weight: 700; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+/* 일정 알약 — 기록은 태그 색으로 채우고, 일정은 남은 날짜로 옷이 갈린다.
+   점은 여전히 등록한 사람의 색이라 "누구의 약속인가"는 그대로 읽힌다. */
+.cal-pill.ev { background: #FFFFFF; border-color: #E4E7EC; }
+.cal-pill.ev .cal-pill-label { color: #363B45; }
+.cal-pill.ev.near { background: #FFF9E6; border-color: #FFD666; }
+.cal-pill.ev.near .cal-pill-label { color: #B37F00; }
+/* 지난 일정은 점선으로 물러난다 — 지워지진 않았지만 더 챙길 것이 없다 */
+.cal-pill.ev.past { background: #F8F9FB; border-style: dashed; }
+.cal-pill.ev.past .cal-pill-label { color: #9AA1AD; }
 .cal-more { font-size: 10px; font-weight: 700; color: #9AA1AD; padding: 0 5px; text-align: left; white-space: nowrap; }
+
+/* 격자 아래 범례 — 모양이 무엇을 뜻하는지 한 번은 말해 준다(일정이 있는 달에만 뜬다) */
+.cal-legend {
+  display: flex; align-items: center; gap: 12px;
+  margin-top: 12px; padding: 8px 2px; border-bottom: 1px solid #F1F3F6;
+}
+.cal-legend-key { display: flex; align-items: center; gap: 5px; font-size: 10.5px; color: #9AA1AD; }
+/* 범례의 점은 무채색 — 크루 다섯 색 중 하나를 쓰면 그 사람의 표시로 읽힌다 */
+.cal-legend-dot { display: block; width: 6px; height: 6px; border-radius: 50%; background: #CDD2DB; }
+.cal-legend-dot.ev { border-radius: 2px; }
+.cal-legend-hint { flex: none; font-size: 10.5px; color: #B4BAC4; white-space: nowrap; }
 
 /* 선택한 날 패널 — 좁은 화면에선 격자 아래로 흐르고, 와이드에선 우측 340px 열로 선다.
    min-height는 기록이 없는 날에도 격자 옆이 허전하지 않게 자리를 잡아 둔다. */
@@ -730,9 +807,34 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 .sel-avatars { display: flex; flex: none; }
 .sel-av { display: block; flex: none; border-radius: 50%; border: 2px solid #FFFFFF; }
 .sel-av + .sel-av { margin-left: -7px; }
+/* 아바타 뒤에 붙는 등록 입구 — 그 날을 보고 있을 때 일정을 더하는 가장 짧은 길 */
+.sel-event-add {
+  flex: none; border: none; background: none; padding: 0; cursor: pointer;
+  font-size: 12px; font-weight: 700; color: #B37F00; white-space: nowrap;
+}
+.sel-event-add:hover { color: #8F6600; }
 /* 첫 항목에도 윗줄을 둬 패널 머리와 목록을 가른다 (피드는 카드 사이만 가른다) */
 .sel-list .entry { border-top-color: #F1F3F6; }
 .sel-empty { text-align: center; font-size: 13px; color: #9AA1AD; padding: 28px 0 8px; }
+
+/* 그 날의 일정 — 기록 카드 위에 선다. 앞자리는 참여 인원 아바타 스택이다(패널 머리와 같은
+   겹침 문법): 색칩 하나로는 "누가 함께 치는 시험인가"를 말할 수 없다. */
+.sel-event { display: flex; align-items: center; gap: 9px; padding: 12px 0; border-top: 1px solid #F1F3F6; }
+.sel-event-avatars { display: flex; flex: none; }
+.sel-event-main { flex: 1; min-width: 0; }
+.sel-event-title {
+  display: block; font-size: 13px; font-weight: 800; color: #16181D;
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+.sel-event-by {
+  display: block; font-size: 11px; color: #9AA1AD; margin-top: 2px;
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+.sel-event-dday { flex: none; font-size: 11.5px; font-weight: 800; color: #16181D; }
+.sel-event-dday.near { color: #B37F00; }
+.sel-event-dday.past { color: #9AA1AD; }
+/* 삭제는 기록 카드와 같은 문법(빨간 잔글씨) — 촘촘한 목록이라 오탭하지 않게 여백만 좁힌다 */
+.sel-event-del { flex: none; margin-right: -6px; }
 
 .footer { text-align: center; font-size: 12.5px; color: #9AA1AD; margin-top: 34px; }
 .demo-note { font-size: 11.5px; color: #C3C9D2; margin-top: 8px; }
@@ -824,8 +926,11 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 }
 .tag-chip:active { transform: scale(0.97); }
 /* 데스크톱 호버 — 누를 수 있는 칩만(:enabled가 편집 모드 span·잠긴 칩을 거른다).
-   선택된 칩은 인라인 색이 이겨 그대로고, 추가 칩은 제 호버(노란 점선)를 따로 갖는다. */
-.tag-chip:enabled:not(.limit):not(.tag-chip-add):hover { border-color: #CDD2DB; background: #FCFCFD; }
+   고른 칩은 아예 뺀다: 색은 인라인이 이기지만 테두리는 클래스가 맡는 자리라(아래 일정 시트)
+   호버 한 번에 투명 테두리가 회색으로 돌아온다. 추가 칩은 제 호버(노란 점선)를 따로 갖는다. */
+.tag-chip:enabled:not(.limit):not(.tag-chip-add):not([aria-pressed="true"]):hover {
+  border-color: #CDD2DB; background: #FCFCFD;
+}
 /* 내 태그 만들기 — 고르는 칩이 아니라 행동이라는 걸 세 겹으로 말한다:
    점선 테두리(사진 추가와 같은 문법) + 노란 + 아이콘 + 조금 더 진한 라벨.
    기본 점선(#E4E7EC)은 흰 알약들 사이에서 안 보여 #CDD2DB로 올린다.
@@ -1394,6 +1499,81 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 .light-track::-webkit-scrollbar { display: none; }
 .light-page { position: relative; flex: none; width: 100%; height: 100%; scroll-snap-align: center; }
 
+/* ---------- 일정 등록 시트 ---------- */
+.event-sheet-sub { font-size: 12.5px; color: #9AA1AD; margin-top: 2px; }
+/* 일정 태그는 하나만 고른다 — 고른 칩은 태그 색으로 채우고 테두리는 지운다(디자인).
+   기록 시트는 여러 개를 켜므로 테두리로 켜짐을 한 번 더 말하지만, 하나뿐인 여기서는
+   채움만으로 충분하다. 안 고른 칩은 기본 .tag-chip 그대로(흰 배경·#E4E7EC·#6B7280). */
+.event-sheet .tag-chip[aria-pressed="true"] { border-color: transparent; }
+/* 편집 중의 칩은 버튼이 아니라 span이라 aria-pressed가 없다 — 고름 표시를 .on이 이어받는다.
+   여기서 빼면 편집을 켜는 순간 고른 칩에만 회색 테두리가 돌아온다. */
+.event-sheet .tag-chip.on { border-color: transparent; }
+/* 함께하는 크루 — 태그와 같은 알약이되 아바타가 앞에 들어가 왼쪽 패딩만 좁다.
+   켠 칩의 채움(멤버 soft)과 테두리(멤버 색)는 사람마다 달라 인라인이 맡고, 여기서는
+   글자만 진하게 올린다: soft 배경 위의 회색(#6B7280)은 안 켠 칩과 구분이 약하다. */
+.who-chip { gap: 6px; padding: 0 13px 0 6px; }
+.who-chip[aria-pressed="true"] { color: #16181D; }
+/* 마지막 한 명 — 눌러도 안 꺼진다. 흐리게 만들지는 않는다(켜진 칩을 흐리면 꺼진 것처럼 읽힌다) */
+.who-chip[aria-disabled="true"] { cursor: default; }
+.event-input {
+  display: block; width: 100%; height: 48px; margin-top: 9px; padding: 0 14px;
+  border: 1.5px solid #E4E7EC; border-radius: 12px; background: #FFFFFF;
+  font-size: 14px; color: #16181D; outline: none; caret-color: #FFB800;
+  transition: border-color 120ms;
+}
+/* 제목은 이 시트의 본문이다 — 메모 한 줄과 무게로 갈린다 */
+.event-input.lead { font-weight: 700; }
+.event-input:focus { border-color: #FFB800; }
+
+/* 하루 / 기간 — 인디케이터가 배경에서 미끄러지고 라벨은 색만 바뀐다 */
+.event-seg {
+  position: relative; display: flex; flex: none; width: 160px; padding: 4px;
+  background: #F6F7F9; border: 1px solid #E4E7EC; border-radius: 999px;
+}
+.event-seg-ind {
+  position: absolute; top: 4px; bottom: 4px; left: 4px; width: calc(50% - 5px);
+  border-radius: 999px; background: linear-gradient(90deg, #FFD666 0%, #FFB800 100%);
+  box-shadow: 0 2px 10px -1px rgba(255, 184, 0, 0.5);
+  transition: left 300ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.event-seg-ind.right { left: calc(50% + 4px); }
+.event-seg-btn {
+  position: relative; z-index: 1; flex: 1; height: 26px;
+  display: flex; align-items: center; justify-content: center;
+  border: none; background: none; cursor: pointer;
+  font-size: 11.5px; font-weight: 800; color: #6B7280; transition: color 200ms;
+}
+.event-seg-btn.on { color: #16181D; }
+
+/* 날짜 줄 — ◀▶는 하루씩, 라벨은 네이티브 선택기(먼 날짜는 스테퍼로 가기엔 멀다) */
+.event-date-row {
+  position: relative; display: flex; align-items: center; gap: 8px; height: 48px;
+  margin-top: 9px; padding: 0 6px 0 14px; border: 1.5px solid #E4E7EC; border-radius: 12px;
+}
+.event-date-row.end { margin-top: 6px; }
+.event-date-tag { flex: none; font-size: 11.5px; font-weight: 800; color: #9AA1AD; letter-spacing: 0.02em; }
+.event-date-label {
+  flex: 1; min-width: 0; text-align: left; border: none; background: none; cursor: pointer;
+  padding: 6px 8px; margin-left: -8px; border-radius: 9px;
+  font-size: 14px; font-weight: 700; color: #16181D;
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  transition: background 120ms;
+}
+.event-date-label:hover { background: #F8F9FB; }
+/* 진짜 선택기는 OS가 연다 — 화면에서는 지우되 showPicker()가 자리를 잡을 수 있게 남겨 둔다
+   (display:none이면 showPicker가 던진다). 탭 순서·낭독기에는 위 라벨 버튼 하나만 남는다. */
+.event-date-native {
+  position: absolute; left: 14px; bottom: 4px; width: 1px; height: 1px;
+  opacity: 0; pointer-events: none; border: none; padding: 0;
+}
+.event-step { width: 34px; height: 34px; flex: none; border-radius: 9px; }
+/* 디자인의 제출 버튼 — 시트 폭을 다 쓰는 알약 하나다(취소는 × 버튼이 맡는다) */
+.event-submit {
+  display: block; width: 100%; flex: none; height: 50px; margin-top: 24px;
+  border-radius: 999px; font-size: 14.5px; letter-spacing: -0.01em;
+}
+.event-submit:disabled { cursor: default; }
+
 /* ---------- 와이드(≥900px) 레이아웃 ---------- */
 @media (min-width: 900px) {
   /* 라운지 — 넓은 셸의 카드 사진은 디자인 원본 폭(268px) */
@@ -1438,6 +1618,10 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
   .cal-title { font-size: 22px; }
   .cal-meta-crew { display: inline; }
   .cal-week, .cal-grid { gap: 6px; }
+  /* 원형 + 버튼이 라벨을 펴 알약이 된다 — '오늘' 버튼과 같은 높이·같은 문법 */
+  .cal-event-btn { width: auto; height: 32px; padding: 0 13px; gap: 6px; font-size: 12px; font-weight: 700; }
+  .cal-event-btn > svg { width: 13px; height: 13px; }
+  .cal-event-btn-label { display: inline; white-space: nowrap; }
   /* 142px 고정 — 알약을 3개로 끊는 규칙과 짝이다. 늘어나게 두면 기록이 몰린 주만 키가 커진다 */
   .cal-cell {
     height: 142px; align-items: stretch; justify-content: flex-start; gap: 5px;

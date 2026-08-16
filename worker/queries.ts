@@ -4,6 +4,7 @@ import type { PgDatabase } from 'drizzle-orm/pg-core';
 import {
   comments,
   entries,
+  events,
   notifPrefs,
   notifications,
   photoTombstones,
@@ -20,13 +21,16 @@ import {
   NOTIF_MODES,
   entryTags,
   isOffTags,
+  normalizeCustomEventTagList,
   normalizeCustomTagList,
+  normalizeCrewEvent,
   normalizeEmojis,
   normalizePhotos,
   primaryTag,
 } from '../shared/types';
 import type {
   Comment,
+  CrewEvent,
   Entry,
   MemberId,
   MemberStatus,
@@ -218,6 +222,82 @@ export async function pushEntriesLegacy(
   return returned.map(toEntry);
 }
 
+/* ---------- 크루 일정 ---------- */
+
+function toCrewEvent(r: typeof events.$inferSelect): CrewEvent | null {
+  return normalizeCrewEvent({
+    id: r.id,
+    m: r.memberId,
+    participants: r.participants,
+    title: r.title,
+    tag: r.tag,
+    memo: r.memo,
+    day: r.day,
+    endDay: r.endDay,
+    v: r.version,
+    updatedAt: isoTs(r.updatedAt),
+    deletedAt: r.deletedAt === null ? null : isoTs(r.deletedAt),
+  });
+}
+
+function normalizeEventRows(rows: (typeof events.$inferSelect)[]): CrewEvent[] {
+  return rows.map(toCrewEvent).filter((row): row is CrewEvent => row !== null);
+}
+
+function toEventInsertRow(e: CrewEvent) {
+  return {
+    id: e.id,
+    memberId: e.m,
+    participants: e.participants,
+    title: e.title,
+    tag: e.tag,
+    memo: e.memo,
+    day: e.day,
+    endDay: e.endDay,
+    version: e.v + 1,
+    deletedAt: e.deletedAt,
+  };
+}
+
+export interface EventPushOutcome {
+  applied: CrewEvent[];
+  conflicts: CrewEvent[];
+}
+
+/** 일정도 기록과 같은 base revision CAS다. 충돌 행은 현재 서버 값을 돌려준다. */
+export async function pushEvents(
+  db: Db,
+  rows: CrewEvent[],
+  me: MemberId,
+): Promise<EventPushOutcome> {
+  if (rows.length === 0) return { applied: [], conflicts: [] };
+  const returned = await db
+    .insert(events)
+    .values(rows.map(toEventInsertRow))
+    .onConflictDoUpdate({
+      target: events.id,
+      set: {
+        participants: sql`excluded.participants`,
+        title: sql`excluded.title`,
+        tag: sql`excluded.tag`,
+        memo: sql`excluded.memo`,
+        day: sql`excluded.day`,
+        endDay: sql`excluded.end_day`,
+        version: sql`excluded.version`,
+        updatedAt: sql`now()`,
+        deletedAt: sql`excluded.deleted_at`,
+      },
+      setWhere: sql`${events.memberId} = ${me} and ${events.version} = excluded.version - 1`,
+    })
+    .returning();
+  const appliedIds = new Set(returned.map((r) => r.id));
+  const missed = rows.filter((e) => !appliedIds.has(e.id)).map((e) => e.id);
+  const current = missed.length
+    ? await db.select().from(events).where(inArray(events.id, missed))
+    : [];
+  return { applied: normalizeEventRows(returned), conflicts: normalizeEventRows(current) };
+}
+
 /* ---------- 사진 R2 삭제 톰스톤 ---------- */
 
 /** PUT 경계에서 늦은 업로드를 막는 소유자별 존재 확인. */
@@ -376,13 +456,13 @@ export const NIL_UUID = '00000000-0000-0000-0000-000000000000';
     (neon-http 쓰기는 자동 커밋 단문이라 수 초, 클라우드 시계 오차는 초 미만 — 90초면 넉넉) */
 const HORIZON_MS = 90_000;
 
-/** 한 페이지 상한 — 세 스트림이 공유한다(클라이언트는 가득 찬 페이지를 보고 더 돈다). */
+/** 한 페이지 상한 — 모든 pull 스트림이 공유한다(클라이언트는 가득 찬 페이지를 보고 더 돈다). */
 const PAGE = 500;
 
 /** 커서를 어디로 둘지: 지평선으로 / 그대로 / 마지막 행 키셋으로. */
 type CursorMove = 'horizon' | 'keep' | 'advance';
 
-/** 세 스트림(기록·댓글·리액션)이 공유하는 커서 전진 판정.
+/** 모든 pull 스트림이 공유하는 커서 전진 판정.
     커서의 모양과 SQL은 스트림마다 다르지만 이 규칙은 하나여야 한다 —
     한 스트림만 규칙이 어긋나면 그 스트림의 늦은 커밋이 영구 누락된다. */
 function holdOrAdvance(
@@ -431,6 +511,40 @@ export async function pullSince(db: Db, cursor: PullCursor | null): Promise<Pull
   // 잘려 커서가 그 행보다 앞서지 못하고 같은 행을 영원히 다시 싣는다.
   return {
     rows: rows.map(toEntry),
+    cursor:
+      move === 'horizon'
+        ? { ts: new Date(horizonMs).toISOString(), id: NIL_UUID }
+        : move === 'keep'
+          ? cursor
+          : { ts: last!.updatedAt, id: last!.id },
+  };
+}
+
+export interface EventPullResult {
+  rows: CrewEvent[];
+  cursor: PullCursor | null;
+}
+
+/** 일정 변경분 — 기록과 같은 (updated_at, id) 키셋 + 안전 지평선 규칙. */
+export async function pullEvents(
+  db: Db,
+  cursor: PullCursor | null,
+): Promise<EventPullResult> {
+  const horizonMs = Date.now() - HORIZON_MS;
+  const rows = await db
+    .select()
+    .from(events)
+    .where(
+      cursor
+        ? sql`(${events.updatedAt}, ${events.id}) > (${cursor.ts}::timestamptz, ${cursor.id}::uuid)`
+        : undefined,
+    )
+    .orderBy(events.updatedAt, events.id)
+    .limit(PAGE);
+  const last = rows[rows.length - 1];
+  const move = holdOrAdvance(horizonMs, cursor?.ts ?? null, rows.length, last?.updatedAt);
+  return {
+    rows: normalizeEventRows(rows),
     cursor:
       move === 'horizon'
         ? { ts: new Date(horizonMs).toISOString(), id: NIL_UUID }
@@ -1299,12 +1413,14 @@ function toTagPrefs(r: typeof tagPrefs.$inferSelect): TagPrefs {
     m: r.memberId as MemberId,
     // jsonb는 손상된 값도 담을 수 있으므로 GET 경계에서도 공용 규칙을 다시 적용한다.
     tags: normalizeCustomTagList(r.tags),
+    // 일정 프리셋은 클라이언트 전용이지만 OFF 예약 이름은 서버 읽기에서도 다시 거른다.
+    eventTags: normalizeCustomEventTagList(r.eventTags),
     updatedAt: isoTs(r.updatedAt),
   };
 }
 
 function defaultTagPrefs(m: MemberId): TagPrefs {
-  return { m, tags: [], updatedAt: new Date(0).toISOString() };
+  return { m, tags: [], eventTags: [], updatedAt: new Date(0).toISOString() };
 }
 
 export async function getTagPrefs(db: Db, me: MemberId): Promise<TagPrefs> {
@@ -1317,11 +1433,15 @@ export async function getTagPrefs(db: Db, me: MemberId): Promise<TagPrefs> {
 export async function putTagPrefs(
   db: Db,
   me: MemberId,
-  p: { tags: unknown; at: string },
+  p: { tags: unknown; eventTags?: unknown; at: string },
 ): Promise<{ prefs: TagPrefs; applied: boolean }> {
+  const hasEventTags = p.eventTags !== undefined;
   const values = {
     memberId: me,
     tags: normalizeCustomTagList(p.tags),
+    // 신규 행에서 생략되면 빈 목록으로 시작한다. 충돌 업데이트에서는 아래 분기로
+    // 이 값을 쓰지 않아 구버전 클라이언트가 기존 일정 태그를 지우지 못한다.
+    eventTags: normalizeCustomEventTagList(p.eventTags),
     updatedAt: p.at,
   };
   const [row] = await db
@@ -1329,7 +1449,11 @@ export async function putTagPrefs(
     .values(values)
     .onConflictDoUpdate({
       target: tagPrefs.memberId,
-      set: { tags: sql`excluded.tags`, updatedAt: sql`excluded.updated_at` },
+      set: {
+        tags: sql`excluded.tags`,
+        ...(hasEventTags ? { eventTags: sql`excluded.event_tags` } : {}),
+        updatedAt: sql`excluded.updated_at`,
+      },
       setWhere: sql`excluded.updated_at > ${tagPrefs.updatedAt}`,
     })
     .returning();

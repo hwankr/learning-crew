@@ -1,4 +1,10 @@
-import { TAGS, TAG_LIMITS, normalizeCustomTagList, sanitizeCustomTag } from '../../shared/types';
+import {
+  TAG_LIMITS,
+  normalizeCustomEventTagList,
+  normalizeCustomTagList,
+  sanitizeCustomTag,
+} from '../../shared/types';
+import { EVENT_TAGS } from './constants';
 
 export const CUSTOM_TAG_ERROR = {
   invalid: `태그 이름은 비어 있지 않은 ${TAG_LIMITS.nameLen}자 이하로 적어 주세요.`,
@@ -11,21 +17,56 @@ export type AddCustomTagResult =
   | { tags: string[]; error: null }
   | { tags: string[]; error: string };
 
-/** EntryModal의 추가 계약을 위한 순수 검증. 이름·목록 규칙은 모두 shared의
-    sanitize/normalize가 결정하고, 여기서는 사용자에게 보여 줄 실패 사유만 구분한다. */
-export function addCustomTag(current: unknown, raw: string): AddCustomTagResult {
-  const tags = normalizeCustomTagList(current);
+type NormalizeCustomTags = (value: unknown) => string[];
+
+/** 피커별 공용 추가 계약. normalize([tag])가 빈 배열이면 그 피커의 예약 이름이다. */
+function addNormalizedCustomTag(
+  current: unknown,
+  raw: string,
+  normalize: NormalizeCustomTags,
+): AddCustomTagResult {
+  const tags = normalize(current);
   const tag = sanitizeCustomTag(raw);
   if (tag === null) return { tags, error: CUSTOM_TAG_ERROR.invalid };
-  if ((TAGS as readonly string[]).includes(tag)) return { tags, error: CUSTOM_TAG_ERROR.known };
+  if (normalize([tag]).length === 0) return { tags, error: CUSTOM_TAG_ERROR.known };
   if (tags.includes(tag)) return { tags, error: CUSTOM_TAG_ERROR.duplicate };
   if (tags.length >= TAG_LIMITS.perMember) return { tags, error: CUSTOM_TAG_ERROR.limit };
-  return { tags: normalizeCustomTagList([...tags, tag]), error: null };
+  return { tags: normalize([...tags, tag]), error: null };
+}
+
+function removeNormalizedCustomTag(
+  current: unknown,
+  raw: string,
+  normalize: NormalizeCustomTags,
+): string[] {
+  const tags = normalize(current);
+  const tag = sanitizeCustomTag(raw);
+  return tag === null ? tags : normalize(tags.filter((item) => item !== tag));
+}
+
+/** EntryModal의 추가 계약을 위한 순수 검증. */
+export function addCustomTag(current: unknown, raw: string): AddCustomTagResult {
+  return addNormalizedCustomTag(current, raw, normalizeCustomTagList);
 }
 
 /** 삭제는 선택지에서만 빼며 과거 Entry는 건드리지 않는다. */
 export function removeCustomTag(current: unknown, raw: string): string[] {
-  const tags = normalizeCustomTagList(current);
-  const tag = sanitizeCustomTag(raw);
-  return tag === null ? tags : normalizeCustomTagList(tags.filter((item) => item !== tag));
+  return removeNormalizedCustomTag(current, raw, normalizeCustomTagList);
+}
+
+/** 일정 피커 전용 검증. EVENT_TAGS와 쉬는 날 예약 이름 OFF를 한 곳에서 막는다. */
+export function addCustomEventTag(current: unknown, raw: string): AddCustomTagResult {
+  return addNormalizedCustomTag(
+    current,
+    raw,
+    (value) => normalizeCustomEventTagList(value, EVENT_TAGS),
+  );
+}
+
+export function removeCustomEventTag(current: unknown, raw: string): string[] {
+  return removeNormalizedCustomTag(
+    current,
+    raw,
+    (value) => normalizeCustomEventTagList(value, EVENT_TAGS),
+  );
 }

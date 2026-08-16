@@ -80,15 +80,31 @@ export function normalizeTags(list: unknown): Tag[] {
   return [...known, ...custom].slice(0, TAG_LIMITS.perEntry);
 }
 
-/** 멤버별 피커에 보여 줄 커스텀 태그 목록 — 기본 태그는 별도로 항상 노출하므로 뺀다. */
-export function normalizeCustomTagList(list: unknown): string[] {
+/** 멤버별 피커에 보여 줄 커스텀 태그 목록 — 기본 태그는 별도로 항상 노출하므로 뺀다.
+    피커마다 기본 태그가 다르므로 두 번째 인자로 그 목록을 바꿀 수 있다. 일정용 목록은
+    아래 전용 래퍼가 OFF 예약 이름까지 더해 서버와 클라이언트에서 같은 규칙으로 거른다. */
+export function normalizeCustomTagList(
+  list: unknown,
+  presetTags: readonly string[] = TAGS,
+): string[] {
   if (!Array.isArray(list)) return [];
+  const presets = presetTags === TAGS ? KNOWN_TAGS : new Set(presetTags);
   const custom = new Set<string>();
   for (const raw of list) {
     const tag = sanitizeCustomTag(raw);
-    if (tag !== null && !KNOWN_TAGS.has(tag)) custom.add(tag);
+    if (tag !== null && !presets.has(tag)) custom.add(tag);
   }
   return [...custom].sort(compareTagCodePoints).slice(0, TAG_LIMITS.perMember);
+}
+
+/** 일정용 커스텀 태그 목록. 'OFF'는 기록의 쉬는 날을 뜻하는 예약 이름이라 일정에는
+    저장하거나 노출하지 않는다. 일정 프리셋을 아는 UI는 두 번째 인자로 함께 제외하고,
+    서버·IDB 경계는 기본값으로 호출해 클라이언트 전용 프리셋과 무관하게 OFF만 방어한다. */
+export function normalizeCustomEventTagList(
+  list: unknown,
+  presetTags: readonly string[] = [],
+): string[] {
+  return normalizeCustomTagList(list, [...presetTags, 'OFF']);
 }
 
 /** 대표 태그 — tags[0]. 빈 배열이면 '기타'. DB/구버전 클라이언트가 읽는 tag 컬럼의 값. */
@@ -175,6 +191,127 @@ export interface Entry {
   deletedAt: string | null; // soft delete — 삭제도 동기화로 전파된다
 }
 
+/* ---------- 크루 일정 ---------- */
+
+export interface CrewEvent {
+  id: string; // 클라이언트 생성 UUID — 멱등 CAS 업서트의 키
+  m: MemberId; // 등록자 = 소유자
+  /** 일정 당사자 — 등록자와 독립이며 최소 한 명, MEMBER_IDS 고정 순서. */
+  participants: MemberId[];
+  title: string;
+  tag: Tag;
+  memo: string;
+  day: string; // YYYY-MM-DD 시작일
+  endDay: string | null; // 포함 종료일. 단일 날짜 일정은 null
+  v: number; // 서버 리비전. 신규 로컬 행은 0
+  updatedAt: string; // 서버 시계 기준 (클라이언트 값은 잠정치)
+  deletedAt: string | null; // soft delete
+}
+
+export const EVENT_LIMITS = {
+  title: 80,
+  memo: 200,
+  spanDays: 90,
+} as const;
+
+const EVENT_DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** 형식뿐 아니라 실제 달력에 존재하는 날짜인지 확인한다. */
+function isEventDay(day: string): boolean {
+  if (!EVENT_DAY_RE.test(day)) return false;
+  const [year, month, date] = day.split('-').map(Number);
+  const parsed = new Date(Date.UTC(year!, month! - 1, date!));
+  return (
+    parsed.getUTCFullYear() === year &&
+    parsed.getUTCMonth() === month! - 1 &&
+    parsed.getUTCDate() === date
+  );
+}
+
+function isWellFormedText(value: string): boolean {
+  const isWellFormed = (value as string & { isWellFormed?: () => boolean }).isWellFormed;
+  return isWellFormed ? isWellFormed.call(value) : !LONE_SURROGATE_RE.test(value);
+}
+
+/** 일정 당사자 정규화 — 유효한 멤버만 남기고 입력 순서와 무관한 크루 고정 순서로 만든다.
+    구버전 행처럼 필드가 없거나 전부 손상됐으면 등록자를 당사자로 되살린다. */
+function normalizeEventParticipants(list: unknown, owner: MemberId): MemberId[] {
+  if (!Array.isArray(list)) return [owner];
+  const seen = new Set(list.filter((id): id is string => typeof id === 'string'));
+  const participants = MEMBER_IDS.filter((id) => seen.has(id));
+  return participants.length > 0 ? [...participants] : [owner];
+}
+
+/** Worker·IDB·pull이 공유하는 일정 경계 정규화.
+    잘못된 tag/endDay는 안전한 기본값으로 복구하고, 그 밖의 필수 필드가 손상된 행은 버린다. */
+export function normalizeCrewEvent(raw: unknown): CrewEvent | null {
+  if (raw === null || typeof raw !== 'object') return null;
+  const value = raw as Partial<CrewEvent>;
+  if (
+    typeof value.id !== 'string' ||
+    !UUID_RE.test(value.id) ||
+    !(MEMBER_IDS as readonly string[]).includes(value.m ?? '') ||
+    typeof value.title !== 'string' ||
+    !isWellFormedText(value.title) ||
+    typeof value.memo !== 'string' ||
+    !isWellFormedText(value.memo) ||
+    value.memo.includes('\u0000') ||
+    typeof value.day !== 'string' ||
+    !isEventDay(value.day) ||
+    !Number.isInteger(value.v) ||
+    value.v! < 0 ||
+    value.v! > 2_000_000_000 ||
+    typeof value.updatedAt !== 'string'
+  ) {
+    return null;
+  }
+
+  const title = value.title.trim().normalize('NFC');
+  const memo = value.memo.normalize('NFC');
+  if (
+    !title ||
+    CONTROL_CHAR_RE.test(title) ||
+    [...title].length > EVENT_LIMITS.title ||
+    [...memo].length > EVENT_LIMITS.memo
+  ) {
+    return null;
+  }
+
+  const updatedAtMs = Date.parse(value.updatedAt);
+  if (!Number.isFinite(updatedAtMs)) return null;
+  let deletedAt: string | null = null;
+  if (value.deletedAt !== null && value.deletedAt !== undefined) {
+    if (typeof value.deletedAt !== 'string') return null;
+    const deletedAtMs = Date.parse(value.deletedAt);
+    if (!Number.isFinite(deletedAtMs)) return null;
+    deletedAt = new Date(deletedAtMs).toISOString();
+  }
+
+  let endDay: string | null = null;
+  if (typeof value.endDay === 'string' && isEventDay(value.endDay)) {
+    const startMs = Date.parse(`${value.day}T00:00:00.000Z`);
+    const endMs = Date.parse(`${value.endDay}T00:00:00.000Z`);
+    const span = (endMs - startMs) / 86_400_000;
+    if (span > 0 && span <= EVENT_LIMITS.spanDays) endDay = value.endDay;
+  }
+
+  const normalizedTag = sanitizeCustomTag(value.tag);
+  const m = value.m as MemberId;
+  return {
+    id: canonicalUuid(value.id),
+    m,
+    participants: normalizeEventParticipants(value.participants, m),
+    title,
+    tag: normalizedTag === null || normalizedTag === 'OFF' ? '기타' : normalizedTag,
+    memo,
+    day: value.day,
+    endDay,
+    v: value.v!,
+    updatedAt: new Date(updatedAtMs).toISOString(),
+    deletedAt,
+  };
+}
+
 /* ---------- 댓글 ---------- */
 
 /** 기록에 달리는 댓글. 내용은 불변(수정 없음) — 서버는 본문을 절대 덮어쓰지 않는다.
@@ -256,6 +393,8 @@ export interface ReactionCursor {
 /** v(base 리비전) CAS 업서트 — 충돌하면 서버가 현재 행을 돌려주고 클라이언트가 병합한다. */
 export interface PushRequest {
   entries: Entry[];
+  /** 크루 일정 — 없으면 빈 배열로 취급하는 구버전 호환 스트림. */
+  events?: CrewEvent[];
   /** 없으면 빈 배열로 취급 — 이행기의 구버전 클라이언트 호환 */
   comments?: Comment[];
   reactions?: ReactionSet[];
@@ -279,6 +418,12 @@ export interface PushRowResult {
   id: string;
   applied: boolean;
   row: Entry;
+}
+
+export interface EventPushResult {
+  id: string;
+  applied: boolean;
+  row: CrewEvent;
 }
 
 /** applied=false면 row는 서버의 현재 행 — 클라이언트가 그대로 채택한다(이길 수 없다). */
@@ -316,6 +461,7 @@ export interface PushResponse {
   reactionResults?: ReactionPushResult[];
   postResults?: PostPushResult[];
   postCommentResults?: PostCommentPushResult[];
+  eventResults?: EventPushResult[];
   /** 정산된 읽음 처리 id — 이미 읽음이던 행도 포함해 요청한 id를 그대로 돌려준다(멱등).
       comment/reaction 결과와 같은 구버전 규약: 보냈는데 이 필드가 없으면 큐를 지킨다. */
   notificationReadResults?: string[];
@@ -329,6 +475,8 @@ export interface PullCursor {
 export interface PullResponse {
   rows: Entry[];
   cursor: PullCursor | null;
+  events?: CrewEvent[];
+  eventCursor?: PullCursor | null;
   /** 전 멤버의 지금 상태 — 멤버당 1행뿐이라 매 pull에 통째로 실어 보낸다. */
   statuses: MemberStatus[];
   comments?: Comment[];
@@ -459,12 +607,16 @@ export interface NotifPrefsResponse {
 export interface TagPrefs {
   m: MemberId;
   tags: string[];
+  /** 일정 시트 전용 커스텀 태그. 기록용 tags와 섞지 않는다. */
+  eventTags: string[];
   updatedAt: string; // 액션 시각 — 도착 순서가 아니라 이 시각으로 LWW 판정한다
 }
 
 /** PUT /api/tags/prefs 요청. */
 export interface TagPrefsPutRequest {
   tags: string[];
+  /** 구버전 클라이언트가 생략하면 서버의 기존 목록을 유지한다. */
+  eventTags?: string[];
   at: string;
 }
 

@@ -1,10 +1,11 @@
 /* 백그라운드 동기화 클라이언트.
    - push: 큐에 쌓인 내 행들을 버전 CAS 업서트로 전송 (실패하면 큐에 남아 재시도)
    - pull: (updated_at, id) 키셋 커서 이후 변경분만 수신
-   - 스트림들(기록·댓글·리액션·알림·라운지 글·글 댓글)은 커서가 서로 독립이지만 요청은 함께 실어 왕복을 아낀다
+   - 스트림들(기록·일정·댓글·리액션·알림·라운지 글·글 댓글)은 커서가 서로 독립이지만 요청은 함께 실어 왕복을 아낀다
    - 탭이 보일 때만 폴링 — Neon 무료 컴퓨트를 아끼고, 안 보이는 탭은 조용히 둔다 */
 import type {
   Comment,
+  CrewEvent,
   Entry,
   MemberId,
   Post,
@@ -133,6 +134,14 @@ export class SyncClient {
       }
       rows.push(p);
     }
+    const events: { event: CrewEvent; rev: number }[] = [];
+    for (const pendingEvent of this.store.pendingEventSnapshot()) {
+      if (pendingEvent.event.m !== this.memberId) {
+        this.store.dropEventFromQueue(pendingEvent.event.id);
+        continue;
+      }
+      events.push(pendingEvent);
+    }
     const comments: Comment[] = [];
     for (const c of this.store.pendingComments()) {
       if (c.m !== this.memberId) this.store.dropCommentFromQueue(c.id);
@@ -155,9 +164,10 @@ export class SyncClient {
       else postComments.push(c);
     }
     const B = PUSH_LIMITS.batch;
-    // 여섯 스트림을 각자 배치로 쪼개 한 요청에 함께 싣는다 — 라운드 수는 가장 긴 스트림 기준
+    // 스트림을 각자 배치로 쪼개 한 요청에 함께 싣는다 — 라운드 수는 가장 긴 스트림 기준
     const rounds = Math.max(
       Math.ceil(rows.length / B),
+      Math.ceil(events.length / B),
       Math.ceil(comments.length / B),
       Math.ceil(reactions.length / B),
       Math.ceil(reads.length / B),
@@ -166,17 +176,20 @@ export class SyncClient {
     );
     for (let i = 0; i < rounds; i++) {
       const batch = rows.slice(i * B, i * B + B);
+      const eventBatch = events.slice(i * B, i * B + B);
       const cBatch = comments.slice(i * B, i * B + B);
       const rBatch = reactions.slice(i * B, i * B + B);
       const nBatch = reads.slice(i * B, i * B + B);
       const pBatch = posts.slice(i * B, i * B + B);
       const pcBatch = postComments.slice(i * B, i * B + B);
       const revById = new Map(batch.map((p) => [p.entry.id, p.rev]));
+      const eventRevById = new Map(eventBatch.map((p) => [p.event.id, p.rev]));
       const res = await fetch('/api/sync/push', {
         method: 'POST',
         headers: authHeaders(this.token),
         body: JSON.stringify({
           entries: batch.map((p) => p.entry),
+          events: eventBatch.map((p) => p.event),
           comments: cBatch,
           reactions: rBatch,
           notificationReads: nBatch,
@@ -205,6 +218,15 @@ export class SyncClient {
         }
       } else {
         throw new Error('push malformed response');
+      }
+      if (eventBatch.length > 0) {
+        if (!Array.isArray(data.eventResults)) throw new Error('push event results missing');
+        for (const result of data.eventResults) {
+          const rev = eventRevById.get(result.id);
+          if (rev === undefined) continue;
+          if (result.applied) this.store.ackEventApplied(result.id, rev, result.row);
+          else this.store.resolveEventConflict(result.id, result.row);
+        }
       }
       // 보냈는데 결과 필드가 없으면 구버전 Worker가 통째로 무시한 것 — 큐를 비우면 조용히 유실된다.
       // 오류를 던져 이 사이클을 끝내면 20초 폴링이 재시도한다(400ms 재전송 루프에 빠지지 않게).
@@ -287,6 +309,9 @@ export class SyncClient {
         headers: authHeaders(this.token),
         body: JSON.stringify({
           tags: pending.tags,
+          // 새 클라이언트는 한 LWW 행의 두 목록을 항상 함께 보내 한쪽 변경이
+          // 다른 쪽을 지우지 않게 한다.
+          eventTags: pending.eventTags,
           at: pending.updatedAt,
         } satisfies TagPrefsPutRequest),
         signal: timeoutSignal(),
@@ -318,6 +343,7 @@ export class SyncClient {
   private async pull(): Promise<void> {
     const start = await this.store.getCursors();
     let cursor = start.entries;
+    let eventCursor = start.events;
     let cCursor = start.comments;
     let rCursor = start.reactions;
     let nCursor = start.notifications;
@@ -330,6 +356,10 @@ export class SyncClient {
       if (cursor) {
         qs.set('since', cursor.ts);
         qs.set('sinceId', cursor.id);
+      }
+      if (eventCursor) {
+        qs.set('esince', eventCursor.ts);
+        qs.set('esinceId', eventCursor.id);
       }
       if (cCursor) {
         qs.set('csince', cCursor.ts);
@@ -376,7 +406,10 @@ export class SyncClient {
         Array.isArray(data.postComments) && 'postCommentCursor' in data
           ? data.postComments
           : undefined;
+      const eventRows =
+        Array.isArray(data.events) && 'eventCursor' in data ? data.events : undefined;
       const eFull = data.rows.length >= PAGE;
+      const eventFull = (eventRows?.length ?? 0) >= PAGE;
       const cFull = (cRows?.length ?? 0) >= PAGE;
       const rFull = (rRows?.length ?? 0) >= PAGE;
       const nFull = (nRows?.length ?? 0) >= PAGE;
@@ -389,6 +422,9 @@ export class SyncClient {
       const pageAdoptedEntryMetadata = this.store.applyPull({
         rows: data.rows,
         cursor: eFull ? cursor : data.cursor,
+        events: eventRows,
+        eventCursor:
+          eventRows && (eventFull ? eventCursor : (data.eventCursor ?? null)),
         statuses: Array.isArray(data.statuses) ? data.statuses : undefined,
         comments: cRows,
         commentCursor: cRows && (cFull ? cCursor : (data.commentCursor ?? null)),
@@ -403,6 +439,7 @@ export class SyncClient {
       });
       adoptedEntryMetadata ||= pageAdoptedEntryMetadata;
       if (data.cursor) cursor = data.cursor;
+      if (eventRows && data.eventCursor) eventCursor = data.eventCursor;
       if (data.commentCursor) cCursor = data.commentCursor;
       if (data.reactionCursor) rCursor = data.reactionCursor;
       if (data.notificationCursor) nCursor = data.notificationCursor;
@@ -410,7 +447,7 @@ export class SyncClient {
       // 다음 페이지가 적용하지 않은 구간을 건너뛴 커서를 영속화할 수 있다
       if (pRows && data.postCursor) pCursor = data.postCursor;
       if (pcRows && data.postCommentCursor) pcCursor = data.postCommentCursor;
-      if (!eFull && !cFull && !rFull && !nFull && !pFull && !pcFull) break;
+      if (!eFull && !eventFull && !cFull && !rFull && !nFull && !pFull && !pcFull) break;
     }
     // 서버 안전 지평선이 같은 행을 되돌려도 store가 실제 새 메타를 채택하지 않았으면
     // 같은 404 예산을 다시 열지 않는다.

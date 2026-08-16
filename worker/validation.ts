@@ -2,9 +2,11 @@ import {
   PUSH_LIMITS,
   TAG_LIMITS,
   UUID_RE,
+  normalizeCrewEvent,
   normalizePhotos,
   normalizeTags,
   sanitizeCustomTag,
+  type CrewEvent,
   type Entry,
   type MemberId,
 } from '../shared/types';
@@ -73,4 +75,11 @@ export function invalidReason(e: Entry, me: MemberId): string | null {
   if (e.v !== undefined && (!Number.isInteger(e.v) || e.v < 0 || e.v > 2_000_000_000)) return 'bad v';
   if (e.deletedAt !== null && typeof e.deletedAt !== 'string') return 'bad deletedAt';
   return null;
+}
+
+/** 일정 push 경계 검증. tag와 endDay의 복구 규칙까지 shared 정규화가 단일 정의다. */
+export function invalidCrewEventReason(e: CrewEvent, me: MemberId): string | null {
+  if (!e || typeof e !== 'object') return 'not an object';
+  if (e.m !== me) return 'not your event';
+  return normalizeCrewEvent(e) === null ? 'bad event' : null;
 }

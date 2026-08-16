@@ -1,6 +1,7 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
 import type {
   Comment,
+  CrewEvent,
   Entry,
   MemberId,
   MemberStatus,
@@ -19,6 +20,11 @@ import type {
 export interface QueueMeta {
   rev: number;
   base: Entry | null;
+}
+
+export interface EventQueueMeta {
+  rev: number;
+  base: CrewEvent | null;
 }
 
 export type PhotoUploadState = 'wait' | 'up' | 'fail' | 'done';
@@ -53,6 +59,8 @@ export const photoCacheKey = (photoId: string, kind: PhotoKind): string => `${ph
 export interface CrewDB extends DBSchema {
   entries: { key: string; value: Entry };
   queue: { key: string; value: QueueMeta };
+  events: { key: string; value: CrewEvent };
+  eventQueue: { key: string; value: EventQueueMeta };
   comments: { key: string; value: Comment };
   /** 존재 자체가 "아직 push 안 됨" 표시 (값은 항상 true) — 댓글은 내용이 불변이라
       기록처럼 rev/base를 들 필요가 없다. 정산은 "보낸 삭제 상태 vs 지금 삭제 상태"로 한다. */
@@ -101,7 +109,7 @@ export function upgradePhotoCacheStore(
 
 export function openCrewDB(): Promise<CrewDatabase> {
   let handle: CrewDatabase | null = null;
-  const opened = openDB<CrewDB>('learning-crew', 7, {
+  const opened = openDB<CrewDB>('learning-crew', 8, {
     async upgrade(db, oldVersion, _newVersion, tx) {
       if (oldVersion < 1) {
         db.createObjectStore('entries', { keyPath: 'id' });
@@ -144,6 +152,11 @@ export function openCrewDB(): Promise<CrewDatabase> {
         db.createObjectStore('postQueue');
         db.createObjectStore('postComments', { keyPath: 'id' });
         db.createObjectStore('postCommentQueue');
+      }
+      if (oldVersion < 8) {
+        // 크루 일정도 기록과 같은 CAS 행 + rev/base 큐를 한 트랜잭션으로 다룬다.
+        db.createObjectStore('events', { keyPath: 'id' });
+        db.createObjectStore('eventQueue');
       }
     },
     // 다른 탭이 더 높은 버전으로 업그레이드하려 할 때 이 연결이 막고 있으면 양보한다 —

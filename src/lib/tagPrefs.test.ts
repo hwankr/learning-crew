@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { TAG_LIMITS } from '../../shared/types';
-import { CUSTOM_TAG_ERROR, addCustomTag, removeCustomTag } from './tagPrefs';
+import {
+  CUSTOM_TAG_ERROR,
+  addCustomEventTag,
+  addCustomTag,
+  removeCustomEventTag,
+  removeCustomTag,
+} from './tagPrefs';
 
 describe('커스텀 태그 추가·삭제 계약', () => {
   it('shared 규칙으로 정화한 태그를 결정적 순서로 추가하고 삭제한다', () => {
@@ -17,5 +23,16 @@ describe('커스텀 태그 추가·삭제 계약', () => {
     );
     const full = Array.from({ length: TAG_LIMITS.perMember }, (_, i) => `태그${String(i).padStart(2, '0')}`);
     expect(addCustomTag(full, '초과').error).toBe(CUSTOM_TAG_ERROR.limit);
+  });
+
+  it('일정 피커는 일정 프리셋과 OFF를 예약 이름으로 막는다', () => {
+    expect(addCustomEventTag([], ' 면접 ').error).toBe(CUSTOM_TAG_ERROR.known);
+    expect(addCustomEventTag([], ' OFF ').error).toBe(CUSTOM_TAG_ERROR.known);
+  });
+
+  it('일정 피커는 기록 프리셋 이름을 허용하고 전용 목록에서 삭제한다', () => {
+    const added = addCustomEventTag(['OFF'], ' 영어 ');
+    expect(added).toEqual({ tags: ['영어'], error: null });
+    expect(removeCustomEventTag(added.tags, '영어')).toEqual([]);
   });
 });

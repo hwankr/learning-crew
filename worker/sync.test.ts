@@ -9,6 +9,8 @@ import {
   pushEntries,
   pushEntriesLegacy,
   pullSince,
+  pushEvents,
+  pullEvents,
   setStatus,
   allStatuses,
   getStatusRow,
@@ -34,7 +36,7 @@ import {
   rearmPhotoTombstone,
   type Db,
 } from './queries';
-import { invalidReason, normalizePushedEntry } from './validation';
+import { invalidCrewEventReason, invalidReason, normalizePushedEntry } from './validation';
 import { NOTIFY_COOLDOWN_MS, shouldNotify } from './push';
 import {
   STATUS_TTL_MS,
@@ -45,6 +47,7 @@ import {
 } from '../shared/types';
 import type {
   Comment,
+  CrewEvent,
   Entry,
   MemberStatus,
   Post,
@@ -854,28 +857,36 @@ describe('개인 커스텀 태그 설정', () => {
     expect(await getTagPrefs(db, 'kj')).toEqual({
       m: 'kj',
       tags: [],
+      eventTags: [],
       updatedAt: '1970-01-01T00:00:00.000Z',
     });
   });
 
-  it('저장 직전에도 정화하고 더 새 액션만 LWW로 반영한다', async () => {
+  it('두 목록을 저장 직전에도 정화하고 더 새 액션만 LWW로 반영한다', async () => {
     const first = await putTagPrefs(db, 'kj', {
       tags: [' 영어 ', '알고리즘', ' 수학 ', 'e\u0301', 'é', '제어\n문자'],
+      eventTags: [' 면접 ', '영어', 'OFF', '면접', '제어\n문자'],
       at: firstAt,
     });
     expect(first).toEqual({
       applied: true,
-      prefs: { m: 'kj', tags: ['é', '수학', '알고리즘'], updatedAt: firstAt },
+      prefs: {
+        m: 'kj',
+        tags: ['é', '수학', '알고리즘'],
+        eventTags: ['면접', '영어'],
+        updatedAt: firstAt,
+      },
     });
 
     const stale = await putTagPrefs(db, 'kj', { tags: ['독서'], at: firstAt });
     expect(stale.applied).toBe(false); // 같은 시각의 재전송도 기존 세대를 그대로 채택
     expect(stale.prefs).toEqual(first.prefs);
 
+    // 구버전 클라이언트의 더 새 tags-only PUT도 기존 일정 목록을 보존해야 한다.
     const newer = await putTagPrefs(db, 'kj', { tags: [' 독서 ', '기타'], at: nextAt });
     expect(newer).toEqual({
       applied: true,
-      prefs: { m: 'kj', tags: ['독서'], updatedAt: nextAt },
+      prefs: { m: 'kj', tags: ['독서'], eventTags: ['면접', '영어'], updatedAt: nextAt },
     });
     expect(await getTagPrefs(db, 'kj')).toEqual(newer.prefs);
   });
@@ -886,7 +897,9 @@ describe('개인 커스텀 태그 설정', () => {
       at: '2026-08-15T01:30:00.000Z',
     });
     expect(stale.applied).toBe(false);
-    expect(stale.prefs).toEqual({ m: 'kj', tags: ['독서'], updatedAt: nextAt });
+    expect(stale.prefs).toEqual({
+      m: 'kj', tags: ['독서'], eventTags: ['면접', '영어'], updatedAt: nextAt,
+    });
   });
 });
 
@@ -1482,5 +1495,58 @@ describe('post pull 커서 안전 지평선', () => {
     expect(r.cursor!.id).not.toBe(NIL_UUID);
     const r2 = await pullPosts(db, r.cursor);
     expect(r2.rows).toHaveLength(0);
+  });
+});
+
+const EV1 = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee1';
+
+function crewEvent(partial: Partial<CrewEvent> = {}): CrewEvent {
+  return {
+    id: EV1,
+    m: 'sh',
+    participants: ['kj', 'sh', 'kj'],
+    title: '자격증 시험',
+    tag: '자격증',
+    memo: '',
+    day: '2026-09-01',
+    endDay: null,
+    v: 0,
+    updatedAt: '2026-08-16T00:00:00.000Z',
+    deletedAt: null,
+    ...partial,
+  };
+}
+
+describe('event CAS push/pull', () => {
+  it('작성자가 아닌 토큰은 SQL 전에 거부한다', () => {
+    expect(invalidCrewEventReason(crewEvent({ m: 'wg' }), 'sh')).toBe('not your event');
+    expect(invalidCrewEventReason(crewEvent(), 'sh')).toBeNull();
+  });
+
+  it('신규 업서트는 v를 올리고 낡은 base는 서버 현재 행과 충돌한다', async () => {
+    const first = await pushEvents(db, [crewEvent()], 'sh');
+    expect(first.conflicts).toHaveLength(0);
+    expect(first.applied[0]).toMatchObject({
+      id: EV1, participants: ['sh', 'kj'], v: 1, title: '자격증 시험',
+    });
+    expect(first.applied[0]!.updatedAt).toMatch(ISO_RE);
+
+    const stale = await pushEvents(db, [crewEvent({ title: '낡은 수정', v: 0 })], 'sh');
+    expect(stale.applied).toHaveLength(0);
+    expect(stale.conflicts[0]).toMatchObject({ id: EV1, v: 1, title: '자격증 시험' });
+
+    const second = await pushEvents(db, [crewEvent({ title: '최종 시험', v: 1 })], 'sh');
+    expect(second.applied[0]).toMatchObject({ id: EV1, v: 2, title: '최종 시험' });
+  });
+
+  it('pull은 일정 행과 독립 키셋 커서를 돌려준다', async () => {
+    await db.execute(sql`update events set updated_at = updated_at - interval '10 minutes'`);
+    const first = await pullEvents(db, null);
+    expect(first.rows.some((event) =>
+      event.id === EV1 && event.v === 2 && event.participants.join(',') === 'sh,kj'
+    )).toBe(true);
+    expect(first.cursor?.id).toBe(EV1);
+    const next = await pullEvents(db, first.cursor);
+    expect(next.rows).toHaveLength(0);
   });
 });

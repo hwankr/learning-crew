@@ -37,6 +37,25 @@ export const entries = pgTable(
   (t) => [index('entries_updated_at_id_idx').on(t.updatedAt, t.id)],
 );
 
+/** 크루 공유 일정 — entries와 같은 version CAS + (updated_at, id) pull 스트림. */
+export const events = pgTable(
+  'events',
+  {
+    id: uuid('id').primaryKey(),
+    memberId: text('member_id').notNull(),
+    participants: jsonb('participants').notNull().default([]),
+    title: text('title').notNull(),
+    tag: text('tag').notNull(),
+    memo: text('memo').notNull().default(''),
+    day: date('day').notNull(),
+    endDay: date('end_day'),
+    version: integer('version').notNull().default(1),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+    deletedAt: timestamp('deleted_at', { withTimezone: true, mode: 'string' }),
+  },
+  (t) => [index('events_updated_at_id_idx').on(t.updatedAt, t.id)],
+);
+
 /** 삭제된 photo id를 영구 기억하는 원장 겸 R2 정리 큐.
     entry 변경과 같은 DB 문장 안에서 트리거가 넣어 메타가 먼저 사라져도 photo id를 잃지 않고,
     정리가 끝난 뒤에도 행을 남겨 구버전 클라이언트가 같은 id를 되살리지 못하게 한다. */
@@ -204,6 +223,7 @@ export const notifPrefs = pgTable('notif_prefs', {
 export const tagPrefs = pgTable('tag_prefs', {
   memberId: text('member_id').primaryKey(),
   tags: jsonb('tags').notNull().default([]),
+  eventTags: jsonb('event_tags').notNull().default([]),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull(),
 });
 

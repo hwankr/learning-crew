@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { Entry, PullResponse, TagPrefsPutResponse, TagPrefsResponse } from '../../shared/types';
+import type {
+  CrewEvent,
+  Entry,
+  PullResponse,
+  TagPrefsPutResponse,
+  TagPrefsResponse,
+} from '../../shared/types';
 import * as photoRequests from '../lib/usePhoto';
 import { CrewStore } from './store';
 import { SyncClient } from './sync';
@@ -37,6 +43,10 @@ async function syncStatus(client: SyncClient): Promise<void> {
   await (client as unknown as { pushStatus(): Promise<void> }).pushStatus();
 }
 
+async function push(client: SyncClient): Promise<void> {
+  await (client as unknown as { push(): Promise<void> }).push();
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -68,6 +78,84 @@ describe('SyncClient photo pull rearm', () => {
     row = entry(2);
     await pull(client);
     expect(rearm).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('SyncClient 크루 일정 동기화', () => {
+  const EVENT_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const event = (partial: Partial<CrewEvent> = {}): CrewEvent => ({
+    id: EVENT_ID,
+    m: 'sh',
+    participants: ['sh', 'wg'],
+    title: '면접',
+    tag: '기타',
+    memo: '',
+    day: '2026-08-20',
+    endDay: null,
+    v: 0,
+    updatedAt: '2026-08-16T00:00:00.000Z',
+    deletedAt: null,
+    ...partial,
+  });
+
+  it('events를 같은 push 요청에 싣고 eventResults로 큐를 정산한다', async () => {
+    const store = new CrewStore();
+    const client = new SyncClient(store, 'token', 'sh');
+    store.upsertEvent(event());
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { events: CrewEvent[] };
+      expect(body.events).toHaveLength(1);
+      expect(body.events[0]?.participants).toEqual(['sh', 'wg']);
+      return new Response(JSON.stringify({
+        ok: true,
+        serverTime: '2026-08-16T01:00:00.000Z',
+        results: [],
+        eventResults: [{
+          id: EVENT_ID,
+          applied: true,
+          row: { ...body.events[0]!, v: 1, updatedAt: '2026-08-16T01:00:00.000Z' },
+        }],
+      }), { status: 200 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await push(client);
+    expect(store.pendingEvents()).toHaveLength(0);
+    expect(store.getSnapshot().events[0]).toMatchObject({
+      participants: ['sh', 'wg'], v: 1, updatedAt: '2026-08-16T01:00:00.000Z',
+    });
+  });
+
+  it('보냈는데 eventResults가 없으면 구버전 Worker로 보고 큐를 지킨다', async () => {
+    const store = new CrewStore();
+    const client = new SyncClient(store, 'token', 'sh');
+    store.upsertEvent(event());
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      ok: true,
+      serverTime: '2026-08-16T01:00:00.000Z',
+      results: [],
+    }), { status: 200 })));
+
+    await expect(push(client)).rejects.toThrow('push event results missing');
+    expect(store.pendingEvents()).toHaveLength(1);
+  });
+
+  it('pull의 events/eventCursor를 독립 스트림으로 채택한다', async () => {
+    const store = new CrewStore();
+    const client = new SyncClient(store, 'token', 'sh');
+    const cursor = { ts: '2026-08-16T01:00:00.123456Z', id: EVENT_ID };
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      rows: [],
+      cursor: null,
+      statuses: [],
+      events: [event({ m: 'wg', v: 1, updatedAt: '2026-08-16T01:00:00.000Z' })],
+      eventCursor: cursor,
+    } satisfies PullResponse), { status: 200 })));
+
+    await pull(client);
+    expect(store.getSnapshot().events).toEqual([
+      expect.objectContaining({ id: EVENT_ID, m: 'wg', v: 1 }),
+    ]);
   });
 });
 
@@ -163,10 +251,6 @@ describe('SyncClient status sync', () => {
 
 describe('SyncClient 라운지 글 push 정산', () => {
   const POST_ID = '33333333-3333-4333-8333-333333333333';
-
-  async function push(client: SyncClient): Promise<void> {
-    await (client as unknown as { push(): Promise<void> }).push();
-  }
 
   it('postResults로 큐를 정산하고 서버 행을 채택한다', async () => {
     const store = new CrewStore();
@@ -273,6 +357,7 @@ describe('SyncClient 태그 prefs 재시도', () => {
     const store = new CrewStore();
     const client = new SyncClient(store, 'token', 'sh');
     store.setCustomTags(['수학']);
+    store.setCustomEventTags(['면접 준비']);
     const first = store.myTagPrefsPending()!;
 
     const fetchMock = vi.fn();
@@ -283,11 +368,18 @@ describe('SyncClient 태그 prefs 재시도', () => {
     expect(store.getSnapshot().customTags).toEqual(['수학']);
 
     fetchMock.mockImplementationOnce(async (_url: string, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body)) as { tags: string[]; at: string };
+      const body = JSON.parse(String(init?.body)) as {
+        tags: string[];
+        eventTags: string[];
+        at: string;
+      };
+      expect(body).toEqual({
+        tags: ['수학'], eventTags: ['면접 준비'], at: first.updatedAt,
+      });
       return new Response(JSON.stringify({
         ok: true,
         applied: true,
-        prefs: { m: 'sh', tags: body.tags, updatedAt: body.at },
+        prefs: { m: 'sh', tags: body.tags, eventTags: body.eventTags, updatedAt: body.at },
       } satisfies TagPrefsPutResponse), { status: 200 });
     });
     await syncTagPrefs(client);
@@ -296,16 +388,21 @@ describe('SyncClient 태그 prefs 재시도', () => {
     store.setCustomTags([]);
     const removed = store.myTagPrefsPending()!;
     fetchMock.mockImplementationOnce(async (_url: string, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body)) as { tags: string[]; at: string };
-      expect(body).toEqual({ tags: [], at: removed.updatedAt });
+      const body = JSON.parse(String(init?.body)) as {
+        tags: string[];
+        eventTags: string[];
+        at: string;
+      };
+      expect(body).toEqual({ tags: [], eventTags: ['면접 준비'], at: removed.updatedAt });
       return new Response(JSON.stringify({
         ok: true,
         applied: true,
-        prefs: { m: 'sh', tags: [], updatedAt: body.at },
+        prefs: { m: 'sh', tags: [], eventTags: body.eventTags, updatedAt: body.at },
       } satisfies TagPrefsPutResponse), { status: 200 });
     });
     await syncTagPrefs(client);
     expect(store.getSnapshot().customTags).toEqual([]);
+    expect(store.getSnapshot().customEventTags).toEqual(['면접 준비']);
     expect(store.myTagPrefsPending()).toBeNull();
   });
 
@@ -314,7 +411,12 @@ describe('SyncClient 태그 prefs 재시도', () => {
     const client = new SyncClient(store, 'token', 'sh');
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({
       ok: true,
-      prefs: { m: 'sh', tags: ['알고리즘', ' 수학 '], updatedAt: '2026-08-15T03:00:00.000Z' },
+      prefs: {
+        m: 'sh',
+        tags: ['알고리즘', ' 수학 '],
+        eventTags: [' 발표 ', '영어', 'OFF'],
+        updatedAt: '2026-08-15T03:00:00.000Z',
+      },
     } satisfies TagPrefsResponse), { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
 
@@ -323,6 +425,7 @@ describe('SyncClient 태그 prefs 재시도', () => {
       headers: expect.objectContaining({ authorization: 'Bearer token' }),
     }));
     expect(store.getSnapshot().customTags).toEqual(['수학', '알고리즘']);
+    expect(store.getSnapshot().customEventTags).toEqual(['발표', '영어']);
     expect(store.myTagPrefsPending()).toBeNull();
   });
 });

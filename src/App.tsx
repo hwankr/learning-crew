@@ -6,7 +6,7 @@ import {
   useState,
   useSyncExternalStore,
 } from 'react';
-import type { Entry, EntryPhoto, Post, ReactionEmoji, Tag, Todo } from '../shared/types';
+import type { CrewEvent, Entry, EntryPhoto, Post, ReactionEmoji, Tag, Todo } from '../shared/types';
 import {
   ENTRY_PHOTO_LIMIT,
   PUSH_LIMITS,
@@ -21,9 +21,15 @@ import {
 import { ImageDecodeError } from './lib/image';
 import { addDraftPhotos } from './lib/photoDraft';
 import { lightboxIndex, shownPhotos } from './lib/photos';
-import { addCustomTag, removeCustomTag } from './lib/tagPrefs';
+import {
+  addCustomEventTag,
+  addCustomTag,
+  removeCustomEventTag,
+  removeCustomTag,
+} from './lib/tagPrefs';
 import { PhotoLimitError, PhotoStorageUnavailableError, contentEqual } from './local/store';
 import { BY_ID, COPY, MEMBERS, W, dayKey, pad2, shiftKey } from './lib/constants';
+import { eventSpanLabel } from './lib/events';
 import type { AppConfig } from './lib/config';
 import type { CrewStore } from './local/store';
 import {
@@ -57,6 +63,7 @@ import {
 } from './components/Lounge';
 import { PhotoLightbox } from './components/PhotoLightbox';
 import { ConfirmDelete } from './components/ConfirmDelete';
+import { EventConfirmDelete, EventSheet, type EventDraft } from './components/EventSheet';
 import { Toast } from './components/Toast';
 
 /* ---------- 초안 — "초안 저장됨"이 진짜가 되도록 localStorage에 실제로 저장한다 ----------
@@ -283,6 +290,10 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
   const [loungeDelId, setLoungeDelId] = useState<string | null>(null);
   const [loungeLight, setLoungeLight] = useState<{ postId: string; photoId: string } | null>(null);
   const [loungeWaiting, setLoungeWaiting] = useState(false);
+  /* 일정 — 초안 지속이 없는 시트라 열린 날짜 하나가 곧 상태다(null이면 닫힘).
+     삭제 확인은 기록과 같은 규칙: id로 들고 있어 그 사이 다른 기기에서 지워지면 물음도 닫힌다. */
+  const [eventSheetDay, setEventSheetDay] = useState<string | null>(null);
+  const [eventDelId, setEventDelId] = useState<string | null>(null);
   /* 사진 준비(디코드·리사이즈)는 시트 한 세션에 묶인다. 세션이 끝난 뒤 도착한 결과는 붙일
      자리가 없어 되돌리고, 준비가 남아 있는 동안 누른 저장은 끝날 때까지 기다렸다 이어 간다 —
      기다리지 않으면 방금 고른 사진이 조용히 빠지고 주인 없는 blob만 남는다. */
@@ -672,6 +683,35 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
   const loungeIdx = loungeLight ? lightboxIndex(loungePhotos, loungeLight.photoId) : 0;
   const pendingLoungeDel = loungeDelId ? snap.posts.find((p) => p.id === loungeDelId) ?? null : null;
 
+  /* ---------- 일정 — 등록과 내 일정 삭제만 있다(수정 UI 없음) ---------- */
+  const closeEventSheet = useCallback(() => setEventSheetDay(null), []);
+  const submitEvent = (draft: EventDraft) => {
+    store.upsertEvent({
+      id: crypto.randomUUID(),
+      m: me.id,
+      // 당사자는 시트가 정한다(기본은 나 혼자) — 등록자와 독립이다
+      ...draft,
+      v: 0, // 신규 행 — 서버 리비전 없음
+      updatedAt: new Date().toISOString(),
+      deletedAt: null,
+    });
+    setEventSheetDay(null);
+    // 방금 등록한 일정이 어디 놓였는지 바로 보이게 선택일을 시작일로 옮긴다
+    setSelDay(draft.day);
+    showToast(wit.eventSaved(eventSpanLabel(draft.day, draft.endDay)));
+  };
+  /* 배너 탭 — 두 셸이 각자의 말로 캘린더를 연다(홈은 좁은 화면에만, 데스크톱은 왼쪽 패널).
+     상단 바의 화면 전환과 같은 정리를 함께 한다: 알림 설정은 본문 자리를 차지하고 있어서
+     그대로 두면 캘린더로 옮겼는데 화면에는 설정이 그대로 남는다. */
+  const goToEvent = (ev: CrewEvent) => {
+    if (desktop) setView('cal');
+    else setMtab('cal');
+    setNotiOpen(false);
+    setNotiSettings(false);
+    setSelDay(ev.day);
+  };
+  const pendingEventDel = eventDelId ? snap.events.find((e) => e.id === eventDelId) ?? null : null;
+
   // 사진이 다 사라졌으면(삭제·기록 소멸) 확대 뷰도 닫힌 것으로 본다
   const lightEntry = light ? entries.find((e) => e.id === light.entryId) ?? null : null;
   const lightPhotos = lightEntry
@@ -693,6 +733,8 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
     { id: 'entry-delete', open: pendingDel !== null, close: () => setDelId(null) },
     { id: 'lounge-sheet', open: loungeDraft.open, close: closeLounge },
     { id: 'lounge-delete', open: pendingLoungeDel !== null, close: () => setLoungeDelId(null) },
+    { id: 'event-sheet', open: eventSheetDay !== null, close: closeEventSheet },
+    { id: 'event-delete', open: pendingEventDel !== null, close: () => setEventDelId(null) },
     { id: 'entry-lightbox', open: entryLightOpen, close: () => setLight(null) },
     { id: 'lounge-lightbox', open: loungeLightOpen, close: () => setLoungeLight(null) },
   ]);
@@ -711,6 +753,9 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
   useEffect(() => {
     if (loungeDelId && !pendingLoungeDel) setLoungeDelId(null);
   }, [loungeDelId, pendingLoungeDel]);
+  useEffect(() => {
+    if (eventDelId && !pendingEventDel) setEventDelId(null);
+  }, [eventDelId, pendingEventDel]);
 
   // 태그 액션은 렌더 스냅샷 대신 스토어의 현재 캐시를 기준으로 한다 —
   // 같은 틱에 연속 호출되어도 앞선 추가·삭제를 잃지 않는다.
@@ -722,6 +767,17 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
   }, [store]);
   const onRemoveCustomTag = useCallback((name: string): void => {
     store.setCustomTags(removeCustomTag(store.getCustomTags(), name));
+  }, [store]);
+  /* 일정 태그는 전용 검증을 쓴다 — 일정 프리셋과 쉬는 날 예약 이름 OFF를 호출부마다
+     다시 조립하지 않아야 새 입구가 생겨도 같은 규칙을 빠뜨리지 않는다. */
+  const onAddCustomEventTag = useCallback((name: string): string | null => {
+    const result = addCustomEventTag(store.getCustomEventTags(), name);
+    if (result.error) return result.error;
+    store.setCustomEventTags(result.tags);
+    return null;
+  }, [store]);
+  const onRemoveCustomEventTag = useCallback((name: string): void => {
+    store.setCustomEventTags(removeCustomEventTag(store.getCustomEventTags(), name));
   }, [store]);
 
   const footer = (
@@ -745,18 +801,23 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
   );
   const calScreen = (
     <>
-      <CalendarView entries={entries} selDay={selDay ?? todayKey}
+      <CalendarView entries={entries} events={snap.events} selDay={selDay ?? todayKey}
         setSelDay={setSelDay} todayKey={todayKey}
         meId={me.id} editingId={modal.editingId} comments={snap.comments}
-        reactions={snap.reactions} photoUploads={snap.photoUploads} wit={wit} actions={actions} />
+        reactions={snap.reactions} photoUploads={snap.photoUploads} wit={wit} actions={actions}
+        onOpenEventSheet={setEventSheetDay} onDeleteEvent={(ev) => setEventDelId(ev.id)} />
       {footer}
     </>
   );
   const crewScreen = (
-    <CrewPanel entries={entries} todays={todays} statuses={snap.statuses} meId={me.id}
+    <CrewPanel entries={entries} events={snap.events} todays={todays} statuses={snap.statuses}
+      meId={me.id}
       now={nowTick} today={now} wit={wit} sync={cfg.token ? snap.sync : null}
       photoUploads={snap.photoUploads}
       onOpenPhoto={(e, photoId) => setLight({ entryId: e.id, photoId })}
+      // 홈·패널에서 여는 시트는 오늘로 채운다 — 여는 순간 다시 읽어 자정을 넘겨도 어제가 되지 않는다
+      onOpenEventSheet={() => setEventSheetDay(dayKey(new Date()))}
+      onGoToEvent={goToEvent}
       onSetStatus={(on, place) => {
         store.setMyStatus(on, place);
         setNowTick(Date.now());
@@ -917,6 +978,20 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
             store.removePost(pendingLoungeDel.id);
             setLoungeDelId(null);
             showToast(wit.loungeDeleted);
+          }} />
+      )}
+      {eventSheetDay !== null && (
+        <EventSheet prefillDay={eventSheetDay} meId={me.id} customTags={snap.customEventTags} fallbackRef={ctaRef}
+          onAddCustomTag={onAddCustomEventTag} onRemoveCustomTag={onRemoveCustomEventTag}
+          onSubmit={submitEvent} onClose={closeEventSheet} />
+      )}
+      {pendingEventDel && (
+        <EventConfirmDelete event={pendingEventDel} wit={wit} fallbackRef={ctaRef}
+          onCancel={() => setEventDelId(null)}
+          onConfirm={() => {
+            store.removeEvent(pendingEventDel.id);
+            setEventDelId(null);
+            showToast(wit.eventDeleted);
           }} />
       )}
       {toast && <Toast key={toast.id} text={toast.text} />}

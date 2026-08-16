@@ -14,6 +14,7 @@
 import type { IDBPTransaction } from 'idb';
 import type {
   Comment,
+  CrewEvent,
   Entry,
   EntryPhoto,
   MemberId,
@@ -36,6 +37,8 @@ import {
   entryTags,
   isOffTags,
   mergeMemberStatus,
+  normalizeCrewEvent,
+  normalizeCustomEventTagList,
   normalizeCustomTagList,
   normalizeEmojis,
   normalizeMemberStatus,
@@ -51,6 +54,7 @@ import {
   reactionKey,
   type CrewDatabase,
   type CrewDB,
+  type EventQueueMeta,
   type PhotoBlobRecord,
   type PhotoCacheRecord,
   type PhotoKind,
@@ -76,6 +80,8 @@ import {
 type StoreName =
   | 'entries'
   | 'queue'
+  | 'events'
+  | 'eventQueue'
   | 'comments'
   | 'commentQueue'
   | 'reactions'
@@ -100,16 +106,19 @@ const MIGRATED_FLAG = 'migrated-legacy-v2';
 export type SyncPhase = 'ok' | 'offline' | 'error' | 'auth';
 export interface SyncInfo {
   phase: SyncPhase;
-  /** 아직 서버에 안 간 변경 수 (기록·상태·태그 + 댓글·리액션·알림 + 라운지 글·글 댓글) */
+  /** 아직 서버에 안 간 변경 수 (기록·일정·상태·태그 + 댓글·리액션·알림 + 라운지 글·글 댓글) */
   pending: number;
 }
 
 export interface StoreSnapshot {
   rev: number;
   entries: Entry[]; // deletedAt이 없는 살아있는 행만
+  events: CrewEvent[]; // deletedAt이 없는 살아있는 일정만
   statuses: Partial<Record<MemberId, MemberStatus>>; // 멤버별 지금 상태
   /** 내 기록 시트에만 보여 줄 커스텀 태그 선택지. */
   customTags: string[];
+  /** 내 일정 시트에만 보여 줄 커스텀 태그 선택지. */
+  customEventTags: string[];
   /** entryId → 살아있는 댓글, (createdAt, id) 오름차순 */
   comments: Map<string, Comment[]>;
   /** entryId → 이모지가 하나 이상인 멤버별 리액션 집합 */
@@ -168,6 +177,7 @@ const tagPrefsKey = (m: MemberId): string => `tagPrefs:${m}`;
 const tagPrefsDirtyKey = (m: MemberId): string => `tagPrefsDirty:${m}`;
 // meta 스토어의 스트림별 pull 커서 키 (기록 커서는 기존 이름 'cursor')
 const ENTRY_CURSOR_KEY = 'cursor';
+const EVENT_CURSOR_KEY = 'eventCursor';
 const COMMENT_CURSOR_KEY = 'commentCursor';
 const REACTION_CURSOR_KEY = 'reactionCursor';
 const POST_CURSOR_KEY = 'postCursor';
@@ -224,7 +234,10 @@ function fieldEq(
 }
 
 /** 삭제 "상태"가 같은가 — tombstone 시각 문자열이 아니라 살았는지/지워졌는지만 본다. */
-function sameLiveness(a: Entry, b: Entry): boolean {
+function sameLiveness(
+  a: { deletedAt: string | null },
+  b: { deletedAt: string | null },
+): boolean {
   return (a.deletedAt === null) === (b.deletedAt === null);
 }
 
@@ -348,6 +361,54 @@ export function mergeEntry(baseRaw: Entry | null, localRaw: Entry, serverRaw: En
     photos: mergePhotos(base?.photos ?? null, local.photos, server.photos),
     deletedAt: null, // 삭제 충돌은 병합 전에 별도 규칙으로 처리된다
   };
+}
+
+const EVENT_MERGE_FIELDS = ['title', 'tag', 'memo', 'day', 'endDay'] as const;
+
+function sameEventParticipants(a: readonly MemberId[], b: readonly MemberId[]): boolean {
+  return a.length === b.length && a.every((id, index) => id === b[index]);
+}
+
+/** 일정 내용 비교 — v/updatedAt은 CAS 메타라 제외한다. */
+export function eventContentEqual(a: CrewEvent, b: CrewEvent): boolean {
+  return EVENT_MERGE_FIELDS.every((field) => a[field] === b[field]) &&
+    sameEventParticipants(a.participants, b.participants) && sameLiveness(a, b);
+}
+
+/** 일정 CAS 충돌의 3-way 병합. base에서 로컬이 바꾼 필드만 서버 현재 행 위에 다시 얹는다. */
+export function mergeCrewEvent(
+  baseRaw: CrewEvent | null,
+  localRaw: CrewEvent,
+  serverRaw: CrewEvent,
+): CrewEvent {
+  const base = baseRaw ? normalizeCrewEvent(baseRaw) : null;
+  const local = normalizeCrewEvent(localRaw) ?? localRaw;
+  const server = normalizeCrewEvent(serverRaw) ?? serverRaw;
+  const pick = <K extends (typeof EVENT_MERGE_FIELDS)[number]>(field: K): CrewEvent[K] =>
+    !base || local[field] !== base[field] ? local[field] : server[field];
+  const participants = !base || !sameEventParticipants(local.participants, base.participants)
+    ? local.participants
+    : server.participants;
+  return {
+    ...server,
+    participants,
+    title: pick('title'),
+    tag: pick('tag'),
+    memo: pick('memo'),
+    day: pick('day'),
+    endDay: pick('endDay'),
+    deletedAt: null,
+  };
+}
+
+/** IDB의 일정 큐도 base 행을 포함하므로 행과 같은 shared 경계를 통과시킨다. */
+function normalizeEventQueueMeta(raw: unknown): EventQueueMeta | null {
+  if (raw === null || typeof raw !== 'object') return null;
+  const value = raw as Partial<EventQueueMeta>;
+  if (!Number.isInteger(value.rev) || value.rev! < 1) return null;
+  if (value.base === null) return { rev: value.rev!, base: null };
+  const base = normalizeCrewEvent(value.base);
+  return base ? { rev: value.rev!, base } : null;
 }
 
 /* ---------- 댓글·리액션 순수 로직 (스토어가 이 규칙들로 스냅샷과 정산을 결정한다) ---------- */
@@ -577,7 +638,12 @@ interface MyStatusPullWrite {
 export function normalizeTagPrefs(raw: unknown, me: MemberId): TagPrefs | null {
   if (raw === null || typeof raw !== 'object') return null;
   const value = raw as Partial<TagPrefs>;
-  if (value.m !== me || !Array.isArray(value.tags) || typeof value.updatedAt !== 'string') {
+  if (
+    value.m !== me ||
+    !Array.isArray(value.tags) ||
+    (value.eventTags !== undefined && !Array.isArray(value.eventTags)) ||
+    typeof value.updatedAt !== 'string'
+  ) {
     return null;
   }
   const millis = Date.parse(value.updatedAt);
@@ -585,6 +651,9 @@ export function normalizeTagPrefs(raw: unknown, me: MemberId): TagPrefs | null {
   return {
     m: me,
     tags: normalizeCustomTagList(value.tags),
+    // 구버전 IDB 행·서버 응답에는 필드가 없다. 일정 프리셋은 UI에서, OFF 예약 이름은
+    // 서버와 공유하는 전용 정규화에서 걸러 어느 경로에서도 목록에 되살아나지 않는다.
+    eventTags: normalizeCustomEventTagList(value.eventTags),
     updatedAt: new Date(millis).toISOString(),
   };
 }
@@ -592,12 +661,15 @@ export function normalizeTagPrefs(raw: unknown, me: MemberId): TagPrefs | null {
 const emptyTagPrefs = (m: MemberId): TagPrefs => ({
   m,
   tags: [],
+  eventTags: [],
   updatedAt: new Date(0).toISOString(),
 });
 
 export class CrewStore implements PhotoUploadStorage {
   private map = new Map<string, Entry>();
   private queue = new Map<string, QueueMeta>();
+  private events = new Map<string, CrewEvent>();
+  private eventQueue = new Map<string, EventQueueMeta>();
   private statuses = new Map<MemberId, MemberStatus>();
   private statusDirty = false; // 내 상태가 아직 서버에 안 갔음
   private tagPrefs: TagPrefs = emptyTagPrefs('sh');
@@ -618,6 +690,7 @@ export class CrewStore implements PhotoUploadStorage {
       useMemo가 무관한 갱신(사진 진행률 등)에도 전부 다시 돈다.
       this.map을 바꾸는 모든 자리(adoptEntry/adoptMissingEntry/upsert/remove)가 무효화한다. */
   private entriesCache: Entry[] | null = null;
+  private eventsCache: CrewEvent[] | null = null;
   // 리액션: reactionKey(entryId, m) → 행. dirty는 entryId만으로 충분하다 — 내 행만 dirty가 된다
   private reactions = new Map<string, ReactionSet>();
   private reactionDirty = new Set<string>();
@@ -656,8 +729,10 @@ export class CrewStore implements PhotoUploadStorage {
   private snapshot: StoreSnapshot = {
     rev: 0,
     entries: [],
+    events: [],
     statuses: {},
     customTags: [],
+    customEventTags: [],
     comments: new Map(),
     reactions: new Map(),
     posts: [],
@@ -676,6 +751,7 @@ export class CrewStore implements PhotoUploadStorage {
   private refreshing = false;
   // 마지막으로 IDB에 쓴 커서 — 값이 같으면 폴링마다 무의미한 readwrite 트랜잭션을 만들지 않는다
   private lastCursor: PullCursor | null = null;
+  private lastEventCursor: PullCursor | null = null;
   private lastCommentCursor: PullCursor | null = null;
   private lastReactionCursor: ReactionCursor | null = null;
   private lastNotifCursor: PullCursor | null = null;
@@ -707,6 +783,8 @@ export class CrewStore implements PhotoUploadStorage {
       const tx = opened.transaction([
         'entries',
         'queue',
+        'events',
+        'eventQueue',
         'comments',
         'commentQueue',
         'reactions',
@@ -724,6 +802,9 @@ export class CrewStore implements PhotoUploadStorage {
         rows,
         qkeys,
         qvals,
+        eventRows,
+        eventQKeys,
+        eventQVals,
         cRows,
         cQueue,
         rRows,
@@ -746,6 +827,9 @@ export class CrewStore implements PhotoUploadStorage {
           tx.objectStore('entries').getAll(),
           tx.objectStore('queue').getAllKeys(),
           tx.objectStore('queue').getAll(),
+          tx.objectStore('events').getAll(),
+          tx.objectStore('eventQueue').getAllKeys(),
+          tx.objectStore('eventQueue').getAll(),
           tx.objectStore('comments').getAll(),
           tx.objectStore('commentQueue').getAllKeys(),
           tx.objectStore('reactions').getAll(),
@@ -767,6 +851,15 @@ export class CrewStore implements PhotoUploadStorage {
       await tx.done;
       for (const e of rows) this.map.set(e.id, normalizeEntry(e));
       qkeys.forEach((k, i) => this.queue.set(String(k), qvals[i]!));
+      for (const raw of eventRows) {
+        const event = normalizeCrewEvent(raw);
+        if (event) this.events.set(event.id, event);
+      }
+      eventQKeys.forEach((key, i) => {
+        const meta = normalizeEventQueueMeta(eventQVals[i]);
+        const id = String(key);
+        if (meta && UUID_RE.test(id)) this.eventQueue.set(canonicalUuid(id), meta);
+      });
       for (const c of cRows) this.comments.set(c.id, c);
       for (const k of cQueue) this.commentQueue.add(String(k));
       for (const p of pRows) this.posts.set(p.id, p);
@@ -865,9 +958,17 @@ export class CrewStore implements PhotoUploadStorage {
     return this.map.get(id);
   }
 
+  getEventById(id: string): CrewEvent | undefined {
+    return this.events.get(canonicalUuid(id));
+  }
+
   /** 콜백이 이전 렌더의 스냅샷을 캡아도 연타를 잃지 않게 현재 목록을 직접 읽는다. */
   getCustomTags(): string[] {
     return [...this.tagPrefs.tags];
+  }
+
+  getCustomEventTags(): string[] {
+    return [...this.tagPrefs.eventTags];
   }
 
   pendingIds(): string[] {
@@ -920,6 +1021,24 @@ export class CrewStore implements PhotoUploadStorage {
       out.push({ entry, rev: meta.rev });
     }
     return out;
+  }
+
+  /** 일정 push용 스냅샷 — 기록 큐와 같은 rev 가드로 전송 중 재수정을 보호한다. */
+  pendingEventSnapshot(): { event: CrewEvent; rev: number }[] {
+    const out: { event: CrewEvent; rev: number }[] = [];
+    for (const [id, meta] of this.eventQueue) {
+      const event = this.events.get(id);
+      if (!event) {
+        this.dropEventFromQueue(id);
+        continue;
+      }
+      out.push({ event, rev: meta.rev });
+    }
+    return out;
+  }
+
+  pendingEvents(): CrewEvent[] {
+    return this.pendingEventSnapshot().map(({ event }) => event);
   }
 
   /* ---------- 사진 바이너리 (UI/업로드 큐/표시 훅의 공용 경계) ---------- */
@@ -1509,6 +1628,18 @@ export class CrewStore implements PhotoUploadStorage {
     return this.map.delete(id) || photoChanged;
   }
 
+  private adoptEvent(next: CrewEvent, retainTombstone = false): boolean {
+    this.markEventsChanged();
+    if (next.deletedAt && !retainTombstone) return this.events.delete(next.id);
+    this.events.set(next.id, next);
+    return true;
+  }
+
+  private adoptMissingEvent(id: string): boolean {
+    this.markEventsChanged();
+    return this.events.delete(id);
+  }
+
   /* ---------- 쓰기 (UI 경로 — 항상 즉시 반영) ---------- */
   upsert(raw: Entry): void {
     // UI/레거시 이관을 포함한 모든 로컬 쓰기의 마지막 경계. 호출자가 실수로 tag를 직접
@@ -1542,7 +1673,33 @@ export class CrewStore implements PhotoUploadStorage {
     if (JSON.stringify(tags) === JSON.stringify(this.tagPrefs.tags)) return;
     const previous = Date.parse(this.tagPrefs.updatedAt);
     const at = new Date(Math.max(Date.now(), Number.isFinite(previous) ? previous + 1 : 0)).toISOString();
-    const next: TagPrefs = { m: this.me, tags, updatedAt: at };
+    const next: TagPrefs = {
+      m: this.me,
+      tags,
+      eventTags: [...this.tagPrefs.eventTags],
+      updatedAt: at,
+    };
+    this.tagPrefs = next;
+    if (!this.demo) {
+      this.tagPrefsDirty = true;
+      this.persistTagPrefs(next, true);
+      this.onLocalWrite?.();
+    }
+    this.bump();
+  }
+
+  /** 일정용 커스텀 태그만 바꾸고 같은 행의 기록용 목록은 그대로 보존한다. */
+  setCustomEventTags(raw: unknown): void {
+    const eventTags = normalizeCustomEventTagList(raw);
+    if (JSON.stringify(eventTags) === JSON.stringify(this.tagPrefs.eventTags)) return;
+    const previous = Date.parse(this.tagPrefs.updatedAt);
+    const at = new Date(Math.max(Date.now(), Number.isFinite(previous) ? previous + 1 : 0)).toISOString();
+    const next: TagPrefs = {
+      m: this.me,
+      tags: [...this.tagPrefs.tags],
+      eventTags,
+      updatedAt: at,
+    };
     this.tagPrefs = next;
     if (!this.demo) {
       this.tagPrefsDirty = true;
@@ -1601,6 +1758,40 @@ export class CrewStore implements PhotoUploadStorage {
       (데모에서도 조작은 되지만 IDB에 쓰면 나중에 실계정 로그인에 새어 들어간다) */
   private syncable(...ids: string[]): boolean {
     return !this.demo && ids.every((id) => UUID_RE.test(id));
+  }
+
+  /** 일정 낙관적 업서트 — 정규화된 행과 rev/base 큐를 함께 남긴다. */
+  upsertEvent(raw: CrewEvent): void {
+    const event = normalizeCrewEvent(raw);
+    if (!event || event.m !== this.me) return;
+    const prev = this.events.get(event.id);
+    this.events.set(event.id, event);
+    this.markEventsChanged();
+    if (this.syncable(event.id)) {
+      const queued = this.eventQueue.get(event.id);
+      const meta: EventQueueMeta = queued
+        ? { rev: queued.rev + 1, base: queued.base }
+        : { rev: 1, base: prev ?? null };
+      this.eventQueue.set(event.id, meta);
+      this.persistEvent(event, meta);
+      this.onLocalWrite?.();
+    }
+    this.bump();
+  }
+
+  /** 내 일정 삭제 — 화면에서는 즉시 빼고 tombstone을 CAS 큐에 남긴다. */
+  removeEvent(id: string): void {
+    const key = canonicalUuid(id);
+    const cur = this.events.get(key);
+    if (!cur || cur.m !== this.me || cur.deletedAt) return;
+    if (!this.syncable(key)) {
+      this.events.delete(key);
+      this.markEventsChanged();
+      this.bump();
+      return;
+    }
+    const now = new Date().toISOString();
+    this.upsertEvent({ ...cur, updatedAt: now, deletedAt: now });
   }
 
   /** 내 댓글 추가 — 즉시 로컬 반영 + 큐 등록. 빈 문자열은 무시, 길이는 서버 한도로 캡.
@@ -1775,6 +1966,8 @@ export class CrewStore implements PhotoUploadStorage {
   applyPull(p: {
     rows: Entry[];
     cursor: PullCursor | null;
+    events?: CrewEvent[];
+    eventCursor?: PullCursor | null;
     statuses?: MemberStatus[];
     /** 없으면 구버전 Worker — 그 스트림은 없는 것으로 보고 커서도 전진시키지 않는다 */
     comments?: Comment[];
@@ -1811,6 +2004,18 @@ export class CrewStore implements PhotoUploadStorage {
       } else {
         puts.push(row);
       }
+    }
+    const eventPuts: CrewEvent[] = [];
+    const eventDels: string[] = [];
+    for (const raw of p.events ?? []) {
+      const row = normalizeCrewEvent(raw);
+      if (!row || this.eventQueue.has(row.id)) continue;
+      const cur = this.events.get(row.id);
+      if (cur && cur.v === row.v && cur.updatedAt === row.updatedAt) continue;
+      this.adoptEvent(row);
+      changed = true;
+      if (row.deletedAt) eventDels.push(row.id);
+      else eventPuts.push(row);
     }
     let myStatusWrite: MyStatusPullWrite | null = null;
     if (statuses) {
@@ -1967,6 +2172,9 @@ export class CrewStore implements PhotoUploadStorage {
     // 커서만 전진했으면 쓰되 다른 탭은 깨우지 않는다
     const cursorChanged =
       !!cursor && (this.lastCursor?.ts !== cursor.ts || this.lastCursor?.id !== cursor.id);
+    const ec = p.eventCursor;
+    const eventCursorChanged =
+      !!ec && (this.lastEventCursor?.ts !== ec.ts || this.lastEventCursor?.id !== ec.id);
     const cc = p.commentCursor;
     const commentCursorChanged =
       !!cc && (this.lastCommentCursor?.ts !== cc.ts || this.lastCommentCursor?.id !== cc.id);
@@ -1988,6 +2196,8 @@ export class CrewStore implements PhotoUploadStorage {
     const notify =
       puts.length > 0 ||
       dels.length > 0 ||
+      eventPuts.length > 0 ||
+      eventDels.length > 0 ||
       myStatusWrite !== null ||
       cPuts.length > 0 ||
       cDels.length > 0 ||
@@ -2000,6 +2210,7 @@ export class CrewStore implements PhotoUploadStorage {
     if (
       !notify &&
       !cursorChanged &&
+      !eventCursorChanged &&
       !commentCursorChanged &&
       !reactionCursorChanged &&
       !notifCursorChanged &&
@@ -2010,6 +2221,7 @@ export class CrewStore implements PhotoUploadStorage {
       return entryMetadataChanged;
     }
     if (cursorChanged) this.lastCursor = cursor;
+    if (eventCursorChanged) this.lastEventCursor = ec;
     if (commentCursorChanged) this.lastCommentCursor = cc;
     if (reactionCursorChanged) this.lastReactionCursor = rc;
     if (notifCursorChanged) this.lastNotifCursor = nc;
@@ -2019,6 +2231,7 @@ export class CrewStore implements PhotoUploadStorage {
     // 큐 스토어까지 넣는 이유: 다른 탭의 미전송 쓰기를 같은 트랜잭션 안에서 읽어 피해 가야 한다
     const stores: StoreName[] = ['meta'];
     if (puts.length > 0 || dels.length > 0) stores.push('entries');
+    if (eventPuts.length > 0 || eventDels.length > 0) stores.push('events', 'eventQueue');
     if (cPuts.length > 0 || cDels.length > 0) stores.push('comments', 'commentQueue');
     if (rPuts.length > 0) stores.push('reactions', 'reactionQueue');
     if (nPuts.length > 0) stores.push('notifications', 'notifReadQueue');
@@ -2033,6 +2246,20 @@ export class CrewStore implements PhotoUploadStorage {
           const store = tx.objectStore('entries');
           for (const e of puts) void store.put(e);
           for (const id of dels) void store.delete(id);
+        }
+        if (eventPuts.length > 0 || eventDels.length > 0) {
+          const queued = new Set((await tx.objectStore('eventQueue').getAllKeys()).map(String));
+          const store = tx.objectStore('events');
+          let skipped = false;
+          for (const event of eventPuts) {
+            if (queued.has(event.id)) skipped = true;
+            else void store.put(event);
+          }
+          for (const id of eventDels) {
+            if (queued.has(id)) skipped = true;
+            else void store.delete(id);
+          }
+          if (skipped) this.scheduleRefresh();
         }
         if (cPuts.length > 0 || cDels.length > 0) {
           // 큐에 키가 있는 행 = 어느 탭인가 아직 못 보낸 로컬 쓰기. 지평선(90초) 안쪽 행은
@@ -2185,6 +2412,7 @@ export class CrewStore implements PhotoUploadStorage {
           }
         }
         if (cursor) void meta.put(cursor, ENTRY_CURSOR_KEY);
+        if (ec) void meta.put(ec, EVENT_CURSOR_KEY);
         // 커서는 응답 객체를 글자 그대로 저장한다 — 행의 updatedAt으로 재구성하면
         // Postgres 마이크로초가 밀리초로 잘려 같은 행을 영원히 다시 싣는다
         if (cc) void meta.put(cc, COMMENT_CURSOR_KEY);
@@ -2483,6 +2711,87 @@ export class CrewStore implements PhotoUploadStorage {
     this.bump();
   }
 
+  /** 일정 push 성공 정산. 전송 중 다시 수정됐으면 서버 행을 새 base로 삼아 큐를 유지한다. */
+  ackEventApplied(id: string, rev: number, serverRaw: CrewEvent): void {
+    const server = normalizeCrewEvent(serverRaw);
+    const queued = this.eventQueue.get(id);
+    if (!server || !queued) return;
+    if (queued.rev !== rev) {
+      const cur = this.events.get(id);
+      const meta: EventQueueMeta = { rev: queued.rev, base: server };
+      this.eventQueue.set(id, meta);
+      if (cur) {
+        const next = { ...cur, v: server.v };
+        this.adoptEvent(next, true);
+        this.persistEvent(next, meta);
+      } else {
+        this.txWrite(['eventQueue'], (tx) => {
+          void tx.objectStore('eventQueue').put(meta, id);
+        });
+      }
+      this.bump();
+      return;
+    }
+    this.settleEvent(id, server);
+  }
+
+  /** 일정 CAS 충돌 — 삭제/소유권 규칙 뒤에는 base 기준 필드 병합으로 수렴시킨다. */
+  resolveEventConflict(id: string, serverRaw: CrewEvent): void {
+    const server = normalizeCrewEvent(serverRaw);
+    if (!server) return;
+    const queued = this.eventQueue.get(id);
+    const local = this.events.get(id);
+    if (!queued || !local) {
+      this.settleEvent(id, server);
+      return;
+    }
+    if (server.deletedAt || server.m !== this.me) {
+      this.settleEvent(id, server);
+      return;
+    }
+    if (local.deletedAt) {
+      this.requeueEvent(id, { ...local, v: server.v }, server);
+      return;
+    }
+    const merged = mergeCrewEvent(queued.base, local, server);
+    if (eventContentEqual(merged, server)) {
+      this.settleEvent(id, server);
+      return;
+    }
+    this.requeueEvent(id, { ...merged, updatedAt: local.updatedAt }, server);
+  }
+
+  private settleEvent(id: string, server: CrewEvent): void {
+    this.eventQueue.delete(id);
+    const tombstone = server.deletedAt !== null;
+    this.adoptEvent(server);
+    this.txWrite(['events', 'eventQueue'], (tx) => {
+      if (tombstone) void tx.objectStore('events').delete(id);
+      else void tx.objectStore('events').put(server);
+      void tx.objectStore('eventQueue').delete(id);
+    });
+    this.bump();
+  }
+
+  private requeueEvent(id: string, next: CrewEvent, base: CrewEvent): void {
+    const meta: EventQueueMeta = {
+      rev: (this.eventQueue.get(id)?.rev ?? 0) + 1,
+      base,
+    };
+    this.adoptEvent(next, true);
+    this.eventQueue.set(id, meta);
+    this.persistEvent(next, meta);
+    this.bump();
+  }
+
+  dropEventFromQueue(id: string): void {
+    this.eventQueue.delete(id);
+    this.txWrite(['eventQueue'], (tx) => {
+      void tx.objectStore('eventQueue').delete(id);
+    });
+    this.bump();
+  }
+
   /** push 반영 성공. rev가 다르면 전송 중 또 수정된 것 — 큐에 남기되 서버 행을 새 base로 삼는다. */
   ackApplied(id: string, rev: number, serverRaw: Entry): void {
     // 이행기의 구버전 Worker 응답에는 v도 tags도 없다 — 그대로 채택하면 이 행이
@@ -2576,7 +2885,13 @@ export class CrewStore implements PhotoUploadStorage {
 
   /** 서버에 아직 안 간 태그 목록. 없으면 GET으로 최신 상태만 확인하면 된다. */
   myTagPrefsPending(): TagPrefs | null {
-    return this.tagPrefsDirty ? { ...this.tagPrefs, tags: [...this.tagPrefs.tags] } : null;
+    return this.tagPrefsDirty
+      ? {
+          ...this.tagPrefs,
+          tags: [...this.tagPrefs.tags],
+          eventTags: [...this.tagPrefs.eventTags],
+        }
+      : null;
   }
 
   /** GET 병합 — 서버 액션 시각이 엄격히 더 새울 때만 채택한다.
@@ -2687,10 +3002,11 @@ export class CrewStore implements PhotoUploadStorage {
     this.bump();
   }
 
-  /** 세 스트림의 pull 커서 — 서로 독립이며 하나만 있어도 동작한다.
+  /** 각 pull 스트림의 커서 — 서로 독립이며 하나만 있어도 동작한다.
       한 읽기 트랜잭션으로 묶어 다른 탭의 커밋이 사이에 끼어 섞인 조합을 읽지 않게 한다. */
   async getCursors(): Promise<{
     entries: PullCursor | null;
+    events: PullCursor | null;
     comments: PullCursor | null;
     reactions: ReactionCursor | null;
     notifications: PullCursor | null;
@@ -2699,6 +3015,7 @@ export class CrewStore implements PhotoUploadStorage {
   }> {
     const none = {
       entries: null,
+      events: null,
       comments: null,
       reactions: null,
       notifications: null,
@@ -2709,8 +3026,9 @@ export class CrewStore implements PhotoUploadStorage {
     if (!db) return none;
     try {
       const tx = db.transaction('meta');
-      const [e, c, r, n, p, pc] = await Promise.all([
+      const [e, event, c, r, n, p, pc] = await Promise.all([
         tx.objectStore('meta').get(ENTRY_CURSOR_KEY),
+        tx.objectStore('meta').get(EVENT_CURSOR_KEY),
         tx.objectStore('meta').get(COMMENT_CURSOR_KEY),
         tx.objectStore('meta').get(REACTION_CURSOR_KEY),
         tx.objectStore('meta').get(notifCursorKey(this.me)),
@@ -2720,6 +3038,7 @@ export class CrewStore implements PhotoUploadStorage {
       await tx.done;
       return {
         entries: asPullCursor(e),
+        events: asPullCursor(event),
         comments: asPullCursor(c),
         reactions: asReactionCursor(r),
         notifications: asPullCursor(n),
@@ -2737,6 +3056,14 @@ export class CrewStore implements PhotoUploadStorage {
     this.txWrite(['entries', 'queue'], (tx) => {
       void tx.objectStore('entries').put(entry);
       void tx.objectStore('queue').put(meta, entry.id);
+    });
+  }
+
+  /** 일정 + CAS 큐 메타를 한 트랜잭션으로 남긴다. */
+  private persistEvent(event: CrewEvent, meta: EventQueueMeta): void {
+    this.txWrite(['events', 'eventQueue'], (tx) => {
+      void tx.objectStore('events').put(event);
+      void tx.objectStore('eventQueue').put(meta, event.id);
     });
   }
 
@@ -2840,6 +3167,8 @@ export class CrewStore implements PhotoUploadStorage {
       const tx = db.transaction([
         'entries',
         'queue',
+        'events',
+        'eventQueue',
         'comments',
         'commentQueue',
         'reactions',
@@ -2857,6 +3186,9 @@ export class CrewStore implements PhotoUploadStorage {
         rows,
         qkeys,
         qvals,
+        dbEvents,
+        dbEventQKeys,
+        dbEventQVals,
         dbComments,
         dbCQueue,
         dbReactions,
@@ -2879,6 +3211,9 @@ export class CrewStore implements PhotoUploadStorage {
         tx.objectStore('entries').getAll(),
         tx.objectStore('queue').getAllKeys(),
         tx.objectStore('queue').getAll(),
+        tx.objectStore('events').getAll(),
+        tx.objectStore('eventQueue').getAllKeys(),
+        tx.objectStore('eventQueue').getAll(),
         tx.objectStore('comments').getAll(),
         tx.objectStore('commentQueue').getAllKeys(),
         tx.objectStore('reactions').getAll(),
@@ -2963,6 +3298,39 @@ export class CrewStore implements PhotoUploadStorage {
         }
       }
 
+      const persistedEventQueue = new Map<string, EventQueueMeta>();
+      dbEventQKeys.forEach((key, i) => {
+        const meta = normalizeEventQueueMeta(dbEventQVals[i]);
+        const id = String(key);
+        if (meta && UUID_RE.test(id)) persistedEventQueue.set(canonicalUuid(id), meta);
+      });
+      const adoptedEvents = new Set<string>();
+      for (const [id, meta] of persistedEventQueue) {
+        const mine = this.eventQueue.get(id);
+        if (!mine || meta.rev > mine.rev) {
+          this.eventQueue.set(id, meta);
+          adoptedEvents.add(id);
+          changed = true;
+        }
+      }
+      const dbEventIds = new Set<string>();
+      for (const raw of dbEvents) {
+        const event = normalizeCrewEvent(raw);
+        if (!event) continue;
+        dbEventIds.add(event.id);
+        if (this.eventQueue.has(event.id) && !adoptedEvents.has(event.id)) continue;
+        const cur = this.events.get(event.id);
+        if (!cur || cur.v !== event.v || cur.updatedAt !== event.updatedAt || !sameLiveness(cur, event)) {
+          this.adoptEvent(event, true);
+          changed = true;
+        }
+      }
+      for (const id of [...this.events.keys()]) {
+        if (!dbEventIds.has(id) && !this.eventQueue.has(id)) {
+          changed = this.adoptMissingEvent(id) || changed;
+        }
+      }
+
       // 내 지금 상태 — 더 새 액션 시각이면 채택, 같은 액션을 다른 탭이 push했으면 dirty 해제.
       // 타임스탬프는 전부 ISO(로컬 생성 + 서버 정규화)라 사전순 비교가 곧 시간 비교다 —
       // Date.parse는 브라우저별 파싱 차이(특히 Safari)가 있어 쓰지 않는다
@@ -3017,16 +3385,18 @@ export class CrewStore implements PhotoUploadStorage {
       const cachedPrefs = normalizeTagPrefs(dbTagPrefs, this.me);
       if (cachedPrefs) {
         const sameAction = cachedPrefs.updatedAt === this.tagPrefs.updatedAt;
-        const sameTags = JSON.stringify(cachedPrefs.tags) === JSON.stringify(this.tagPrefs.tags);
+        const sameLists =
+          JSON.stringify(cachedPrefs.tags) === JSON.stringify(this.tagPrefs.tags) &&
+          JSON.stringify(cachedPrefs.eventTags) === JSON.stringify(this.tagPrefs.eventTags);
         const dirty = !!dbTagPrefsDirty;
         if (
           cachedPrefs.updatedAt > this.tagPrefs.updatedAt ||
-          (sameAction && (!sameTags || dirty !== this.tagPrefsDirty))
+          (sameAction && (!sameLists || dirty !== this.tagPrefsDirty))
         ) {
           const wasDirty = this.tagPrefsDirty;
           this.tagPrefs = cachedPrefs;
           this.tagPrefsDirty = dirty;
-          tookTagPrefsDirty = dirty && (!wasDirty || !sameTags);
+          tookTagPrefsDirty = dirty && (!wasDirty || !sameLists);
           changed = true;
         }
       }
@@ -3269,6 +3639,10 @@ export class CrewStore implements PhotoUploadStorage {
     this.entriesCache = null;
   }
 
+  private markEventsChanged(): void {
+    this.eventsCache = null;
+  }
+
   private bump(): void {
     const notifications = sortNotifications(this.notifications.values(), Date.now());
     const lounge = (this.loungeCache ??= {
@@ -3278,8 +3652,10 @@ export class CrewStore implements PhotoUploadStorage {
     this.snapshot = {
       rev: this.snapshot.rev + 1,
       entries: (this.entriesCache ??= [...this.map.values()].filter((e) => !e.deletedAt)),
+      events: (this.eventsCache ??= [...this.events.values()].filter((event) => !event.deletedAt)),
       statuses: Object.fromEntries(this.statuses) as Partial<Record<MemberId, MemberStatus>>,
       customTags: [...this.tagPrefs.tags],
+      customEventTags: [...this.tagPrefs.eventTags],
       comments: groupComments(this.comments.values()),
       reactions: groupReactions(this.reactions.values()),
       posts: lounge.posts,
@@ -3297,6 +3673,7 @@ export class CrewStore implements PhotoUploadStorage {
         phase: this.syncPhase,
         pending:
           this.queue.size +
+          this.eventQueue.size +
           (this.statusDirty ? 1 : 0) +
           (this.tagPrefsDirty ? 1 : 0) +
           this.commentQueue.size +

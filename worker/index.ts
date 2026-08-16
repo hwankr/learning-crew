@@ -6,6 +6,8 @@ import {
   pushEntries,
   pushEntriesLegacy,
   pullSince,
+  pushEvents,
+  pullEvents,
   pushComments,
   pullComments,
   pushPosts,
@@ -39,10 +41,13 @@ import {
   UUID_RE,
   canonicalUuid,
   isFreshSince,
+  normalizeCrewEvent,
+  normalizeCustomEventTagList,
   normalizeCustomTagList,
   normalizeEmojis,
   normalizePhotos,
   type Comment,
+  type CrewEvent,
   type Entry,
   type MemberId,
   type NotifMode,
@@ -66,7 +71,7 @@ import {
   type TagPrefsResponse,
   type VapidKeyResponse,
 } from '../shared/types';
-import { invalidReason, normalizePushedEntry } from './validation';
+import { invalidCrewEventReason, invalidReason, normalizePushedEntry } from './validation';
 import {
   PHOTO_MAX_BYTES,
   cleanupPhotoTombstones,
@@ -309,7 +314,8 @@ app.post('/api/sync/push', async (c) => {
   } catch {
     return c.json({ error: 'invalid json' }, 400);
   }
-  // 여섯 스트림이 한 요청에 함께 온다. 구버전 클라이언트는 entries만 보내므로 나머지는 없으면 빈 배열.
+  // 스트림들이 한 요청에 함께 온다. 구버전 클라이언트는 entries만 보내므로 나머지는 없으면 빈 배열.
+  const reqEvents = req.events ?? [];
   const reqComments = req.comments ?? [];
   const reqReactions = req.reactions ?? [];
   const reqReads = req.notificationReads ?? [];
@@ -318,6 +324,8 @@ app.post('/api/sync/push', async (c) => {
   if (
     !Array.isArray(req.entries) ||
     req.entries.length > PUSH_LIMITS.batch ||
+    !Array.isArray(reqEvents) ||
+    reqEvents.length > PUSH_LIMITS.batch ||
     !Array.isArray(reqComments) ||
     reqComments.length > PUSH_LIMITS.batch ||
     !Array.isArray(reqReactions) ||
@@ -351,6 +359,21 @@ app.post('/api/sync/push', async (c) => {
     if (seen.has(id)) return c.json({ error: 'duplicate id', id }, 400);
     seen.add(id);
     entryRows.push(normalizePushedEntry({ ...e, id }));
+  }
+  const seenEvents = new Set<string>();
+  const eventRows: CrewEvent[] = [];
+  for (const event of reqEvents) {
+    const reason = invalidCrewEventReason(event, me);
+    if (reason) {
+      return c.json({ error: reason, id: (event as { id?: string })?.id }, 400);
+    }
+    // normalizeCrewEvent가 UUID·텍스트·날짜·tag fallback을 한 번에 확정한다.
+    const normalized = normalizeCrewEvent(event)!;
+    if (seenEvents.has(normalized.id)) {
+      return c.json({ error: 'duplicate event id', id: normalized.id }, 400);
+    }
+    seenEvents.add(normalized.id);
+    eventRows.push(normalized);
   }
   const now = Date.now();
   const seenComments = new Set<string>();
@@ -435,9 +458,10 @@ app.post('/api/sync/push', async (c) => {
     else withV.push(e);
   }
   const db = drizzle(neon(c.env.DATABASE_URL));
-  const [outcome, legacyApplied, cOut, rOut, readResults, pOut, pcOut] = await Promise.all([
+  const [outcome, legacyApplied, eventOut, cOut, rOut, readResults, pOut, pcOut] = await Promise.all([
     pushEntries(db, withV, me),
     pushEntriesLegacy(db, legacy, me),
+    pushEvents(db, eventRows, me),
     pushComments(db, cRows, me),
     pushReactions(db, rRows),
     markNotificationsRead(db, me, reads),
@@ -473,6 +497,10 @@ app.post('/api/sync/push', async (c) => {
       ...outcome.conflicts.map((row) => ({ id: row.id, applied: false, row })),
       ...legacyApplied.map((row) => ({ id: row.id, applied: true, row })),
     ],
+    eventResults: [
+      ...eventOut.applied.map((row) => ({ id: row.id, applied: true, row })),
+      ...eventOut.conflicts.map((row) => ({ id: row.id, applied: false, row })),
+    ],
     // 보낸 게 없어도 항상 실어 보낸다 — 클라이언트는 "보냈는데 결과 필드가 없음"을
     // 구버전 Worker의 무시로 읽고 큐를 지킨다(조용한 유실 방지)
     commentResults: [
@@ -497,11 +525,17 @@ app.post('/api/sync/push', async (c) => {
 });
 
 app.get('/api/sync/pull', async (c) => {
-  // 네 커서는 서로 독립이다 — 하나만 와도, 아예 없어도(그 스트림만 처음부터) 동작한다.
+  // 커서는 서로 독립이다 — 하나만 와도, 아예 없어도(그 스트림만 처음부터) 동작한다.
   // 깨진 값은 SQL 캐스팅에서 500이 되므로 형식이 맞을 때만 커서로 삼는다.
   const since = c.req.query('since');
   const sinceId = c.req.query('sinceId');
   const cursor: PullCursor | null = since && sinceId ? { ts: since, id: sinceId } : null;
+  const esince = c.req.query('esince');
+  const esinceId = c.req.query('esinceId');
+  const eventCursor: PullCursor | null =
+    esince && Number.isFinite(Date.parse(esince)) && esinceId && UUID_RE.test(esinceId)
+      ? { ts: esince, id: canonicalUuid(esinceId) }
+      : null;
   const csince = c.req.query('csince');
   const csinceId = c.req.query('csinceId');
   const cCursor: PullCursor | null =
@@ -533,8 +567,9 @@ app.get('/api/sync/pull', async (c) => {
       ? { ts: pcsince, id: pcsinceId }
       : null;
   const db = drizzle(neon(c.env.DATABASE_URL));
-  const [result, statuses, cRes, rRes, nRes, pRes, pcRes] = await Promise.all([
+  const [result, eventRes, statuses, cRes, rRes, nRes, pRes, pcRes] = await Promise.all([
     pullSince(db, cursor),
+    pullEvents(db, eventCursor),
     allStatuses(db),
     pullComments(db, cCursor),
     pullReactions(db, rCursor),
@@ -544,6 +579,8 @@ app.get('/api/sync/pull', async (c) => {
   ]);
   return c.json({
     ...result,
+    events: eventRes.rows,
+    eventCursor: eventRes.cursor,
     statuses,
     comments: cRes.rows,
     commentCursor: cRes.cursor,
@@ -726,6 +763,9 @@ app.put('/api/tags/prefs', async (c) => {
     return c.json({ error: 'invalid json' }, 400);
   }
   if (!body || !Array.isArray(body.tags)) return c.json({ error: 'bad tags' }, 400);
+  if (body.eventTags !== undefined && !Array.isArray(body.eventTags)) {
+    return c.json({ error: 'bad event tags' }, 400);
+  }
   if (typeof body.at !== 'string' || !Number.isFinite(Date.parse(body.at))) {
     return c.json({ error: 'bad at' }, 400);
   }
@@ -735,6 +775,10 @@ app.put('/api/tags/prefs', async (c) => {
     {
       // HTTP와 쿼리 두 경계가 같은 함수를 써서 손상된 값·기본 태그를 저장하지 않는다.
       tags: normalizeCustomTagList(body.tags),
+      // 일정 프리셋은 클라이언트 상수지만 OFF 예약 이름은 공용 정규화로 Worker도 거른다.
+      ...(body.eventTags === undefined
+        ? {}
+        : { eventTags: normalizeCustomEventTagList(body.eventTags) }),
       at: normalizeAt(body.at, Date.now()),
     },
   );

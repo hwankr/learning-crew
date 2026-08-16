@@ -15,9 +15,15 @@ const mocks = vi.hoisted(() => ({
   getTagPrefs: vi.fn(async (_db: unknown, m: string) => ({
     m,
     tags: [] as string[],
+    eventTags: [] as string[],
     updatedAt: '1970-01-01T00:00:00.000Z',
   })),
   pullSince: vi.fn(async () => ({ rows: [], cursor: null })),
+  pullEvents: vi.fn(async () => ({ rows: [], cursor: null })),
+  pushEvents: vi.fn(async (_db: unknown, _rows: unknown[], _me: string) => ({
+    applied: [],
+    conflicts: [],
+  })),
   allStatuses: vi.fn(async () => []),
   pullComments: vi.fn(async () => ({ rows: [], cursor: null })),
   pullReactions: vi.fn(async () => ({ rows: [], cursor: null })),
@@ -27,10 +33,10 @@ const mocks = vi.hoisted(() => ({
   putTagPrefs: vi.fn(async (
     _db: unknown,
     m: string,
-    p: { tags: string[]; at: string },
+    p: { tags: string[]; eventTags?: string[]; at: string },
   ) => ({
     applied: true,
-    prefs: { m, tags: p.tags, updatedAt: p.at },
+    prefs: { m, tags: p.tags, eventTags: p.eventTags ?? [], updatedAt: p.at },
   })),
   getStatusRow: vi.fn(async () => null as {
     on: boolean;
@@ -61,6 +67,8 @@ vi.mock('./queries', async (importOriginal) => ({
   setStatus: mocks.setStatus,
   claimNotifySlot: mocks.claimNotifySlot,
   pullSince: mocks.pullSince,
+  pullEvents: mocks.pullEvents,
+  pushEvents: mocks.pushEvents,
   allStatuses: mocks.allStatuses,
   pullComments: mocks.pullComments,
   pullReactions: mocks.pullReactions,
@@ -245,11 +253,12 @@ describe('GET/PUT /api/tags/prefs', () => {
     mocks.getTagPrefs.mockImplementation(async (_db, m) => ({
       m,
       tags: [],
+      eventTags: [],
       updatedAt: '1970-01-01T00:00:00.000Z',
     }));
     mocks.putTagPrefs.mockImplementation(async (_db, m, p) => ({
       applied: true,
-      prefs: { m, tags: p.tags, updatedAt: p.at },
+      prefs: { m, tags: p.tags, eventTags: p.eventTags ?? [], updatedAt: p.at },
     }));
   });
 
@@ -266,7 +275,7 @@ describe('GET/PUT /api/tags/prefs', () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
       ok: true,
-      prefs: { m: 'sh', tags: [], updatedAt: '1970-01-01T00:00:00.000Z' },
+      prefs: { m: 'sh', tags: [], eventTags: [], updatedAt: '1970-01-01T00:00:00.000Z' },
     });
     expect(mocks.getTagPrefs).toHaveBeenCalledWith({}, 'sh');
   });
@@ -302,6 +311,7 @@ describe('GET/PUT /api/tags/prefs', () => {
         prefs: {
           m: 'wg',
           tags: ['é', '수학', '알고리즘'],
+          eventTags: [],
           updatedAt: '2026-08-15T12:00:00.000Z',
         },
         applied: true,
@@ -311,7 +321,43 @@ describe('GET/PUT /api/tags/prefs', () => {
     }
   });
 
-  it('배열이 아닌 tags와 파싱할 수 없는 at은 400으로 거부한다', async () => {
+  it('eventTags가 있으면 별도 목록으로 정화하고, 생략한 구버전 요청은 필드를 넘기지 않는다', async () => {
+    const token = await makeToken('wg', secret);
+    const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+    const at = '2026-08-15T11:00:00.000Z';
+
+    const withEvents = await worker.fetch(
+      new Request('https://example.test/api/tags/prefs', {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify({
+          tags: ['수학'],
+          eventTags: [' 면접 ', '영어', 'OFF', '면접', '제어\n문자'],
+          at,
+        }),
+      }),
+      env as never,
+      {} as ExecutionContext,
+    );
+
+    expect(withEvents.status).toBe(200);
+    expect(mocks.putTagPrefs).toHaveBeenLastCalledWith({}, 'wg', {
+      tags: ['수학'],
+      eventTags: ['면접', '영어'],
+      at,
+    });
+
+    await worker.fetch(
+      new Request('https://example.test/api/tags/prefs', {
+        method: 'PUT', headers, body: JSON.stringify({ tags: ['독서'], at }),
+      }),
+      env as never,
+      {} as ExecutionContext,
+    );
+    expect(mocks.putTagPrefs).toHaveBeenLastCalledWith({}, 'wg', { tags: ['독서'], at });
+  });
+
+  it('배열이 아닌 tags/eventTags와 파싱할 수 없는 at은 400으로 거부한다', async () => {
     const token = await makeToken('th', secret);
     const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
     const badTags = await worker.fetch(
@@ -328,9 +374,19 @@ describe('GET/PUT /api/tags/prefs', () => {
       env as never,
       {} as ExecutionContext,
     );
+    const badEventTags = await worker.fetch(
+      new Request('https://example.test/api/tags/prefs', {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify({ tags: [], eventTags: '면접', at: new Date().toISOString() }),
+      }),
+      env as never,
+      {} as ExecutionContext,
+    );
 
     expect(badTags.status).toBe(400);
     expect(badAt.status).toBe(400);
+    expect(badEventTags.status).toBe(400);
     expect(mocks.putTagPrefs).not.toHaveBeenCalled();
   });
 
@@ -524,12 +580,90 @@ describe('PUT /api/photos/:photoId', () => {
   });
 });
 
+describe('POST /api/sync/push 크루 일정', () => {
+  const secret = 'test-secret';
+  const env = { DATABASE_URL: 'postgres://unused', AUTH_SECRET: secret };
+  const EVENT_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+
+  beforeEach(() => {
+    mocks.pushEvents.mockReset();
+    mocks.pushEvents.mockImplementation(async (_db, rows) => ({
+      applied: rows.map((row: { v: number }) => ({
+        ...row,
+        v: row.v + 1,
+        updatedAt: '2026-08-16T10:00:00.000Z',
+      })),
+      conflicts: [],
+    }));
+  });
+
+  async function push(body: unknown, member = 'sh'): Promise<Response> {
+    const token = await makeToken(member, secret);
+    return worker.fetch(
+      new Request('https://example.test/api/sync/push', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+      env as never,
+      { waitUntil: vi.fn() } as unknown as ExecutionContext,
+    );
+  }
+
+  const event = (over: Record<string, unknown> = {}) => ({
+    id: EVENT_ID,
+    m: 'sh',
+    participants: ['kj', 'not-a-member', 'sh', 'kj'],
+    title: '  최종 면접  ',
+    tag: 'OFF',
+    memo: '',
+    day: '2026-08-20',
+    endDay: '2026-02-31',
+    v: 0,
+    updatedAt: '2026-08-16T09:00:00Z',
+    deletedAt: null,
+    ...over,
+  });
+
+  it('shared 정규화를 거친 행을 CAS 쿼리에 넘기고 eventResults를 돌려준다', async () => {
+    const response = await push({ entries: [], events: [event()] });
+    expect(response.status).toBe(200);
+    expect(mocks.pushEvents).toHaveBeenCalledWith({}, [{
+      ...event(),
+      participants: ['sh', 'kj'],
+      title: '최종 면접',
+      tag: '기타',
+      endDay: null,
+      updatedAt: '2026-08-16T09:00:00.000Z',
+    }], 'sh');
+    const body = await response.json() as { eventResults: { applied: boolean; row: { v: number } }[] };
+    expect(body.eventResults).toEqual([
+      expect.objectContaining({ id: EVENT_ID, applied: true, row: expect.objectContaining({ v: 1 }) }),
+    ]);
+  });
+
+  it('다른 멤버 소유 일정은 400으로 거부한다', async () => {
+    const response = await push({ entries: [], events: [event({ m: 'wg' })] });
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ error: 'not your event' });
+    expect(mocks.pushEvents).not.toHaveBeenCalled();
+  });
+
+  it('events가 없는 구버전 요청도 성공하고 빈 결과 필드를 제공한다', async () => {
+    const response = await push({ entries: [] });
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ eventResults: [] });
+    expect(mocks.pushEvents).toHaveBeenCalledWith({}, [], 'sh');
+  });
+});
+
 describe('GET /api/sync/pull 라운지 커서 검증 (핸들러 경계)', () => {
   const secret = 'test-secret';
   const env = { DATABASE_URL: 'postgres://unused', AUTH_SECRET: secret };
   const PO = 'dddddddd-dddd-4ddd-8ddd-ddddddddddd1';
 
   beforeEach(() => {
+    mocks.pullEvents.mockClear();
     mocks.pullPosts.mockClear();
     mocks.pullPostComments.mockClear();
   });
@@ -562,5 +696,15 @@ describe('GET /api/sync/pull 라운지 커서 검증 (핸들러 경계)', () => 
     const res = await pull(`pcsince=${encodeURIComponent('2026-08-15T00:00:00.000Z')}&pcsinceId=nope`);
     expect(res.status).toBe(200);
     expect(mocks.pullPostComments).toHaveBeenCalledWith({}, null);
+  });
+
+  it('형식이 맞는 event 커서만 일정 pull에 전달한다', async () => {
+    const ts = '2026-08-15T00:00:00.000Z';
+    const res = await pull(`esince=${encodeURIComponent(ts)}&esinceId=${PO.toUpperCase()}`);
+    expect(res.status).toBe(200);
+    expect(mocks.pullEvents).toHaveBeenCalledWith({}, { ts, id: PO });
+
+    await pull(`esince=bad&esinceId=${PO}`);
+    expect(mocks.pullEvents).toHaveBeenLastCalledWith({}, null);
   });
 });

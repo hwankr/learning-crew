@@ -19,6 +19,9 @@ import type {
   ReactionSet,
 } from '../../shared/types';
 
+/** 일정 시트의 기본 선택지. 기록용 TAGS와 독립이며 Worker 검증에는 쓰지 않는다. */
+export const EVENT_TAGS = ['자격증', '면접', '시험'] as const;
+
 export interface Member {
   id: MemberId;
   name: string;
@@ -211,6 +214,11 @@ export interface CopySet {
   loungeDeleted: string; // 글 삭제 토스트
   loungeDelAsk: string; // 글 삭제 확인 물음
   loungeDelNote: string;
+  /* 크루 일정 — 등록·삭제만 있다(수정 없음) */
+  eventSaved: (when: string) => string; // 일정 등록 토스트
+  eventDeleted: string; // 일정 삭제 토스트
+  eventDelAsk: string; // 일정 삭제 확인 물음
+  eventDelNote: string;
 }
 
 export const COPY: CopySet = {
@@ -251,6 +259,10 @@ export const COPY: CopySet = {
   loungeDeleted: '글을 삭제했어요',
   loungeDelAsk: '이 글을 지울까요?',
   loungeDelNote: '지운 글은 되돌릴 수 없어요.',
+  eventSaved: (when) => `${when}에 일정을 등록했어요`,
+  eventDeleted: '일정을 삭제했어요',
+  eventDelAsk: '이 일정을 지울까요?',
+  eventDelNote: '크루 전원의 캘린더에서 함께 사라져요.',
 };
 
 export const W = ['일', '월', '화', '수', '목', '금', '토'];
