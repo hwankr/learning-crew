@@ -1,0 +1,1 @@
+ALTER TABLE "notif_prefs" ADD COLUMN "new_writes" boolean DEFAULT true NOT NULL;

@@ -211,6 +211,7 @@ export const notifPrefs = pgTable('notif_prefs', {
   cmMine: boolean('cm_mine').notNull().default(true),
   cmReply: boolean('cm_reply').notNull().default(true),
   cmAll: boolean('cm_all').notNull().default(false),
+  newWrites: boolean('new_writes').notNull().default(true),
   reactMode: text('react_mode').notNull().default('daily'),
   quietEnabled: boolean('quiet_enabled').notNull().default(true),
   quietFrom: text('quiet_from').notNull().default('22:00'),

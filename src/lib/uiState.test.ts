@@ -1,7 +1,7 @@
 /* 화면 상태는 신뢰할 수 없는 localStorage에서 온다 — 형식만 날짜처럼 생긴 값이
    캘린더의 달과 선택일 제목을 갈라놓지 않게 복원 경계를 검증한다. */
 import { afterEach, describe, expect, it } from 'vitest';
-import { calOffOf, isDayKey, loadUi, revealEntries, sameDayInMonth } from './uiState';
+import { calOffOf, isDayKey, loadUi, revealEntries, revealPosts, sameDayInMonth } from './uiState';
 
 const originalStorage = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
 
@@ -55,6 +55,14 @@ describe('revealEntries (기록으로 향하는 동작 뒤의 필터)', () => {
     expect(revealEntries('posts')).toBe('all');
     expect(revealEntries('entries')).toBe('entries');
     expect(revealEntries('all')).toBe('all');
+  });
+});
+
+describe('revealPosts (라운지 글로 향하는 동작 뒤의 필터)', () => {
+  it('기록만 보기였을 때만 전체로 풀린다 — revealEntries의 거울', () => {
+    expect(revealPosts('entries')).toBe('all');
+    expect(revealPosts('posts')).toBe('posts');
+    expect(revealPosts('all')).toBe('all');
   });
 });
 

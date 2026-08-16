@@ -5,7 +5,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   DEFAULT_NOTIF_PREFS,
-  MEMBER_IDS,
   MEMBER_NAMES,
   type MemberId,
   type NotifMode,
@@ -13,15 +12,14 @@ import {
   type NotifPrefsResponse,
 } from '../../shared/types';
 import { authHeaders } from '../lib/push';
-import { BY_ID } from '../lib/constants';
-import { Avatar, BACK_D, Icon, LOCK_D } from './icons';
+import { BACK_D, Icon, LOCK_D } from './icons';
 import { NotifyToggle } from './NotifyToggle';
 
 type Draft = Omit<NotifPrefs, 'm' | 'updatedAt'>;
 
 const MODES: { id: NotifMode; label: string; desc: string; badge?: boolean }[] = [
-  { id: 'live', label: '시작할 때마다', desc: '타이머를 켤 때마다 바로. 함께 달리는 느낌이 필요할 때.' },
-  { id: 'daily', label: '하루에 한 번만', desc: '크루별로 그날 첫 시작만. "오늘 도서관 갔네?" 정도로 가볍게.', badge: true },
+  { id: 'live', label: '시작할 때마다', desc: '타이머를 켤 때마다 바로.' },
+  { id: 'daily', label: '하루에 한 번만', desc: '크루별로 그날 첫 시작만.', badge: true },
   { id: 'off', label: '받지 않기', desc: '캘린더와 피드에서 직접 확인할게요.' },
 ];
 
@@ -30,41 +28,6 @@ const CM_ROWS = [
   { id: 'cmReply', label: '내 댓글에 달린 답글', desc: '시작한 대화가 이어질 때' },
   { id: 'cmAll', label: '크루 기록의 모든 댓글', desc: '조용히 지내려면 꺼두세요.' },
 ] as const;
-
-const PER_OPTS: { id: NotifMode; label: string }[] = [
-  { id: 'live', label: '실시간' },
-  { id: 'daily', label: '하루 1회' },
-  { id: 'off', label: '끔' },
-];
-const REACT_OPTS: { id: NotifMode; label: string }[] = [
-  { id: 'live', label: '바로' },
-  { id: 'daily', label: '하루 요약' },
-  { id: 'off', label: '끔' },
-];
-
-// 방해 금지 시각 — 서버 검증(HH:00)과 다이제스트 cron이 시간 단위라 정각만 고른다
-const FROMS = ['21:00', '22:00', '23:00', '00:00'];
-const TOS = ['06:00', '07:00', '08:00', '09:00'];
-
-const cycle = (list: string[], cur: string): string =>
-  list[(Math.max(0, list.indexOf(cur)) + 1) % list.length]!;
-
-function Seg({ opts, cur, onPick }: {
-  opts: { id: NotifMode; label: string }[];
-  cur: NotifMode;
-  onPick: (v: NotifMode) => void;
-}) {
-  return (
-    <div className="nseg" role="radiogroup">
-      {opts.map((o) => (
-        <button key={o.id} className={'nseg-btn' + (o.id === cur ? ' on' : '')}
-          role="radio" aria-checked={o.id === cur} onClick={() => onPick(o.id)}>
-          {o.label}
-        </button>
-      ))}
-    </div>
-  );
-}
 
 function Switch({ on, label, onToggle }: { on: boolean; label: string; onToggle: () => void }) {
   return (
@@ -183,11 +146,6 @@ export function NotiSettings({ token, meId, demo, onBack }: Props) {
     );
   }
 
-  const crew = MEMBER_IDS.filter((m) => m !== meId);
-  const quietNote = prefs.quietEnabled
-    ? `${prefs.quietFrom}~${prefs.quietTo} 사이 알림은 모아서 ${prefs.quietTo}에 한 번 도착해요.`
-    : '밤낮 없이 오는 대로 받아요.';
-
   return (
     <div>
       <div className="nset-back-row">
@@ -220,6 +178,8 @@ export function NotiSettings({ token, meId, demo, onBack }: Props) {
           return (
             <button key={m.id} className={'nset-mode' + (sel ? ' sel' : '')} role="radio"
               aria-checked={sel}
+              /* perMember는 늘 빈 값으로 민다 — 크루별 오버라이드 UI를 걷어낸 뒤라
+                 서버 행에 남은 옛 값도 모드를 고를 때 함께 청소된다(게이트도 이미 무시한다) */
               onClick={() => update({ startMode: m.id, perMember: {} })}>
               <span className={'nset-radio' + (sel ? ' sel' : '')} />
               <span className="nset-mode-main">
@@ -234,26 +194,16 @@ export function NotiSettings({ token, meId, demo, onBack }: Props) {
         })}
       </div>
 
-      <div className="nset-label">크루별로 다르게</div>
-      <div className="nset-crew-list">
-        {crew.map((m) => {
-          const resolved = prefs.perMember[m] ?? prefs.startMode;
-          const hint =
-            resolved === 'live' ? '켤 때마다 알림' : resolved === 'daily' ? '그날 첫 시작만' : '이 크루는 알림 없음';
-          return (
-            <div key={m} className="nset-card">
-              <div className="nset-crew-head">
-                <Avatar m={BY_ID[m]} size={36} />
-                <span className="nset-crew-main">
-                  <span className="nset-crew-name">{MEMBER_NAMES[m]}</span>
-                  <span className="nset-crew-hint">{hint}</span>
-                </span>
-              </div>
-              <Seg opts={PER_OPTS} cur={resolved}
-                onPick={(v) => update({ perMember: { ...prefs.perMember, [m]: v } })} />
-            </div>
-          );
-        })}
+      <div className="nset-label">새 글</div>
+      <div className="nset-card nset-cm">
+        <div className="nset-cm-row">
+          <span className="nset-cm-main">
+            <span className="nset-cm-title">크루의 새 기록·게시글</span>
+            <span className="nset-cm-desc">크루가 기록이나 라운지 글을 올리면 알려드려요.</span>
+          </span>
+          <Switch on={prefs.newWrites} label="크루의 새 기록·게시글"
+            onToggle={() => update({ newWrites: !prefs.newWrites })} />
+        </div>
       </div>
 
       <div className="nset-label">댓글과 반응</div>
@@ -277,36 +227,8 @@ export function NotiSettings({ token, meId, demo, onBack }: Props) {
           </span>
           <span className="nset-always">항상</span>
         </div>
-        <div className="nset-cm-row col">
-          <span className="nset-cm-main">
-            <span className="nset-cm-title">응원 반응</span>
-            <span className="nset-cm-desc">모아서 받을 수 있어요.</span>
-          </span>
-          <Seg opts={REACT_OPTS} cur={prefs.reactMode} onPick={(v) => update({ reactMode: v })} />
-        </div>
       </div>
 
-      <div className="nset-label">방해 금지 시간</div>
-      <div className="nset-card">
-        <div className="nset-quiet-head">
-          <span className="nset-cm-title">이 시간엔 조용히</span>
-          <Switch on={prefs.quietEnabled} label="방해 금지 시간"
-            onToggle={() => update({ quietEnabled: !prefs.quietEnabled })} />
-        </div>
-        <div className="nset-quiet-times" style={{ opacity: prefs.quietEnabled ? 1 : 0.4 }}>
-          <button className="nset-time" disabled={!prefs.quietEnabled}
-            onClick={() => update({ quietFrom: cycle(FROMS, prefs.quietFrom) })}>
-            {prefs.quietFrom}
-          </button>
-          <span className="nset-time-word">부터</span>
-          <button className="nset-time" disabled={!prefs.quietEnabled}
-            onClick={() => update({ quietTo: cycle(TOS, prefs.quietTo) })}>
-            {prefs.quietTo}
-          </button>
-          <span className="nset-time-word">까지</span>
-        </div>
-        <div className="nset-quiet-note">{quietNote}</div>
-      </div>
     </div>
   );
 }

@@ -10,11 +10,10 @@ import {
   deleteOldNotifications,
   entryOwners,
   insertNotificationDedup,
+  insertNotificationsDedup,
   insertNotifications,
-  markNotificationsPushed,
   priorCommenters,
   pushSubsByMember,
-  unpushedQuietRows,
   unpushedReactDailyAll,
   upsertReactionDaily,
   type Db,
@@ -24,19 +23,18 @@ import {
   MEMBER_IDS,
   MEMBER_NAMES,
   type Comment,
+  type Entry,
   type MemberId,
   type NotifPrefs,
   type Notification,
+  type Post,
   type ReactionEmoji,
 } from '../shared/types';
 import {
   fmtKstTime,
-  inQuietHours,
   kstDayStr,
   kstHourStr,
-  kstMinutes,
   parseMentions,
-  quietSpanMinutes,
   resolvedStartMode,
   resolveCommentRecipients,
 } from '../shared/notify';
@@ -56,26 +54,21 @@ interface Planned {
   data: PushBody;
 }
 
-/** 계획된 푸시를 수신자별 설정에 따라 발송한다.
-    방해 금지 중인 수신자는 보류(pushed_at null 유지) — quietTo 시각의 cron이 모아서 알린다.
-    발송 전에 소유권을 선점(조건부 도장)한다 — 그 사이 cron 다이제스트가 같은 행을 쓸어 담아도
-    한쪽만 보낸다. 선점 후 발송 전에 죽으면 그 푸시는 유실되지만, 푸시는 어디서나
-    best-effort고 인앱 내역이 진실이다. */
+/** 계획된 푸시를 발송한다 — 늘 바로 보낸다(방해 금지 보류는 기능을 걷어내며 사라졌다).
+    발송 전에 소유권을 선점(조건부 도장)한다 — cron이 겹쳐 같은 행을 집어도 한쪽만 보낸다.
+    선점 후 발송 전에 죽으면 그 푸시는 유실되지만, 푸시는 어디서나 best-effort고
+    인앱 내역이 진실이다. */
 async function deliver(
   db: Db,
   env: PushEnvVars,
-  prefs: Record<MemberId, NotifPrefs>,
   planned: Planned[],
-  nowMs: number,
   send: Sender,
 ): Promise<void> {
   if (planned.length === 0) return;
   const subs = await pushSubsByMember(db);
-  const minutes = kstMinutes(nowMs);
-  const eligible = planned.filter((p) => !inQuietHours(prefs[p.m], minutes));
-  const claimed = await claimNotificationsPushed(db, eligible.flatMap((p) => p.rowIds));
+  const claimed = await claimNotificationsPushed(db, planned.flatMap((p) => p.rowIds));
   await Promise.all(
-    eligible
+    planned
       .filter((p) => p.rowIds.some((id) => claimed.has(id)))
       .map((p) => {
         const targets = subs.get(p.m) ?? [];
@@ -111,7 +104,7 @@ export async function notifyStart(
   const planned: Planned[] = [];
   for (const m of MEMBER_IDS) {
     if (m === me) continue;
-    const mode = resolvedStartMode(prefs[m], me);
+    const mode = resolvedStartMode(prefs[m]);
     if (mode === 'off') continue;
     const base = {
       memberId: m,
@@ -135,7 +128,83 @@ export async function notifyStart(
       planned.push({ m, rowIds: [row!.id], data });
     }
   }
-  await deliver(db, env, prefs, planned, nowMs, send);
+  await deliver(db, env, planned, send);
+}
+
+/* ---------- 새 글(기록·라운지) ---------- */
+
+/** 새 기록·라운지 글 한 건씩을 "만든 사람 빼고 전원"에게 알린다 — newWrites 토글이 게이트.
+    호출부(sync push)가 신규 판정을 이미 끝냈다: 기록은 CAS 첫 반영(v=1)·라운지 글은 첫 삽입만
+    넘어온다. 그래도 aggKey = write:<종류>:<id>로 (수신자, 날짜, 종류+id) 유니크를 한 겹 더
+    깐다 — waitUntil이 겹치거나 재전송 판정이 어긋나도 알림 행은 한 번이다(종류를 키에 넣는
+    이유: 기록과 라운지 글이 우연히 같은 UUID를 쓰면 한쪽 알림이 조용히 사라진다).
+    행 삽입은 항목 × 수신자 전체를 한 문장(bulk)으로 — 큰 배치(오래 오프라인이었던 기기의
+    몰아넣기)가 수백 번의 순차 INSERT가 되지 않고, 끊겨도 반쪽짜리 상태가 남지 않는다. */
+export async function notifyNewWrites(
+  db: Db,
+  env: PushEnvVars,
+  me: MemberId,
+  newEntries: readonly Entry[],
+  newPosts: readonly Post[],
+  nowMs: number,
+  send: Sender = sendPushToAll,
+): Promise<void> {
+  const prefs = await allNotifPrefs(db);
+  const day = kstDayStr(nowMs);
+  const name = MEMBER_NAMES[me];
+  /* 알림 하나에 실을 내용 — 기록은 태그가, 라운지 글은 본문 첫 줄이 "무슨 글인지"를 말한다.
+     기록의 entryId는 행에 실리지만 라운지 글 id는 aggKey에만 남는다(entry_id 열은 uuid라
+     맞지 않는 종류를 섞지 않는다 — 지금 알림 행은 어디로도 딥링크하지 않는다). */
+  const items = [
+    ...newEntries.map((e) => ({
+      why: 'entry' as const,
+      id: e.id,
+      entryId: e.id,
+      quote: e.memo.trim(),
+      ctx: e.tags.slice(0, 3).join('·'),
+      data: {
+        title: `✏️ ${name} — 새 기록을 남겼어요`,
+        body: e.tags.slice(0, 3).join('·') || '오늘의 공부 기록',
+        url: '/',
+      },
+    })),
+    ...newPosts.map((p) => ({
+      why: 'post' as const,
+      id: p.id,
+      entryId: null,
+      quote: p.body.trim().slice(0, 80),
+      ctx: '라운지',
+      data: {
+        title: `📝 ${name} — 라운지에 글을 올렸어요`,
+        body: p.body.trim().slice(0, 80) || '새 글',
+        url: '/',
+      },
+    })),
+  ];
+  const byAggKey = new Map(items.map((it) => [`write:${it.why}:${it.id}`, it]));
+  const rows: NewNotification[] = [];
+  for (const it of items) {
+    for (const m of MEMBER_IDS) {
+      if (m === me || !prefs[m].newWrites) continue;
+      rows.push({
+        memberId: m,
+        kind: 'write',
+        why: it.why,
+        actor: me,
+        entryId: it.entryId,
+        quote: it.quote,
+        ctx: it.ctx,
+        day,
+        aggKey: `write:${it.why}:${it.id}`,
+      });
+    }
+  }
+  const inserted = await insertNotificationsDedup(db, rows);
+  const planned: Planned[] = inserted.flatMap((row) => {
+    const it = row.aggKey === null ? undefined : byAggKey.get(row.aggKey);
+    return it ? [{ m: row.m, rowIds: [row.id], data: { ...it.data, tag: `lc-${row.id}` } }] : [];
+  });
+  await deliver(db, env, planned, send);
 }
 
 /* ---------- 댓글 · 응원 ---------- */
@@ -245,62 +314,19 @@ export async function notifyCommentEvents(
     const info = owners.get(d.entryId);
     // 주인을 모르는(아직 push 안 된) 기록의 응원은 조용히 넘어간다 — 다음 응원 때 잡힌다
     if (!info || info.owner === me) continue;
-    const mode = prefs[info.owner].reactMode;
-    if (mode === 'off') continue;
-    if (mode === 'live') {
-      const [row] = await insertNotifications(db, [
-        {
-          memberId: info.owner,
-          kind: 'react',
-          why: 'react',
-          actor: me,
-          entryId: d.entryId,
-          quote: d.added.join(' '),
-          ctx: ctxFor(info, info.owner),
-          day,
-          aggKey: null,
-        },
-      ]);
-      planned.push({
-        m: info.owner,
-        rowIds: [row!.id],
-        data: {
-          title: `💛 ${MEMBER_NAMES[me]} — 응원을 보냈어요`,
-          body: d.added.join(' '),
-          url: '/?view=noti',
-          tag: `lc-${row!.id}`,
-        },
-      });
-    } else {
-      // 하루 요약 — 행만 쌓고 푸시는 저녁 cron(REACT_DAILY_PUSH_AT)이 한 번에 보낸다
-      await upsertReactionDaily(db, info.owner, day, me, d.added.length);
-    }
+    /* 응원은 늘 하루 요약이다 — 설정 노브(reactMode)는 걷어냈다. 서버 행에 남아 있을 수
+       있는 옛 값이 보이지 않는 곳에서 알림을 좌우하면 설정 화면이 거짓말이 되므로 읽지
+       않는다(열은 하위 호환으로 남긴다). 행만 쌓고 푸시는 저녁 cron(REACT_DAILY_PUSH_AT)이
+       한 번에 보낸다. */
+    await upsertReactionDaily(db, info.owner, day, me, d.added.length);
   }
-  await deliver(db, env, prefs, planned, nowMs, send);
+  await deliver(db, env, planned, send);
 }
 
 /* ---------- 시간 단위 cron ---------- */
 
-const KIND_WORD: Record<string, string> = {
-  start: '시작',
-  comment: '댓글',
-  reply: '댓글',
-  mention: '멘션',
-  react: '응원',
-};
-
-/** 다이제스트 부가 설명 — 앞 두 건만 시각·이름으로 요약하고 나머지는 개수로 접는다. */
-function digestCtx(rows: Notification[]): string {
-  const parts = rows.slice(0, 2).map((r) => {
-    const name = r.actor ? MEMBER_NAMES[r.actor] : '크루';
-    return `${fmtKstTime(Date.parse(r.createdAt))} ${name} ${KIND_WORD[r.kind] ?? '알림'}`;
-  });
-  const restCount = rows.length - parts.length;
-  return parts.join(' · ') + (restCount > 0 ? ` 외 ${restCount}개` : '');
-}
-
-/** 매시 정각 cron의 일감: 저녁 응원 요약 푸시, 방해 금지 다이제스트, 보관 정리.
-    설정의 시각 값이 전부 'HH:00'이라(검증이 강제) 시간 단위면 충분하다. */
+/** 매시 정각 cron의 일감: 저녁 응원 요약 푸시, 보관 정리.
+    발송 시각(REACT_DAILY_PUSH_AT·CLEANUP_AT)이 'HH:00'이라 시간 단위면 충분하다. */
 export async function runHourly(
   db: Db,
   env: PushEnvVars & { PHOTOS: R2Bucket },
@@ -319,18 +345,14 @@ export async function runHourly(
   }
 
   const hour = kstHourStr(nowMs);
-  const day = kstDayStr(nowMs);
-  const prefs = await allNotifPrefs(db);
   const subs = await pushSubsByMember(db);
   const onGone = (endpoint: string) => deleteGonePushSub(db, endpoint);
 
-  // 1) 응원 하루 요약 — 발송 대기 중인 집계 행 전부(어제 20시 이후·방해 금지 보류분 포함).
+  // 1) 응원 하루 요약 — 발송 대기 중인 집계 행 전부(어제 20시 이후 생긴 것 포함).
   //    "오늘" 필터를 두면 그 경계 밖에서 생긴 행이 영영 안 나간다 — 하루 늦은 요약이 유실보다 낫다.
   if (hour === REACT_DAILY_PUSH_AT) {
     for (const agg of await unpushedReactDailyAll(db)) {
       const m = agg.m;
-      if (prefs[m].reactMode !== 'daily') continue;
-      if (inQuietHours(prefs[m], kstMinutes(nowMs))) continue; // 보류 유지 — 다음 기회에
       // 조건부 도장 선점 — cron이 겹쳐 돌아도 한쪽만 보낸다
       const claimed = await claimNotificationsPushed(db, [agg.id]);
       if (!claimed.has(agg.id)) continue;
@@ -351,48 +373,6 @@ export async function runHourly(
     }
   }
 
-  // 2) 방해 금지 다이제스트 — 창이 끝나는 시각의 멤버만
-  for (const m of MEMBER_IDS) {
-    const p = prefs[m];
-    if (!p.quietEnabled || p.quietTo !== hour) continue;
-    const span = quietSpanMinutes(p);
-    if (span === 0) continue;
-    const rows = await unpushedQuietRows(db, m, new Date(nowMs - span * 60_000).toISOString());
-    if (rows.length === 0) continue;
-    // 조건부 도장 선점 — cron이 겹쳐 돌면 실제로 찍은 행만 이번 다이제스트의 몫이다
-    const claimedIds = await claimNotificationsPushed(db, rows.map((r) => r.id));
-    const claimed = rows.filter((r) => claimedIds.has(r.id));
-    if (claimed.length === 0) continue;
-    // (수신자, 날짜, quiet) 유니크 — 다이제스트 행도 하루 1건
-    const sys = await insertNotificationDedup(db, {
-      memberId: m,
-      kind: 'system',
-      why: 'quiet',
-      actor: null,
-      entryId: null,
-      quote: '',
-      ctx: digestCtx(claimed),
-      day,
-      aggKey: 'quiet',
-      count: claimed.length,
-    });
-    if (sys) await markNotificationsPushed(db, [sys.id]);
-    const targets = subs.get(m) ?? [];
-    if (targets.length) {
-      await send(
-        env,
-        targets,
-        {
-          title: `🌙 조용한 시간 동안 알림 ${claimed.length}개`,
-          body: digestCtx(claimed),
-          url: '/?view=noti',
-          tag: 'lc-quiet',
-        },
-        onGone,
-      );
-    }
-  }
-
-  // 3) 보관 정리 — 하루 한 번
+  // 2) 보관 정리 — 하루 한 번
   if (hour === CLEANUP_AT) await deleteOldNotifications(db);
 }

@@ -113,6 +113,13 @@
       "when": 1786870584410,
       "tag": "0015_chubby_namora",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1786894903883,
+      "tag": "0016_lame_talkback",
+      "breakpoints": true
     }
   ]
 }

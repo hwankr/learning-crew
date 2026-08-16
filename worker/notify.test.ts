@@ -23,7 +23,7 @@ import {
   upsertReactionDaily,
   type Db,
 } from './queries';
-import { notifyCommentEvents, notifyStart, runHourly, type Sender } from './notify';
+import { notifyCommentEvents, notifyNewWrites, notifyStart, runHourly, type Sender } from './notify';
 import { cleanupPhotoTombstones } from './photos';
 import type { PushBody } from './push';
 import {
@@ -32,6 +32,7 @@ import {
   MEMBER_NAMES,
   type Comment,
   type Entry,
+  type Post,
   type MemberId,
   type NotifPrefs,
   type ReactionSet,
@@ -39,12 +40,10 @@ import {
 import { primaryTag } from '../shared/types';
 import {
   fmtKstTime,
-  inQuietHours,
   kstDayStr,
   kstHourStr,
   kstMinutes,
   parseMentions,
-  quietSpanMinutes,
   resolveCommentRecipients,
   resolvedStartMode,
 } from '../shared/notify';
@@ -200,25 +199,11 @@ describe('resolveCommentRecipients', () => {
   });
 });
 
-describe('resolvedStartMode · inQuietHours', () => {
-  it('크루별 오버라이드가 기본 모드를 이긴다', () => {
+describe('resolvedStartMode', () => {
+  // 크루별 오버라이드는 걷어냈다 — 서버 행에 남은 옛 perMember 값도 모드를 못 바꾼다
+  it('시작 알림 모드는 크루 구분 없이 startMode 하나다', () => {
     const p = prefs('sh', { startMode: 'daily', perMember: { wg: 'live', th: 'off' } });
-    expect(resolvedStartMode(p, 'wg')).toBe('live');
-    expect(resolvedStartMode(p, 'th')).toBe('off');
-    expect(resolvedStartMode(p, 'jj')).toBe('daily');
-  });
-
-  it('자정을 넘는 창(22:00→07:00)과 안 넘는 창을 모두 판정한다', () => {
-    const night = prefs('sh'); // 22:00 → 07:00
-    expect(inQuietHours(night, 23 * 60)).toBe(true);
-    expect(inQuietHours(night, 3 * 60)).toBe(true);
-    expect(inQuietHours(night, 12 * 60)).toBe(false);
-    const day = prefs('sh', { quietFrom: '09:00', quietTo: '18:00' });
-    expect(inQuietHours(day, 12 * 60)).toBe(true);
-    expect(inQuietHours(day, 20 * 60)).toBe(false);
-    expect(inQuietHours(prefs('sh', { quietEnabled: false }), 23 * 60)).toBe(false);
-    expect(inQuietHours(prefs('sh', { quietFrom: '07:00', quietTo: '07:00' }), 7 * 60)).toBe(false);
-    expect(quietSpanMinutes(prefs('sh'))).toBe(9 * 60);
+    expect(resolvedStartMode(p)).toBe('daily');
   });
 });
 
@@ -297,7 +282,7 @@ describe('notifyStart', () => {
   });
 
   it('실시간 모드는 시작마다, 끔 모드는 아무것도 받지 않는다', async () => {
-    await putNotifPrefs(db, 'wg', { ...DEFAULT_NOTIF_PREFS, perMember: { sh: 'live' } });
+    await putNotifPrefs(db, 'wg', { ...DEFAULT_NOTIF_PREFS, startMode: 'live' });
     await putNotifPrefs(db, 'th', { ...DEFAULT_NOTIF_PREFS, startMode: 'off' });
     const { send } = makeSender();
     await notifyStart(db, ENV, 'sh', '도서관', new Date().toISOString(), Date.now(), send);
@@ -310,8 +295,9 @@ describe('notifyStart', () => {
     expect((await pullNotifications(db, 'jj', null)).rows).toHaveLength(1); // 기본 daily
   });
 
-  it('방해 금지 중인 수신자는 행만 쌓이고 푸시는 보류된다(pushed_at null)', async () => {
-    const noon = lastKstHour(12); // th의 기본 창(22~07) 밖 + wg의 창은 이 시각을 덮게 설정
+  // 방해 금지 시간은 기능째 걷어냈다 — 서버 행에 남은 옛 quiet 설정도 푸시를 못 막는다
+  it('옛 방해 금지 설정이 남아 있어도 푸시는 바로 나간다', async () => {
+    const noon = lastKstHour(12); // wg의 옛 창(11~14)이 이 시각을 덮지만 —
     await putNotifPrefs(db, 'wg', {
       ...DEFAULT_NOTIF_PREFS,
       quietFrom: '11:00',
@@ -322,8 +308,7 @@ describe('notifyStart', () => {
     const { calls, send } = makeSender();
     await notifyStart(db, ENV, 'sh', '도서관', new Date().toISOString(), noon, send);
 
-    expect(calls).toHaveLength(1); // th만
-    expect(calls[0]!.endpoints).toEqual(['https://e/th']);
+    expect(calls).toHaveLength(2); // wg·th 모두 바로
     const pushed = await db.execute(
       sql`select member_id, pushed_at from notifications order by member_id`,
     );
@@ -333,8 +318,76 @@ describe('notifyStart', () => {
         r.pushed_at,
       ]),
     );
-    expect(byMember.get('wg')).toBeNull(); // 보류 — 아침 다이제스트 재료
+    expect(byMember.get('wg')).not.toBeNull();
     expect(byMember.get('th')).not.toBeNull();
+  });
+});
+
+/* ---------- 새 글 팬아웃 ---------- */
+
+describe('notifyNewWrites', () => {
+  beforeEach(resetNotifState);
+
+  const P1 = 'ffffffff-ffff-4fff-8fff-ffffffffffff';
+  const post = (id: string, body = '오늘 도서관 후기'): Post => ({
+    id,
+    m: 'sh',
+    body,
+    photos: [],
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    deletedAt: null,
+  });
+
+  it('새 기록·라운지 글이 만든 사람 빼고 전원에게 가고, 내용이 실린다', async () => {
+    await upsertPushSub(db, 'wg', { endpoint: 'https://e/wg', p256dh: 'k', auth: 'a' });
+    const { calls, send } = makeSender();
+    await notifyNewWrites(
+      db,
+      ENV,
+      'sh',
+      [entry({ id: E1, m: 'sh', tags: ['영어', '단어'], memo: '단어 100개' })],
+      [post(P1)],
+      Date.now(),
+      send,
+    );
+    const wg = (await pullNotifications(db, 'wg', null)).rows;
+    expect(wg).toHaveLength(2);
+    expect(wg.map((r) => r.why).sort()).toEqual(['entry', 'post']);
+    const en = wg.find((r) => r.why === 'entry')!;
+    expect(en).toMatchObject({ kind: 'write', actor: 'sh', entryId: E1, quote: '단어 100개' });
+    expect(en.ctx).toBe('영어·단어');
+    expect(wg.find((r) => r.why === 'post')).toMatchObject({ quote: '오늘 도서관 후기' });
+    // 만든 사람 자신은 조용하고, 구독한 wg에게만 기기 푸시(행은 전원)
+    expect((await pullNotifications(db, 'sh', null)).rows).toHaveLength(0);
+    expect((await pullNotifications(db, 'th', null)).rows).toHaveLength(2);
+    expect(calls).toHaveLength(2);
+    expect(calls.every((c) => c.endpoints.length === 1 && c.endpoints[0] === 'https://e/wg')).toBe(true);
+  });
+
+  it('같은 글이 다시 넘어와도 알림은 한 번이다(aggKey 유니크)', async () => {
+    const { send } = makeSender();
+    const e = entry({ id: E1, m: 'sh' });
+    await notifyNewWrites(db, ENV, 'sh', [e], [], Date.now(), send);
+    await notifyNewWrites(db, ENV, 'sh', [e], [], Date.now(), send);
+    expect((await pullNotifications(db, 'wg', null)).rows).toHaveLength(1);
+  });
+
+  // aggKey에 종류가 들어가는 이유 — id만 쓰면 우연히 같은 UUID의 기록·라운지 글 중
+  // 한쪽 알림이 (수신자, 날짜, aggKey) 유니크에 걸려 조용히 사라진다
+  it('기록과 라운지 글이 같은 UUID여도 각각 알림이 된다', async () => {
+    const { send } = makeSender();
+    await notifyNewWrites(db, ENV, 'sh', [entry({ id: E1, m: 'sh' })], [post(E1)], Date.now(), send);
+    const wg = (await pullNotifications(db, 'wg', null)).rows;
+    expect(wg.map((r) => r.why).sort()).toEqual(['entry', 'post']);
+  });
+
+  it('newWrites를 끈 수신자만 조용하다', async () => {
+    await putNotifPrefs(db, 'wg', { ...DEFAULT_NOTIF_PREFS, newWrites: false });
+    const { send } = makeSender();
+    await notifyNewWrites(db, ENV, 'sh', [entry({ id: E1, m: 'sh' })], [], Date.now(), send);
+    expect((await pullNotifications(db, 'wg', null)).rows).toHaveLength(0);
+    expect((await pullNotifications(db, 'th', null)).rows).toHaveLength(1);
   });
 });
 
@@ -405,9 +458,10 @@ describe('notifyCommentEvents', () => {
     expect(jj[0]).toMatchObject({ kind: 'comment', why: 'all' });
   });
 
-  it('응원 실시간 모드: 추가된 이모지만 인용해 행이 된다', async () => {
+  // 응원 설정 노브는 걷어냈다 — 서버 행에 남은 옛 reactMode 값도 하루 요약을 못 바꾼다
+  it('옛 reactMode 값이 남아 있어도 응원은 늘 하루 요약이다', async () => {
     await putNotifPrefs(db, 'wg', { ...DEFAULT_NOTIF_PREFS, reactMode: 'live' });
-    const { send } = makeSender();
+    const { send, calls } = makeSender();
     await notifyCommentEvents(
       db,
       ENV,
@@ -419,7 +473,8 @@ describe('notifyCommentEvents', () => {
     );
     const wg = (await pullNotifications(db, 'wg', null)).rows;
     expect(wg).toHaveLength(1);
-    expect(wg[0]).toMatchObject({ kind: 'react', why: 'react', quote: '🔥 💪', actor: 'sh' });
+    expect(wg[0]).toMatchObject({ kind: 'react', why: 'react_daily', count: 2 });
+    expect(calls).toHaveLength(0); // 즉시 푸시 없음 — 저녁 cron이 모아 보낸다
   });
 
   it('응원 하루 요약(기본): 집계 행 하나에 count가 쌓이고 읽음이 되돌아간다', async () => {
@@ -566,48 +621,6 @@ describe('runHourly', () => {
 
     await runHourly(db, ENV, at20, send); // 같은 시각 재실행 — 이미 도장
     expect(calls).toHaveLength(1);
-  });
-
-  it('quietTo 시각 — 보류분을 다이제스트 한 건으로 접고 원본 행에 도장 찍는다', async () => {
-    const at7 = lastKstHour(7);
-    await putNotifPrefs(db, 'sh', { ...DEFAULT_NOTIF_PREFS }); // 22:00→07:00
-    await insertNotifications(db, [
-      { memberId: 'sh', kind: 'start', why: 'daily', actor: 'th', entryId: null, quote: '', ctx: '', day: kstDayStr(at7), aggKey: null },
-      { memberId: 'sh', kind: 'comment', why: 'mine', actor: 'jj', entryId: E1, quote: '새벽 댓글', ctx: '', day: kstDayStr(at7), aggKey: null },
-    ]);
-    await upsertPushSub(db, 'sh', { endpoint: 'https://e/sh', p256dh: 'k', auth: 'a' });
-
-    const { calls, send } = makeSender();
-    await runHourly(db, ENV, at7, send);
-    expect(calls).toHaveLength(1);
-    expect(calls[0]!.data.title).toContain('알림 2개');
-
-    const rows = (await pullNotifications(db, 'sh', null)).rows;
-    const sys = rows.find((r) => r.kind === 'system');
-    expect(sys).toMatchObject({ why: 'quiet', count: 2 });
-    expect(sys!.ctx).toContain('태현');
-
-    await runHourly(db, ENV, at7, send); // 재실행 — 남은 보류분이 없다
-    expect(calls).toHaveLength(1);
-    expect(
-      (await db.execute(sql`select count(*)::int as n from notifications where kind = 'system'`))
-        .rows as { n: number }[],
-    ).toEqual([{ n: 1 }]);
-  });
-
-  it('이미 앱에서 읽은 보류분은 다이제스트에 넣지 않는다', async () => {
-    const at7 = lastKstHour(7);
-    const [row] = await insertNotifications(db, [
-      { memberId: 'sh', kind: 'comment', why: 'mine', actor: 'jj', entryId: E1, quote: '', ctx: '', day: kstDayStr(at7), aggKey: null },
-    ]);
-    await markNotificationsRead(db, 'sh', [{ id: row!.id, at: row!.updatedAt }]);
-    const { calls, send } = makeSender();
-    await runHourly(db, ENV, at7, send);
-    expect(calls).toHaveLength(0);
-    expect(
-      (await db.execute(sql`select count(*)::int as n from notifications where kind = 'system'`))
-        .rows as { n: number }[],
-    ).toEqual([{ n: 0 }]);
   });
 
   it('cleanup 성공은 원장 row를 남겨 cleaned_at만 기록하고 pending에서 제외한다', async () => {

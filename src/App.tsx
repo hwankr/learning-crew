@@ -38,6 +38,7 @@ import {
   isDayKey,
   loadUi,
   revealEntries,
+  revealPosts,
   saveUi,
   type DesktopView,
   type FeedFilter,
@@ -890,8 +891,13 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
                 onRead={(id) => store.markNotificationRead(id)}
                 onReadAll={() => { store.markAllNotificationsRead(); showToast(wit.notiReadAll); }}
                 onOpenSettings={openNotiSettings}
-                // 알림이 가리키는 건 기록이다 — 라운지만 보기로 이동하면 대상이 안 보인다
-                onOpenFeed={() => { setNotiOpen(false); setView('feed'); setFeedFilter(revealEntries); }}
+                // 알림이 가리키는 쪽(기록/라운지 글)이 보이도록 필터를 풀어 준다 —
+                // 라운지 새 글 알림을 눌렀는데 '기록만' 필터가 남으면 대상이 안 보인다
+                onOpenFeed={(target) => {
+                  setNotiOpen(false);
+                  setView('feed');
+                  setFeedFilter(target === 'post' ? revealPosts : revealEntries);
+                }}
                 onClose={closeNoti} />
             ) : null}
             onCompose={() => openNew()} composeRef={ctaRef} />

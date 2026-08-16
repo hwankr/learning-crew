@@ -527,7 +527,7 @@ export interface StatusSetResponse {
 /* ---------- 알림 ---------- */
 
 /** 알림 종류 — 내역 필터의 단위. '댓글' 필터는 comment|reply를 함께 잡는다. */
-export const NOTIF_KINDS = ['start', 'comment', 'reply', 'mention', 'react', 'system'] as const;
+export const NOTIF_KINDS = ['start', 'comment', 'reply', 'mention', 'react', 'write', 'system'] as const;
 export type NotifKind = (typeof NOTIF_KINDS)[number];
 
 /** 알림이 온 이유 — 내역 행의 배지 키. 문구·색 매핑은 클라이언트의 몫이다. */
@@ -540,7 +540,9 @@ export const NOTIF_WHYS = [
   'react_daily', // 응원 반응 — 하루 요약 집계
   'daily', // 공부 시작 — 하루 1회
   'live', // 공부 시작 — 실시간
-  'quiet', // 방해 금지 시간 다이제스트
+  'quiet', // 방해 금지 시간 다이제스트 (기능은 걷어냈고 옛 행 표시용으로만 남는다)
+  'entry', // 크루가 새 기록을 남겼을 때 (kind=write)
+  'post', // 크루가 라운지에 새 글을 올렸을 때 (kind=write)
 ] as const;
 export type NotifWhy = (typeof NOTIF_WHYS)[number];
 
@@ -575,6 +577,7 @@ export interface NotifPrefs {
   cmMine: boolean; // 내 기록에 달린 댓글
   cmReply: boolean; // 내 댓글에 달린 답글
   cmAll: boolean; // 크루 기록의 모든 댓글
+  newWrites: boolean; // 크루의 새 글(기록·라운지 게시글)
   reactMode: NotifMode; // 응원 반응
   quietEnabled: boolean; // 방해 금지 시간
   quietFrom: string; // 'HH:00' — 매시 정각만 (다이제스트가 시간 단위 cron이라)
@@ -589,6 +592,7 @@ export const DEFAULT_NOTIF_PREFS: Omit<NotifPrefs, 'm' | 'updatedAt'> = {
   cmMine: true,
   cmReply: true,
   cmAll: false,
+  newWrites: true,
   reactMode: 'daily',
   quietEnabled: true,
   quietFrom: '22:00',

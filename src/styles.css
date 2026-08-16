@@ -1360,23 +1360,9 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 .nset-mode-title { font-size: 15px; font-weight: 800; }
 .nset-badge { font-size: 10px; font-weight: 800; color: #B37F00; background: #FFF0BF; border-radius: 999px; padding: 2px 7px; }
 .nset-mode-desc { display: block; font-size: 12.5px; color: #6B7280; line-height: 1.55; margin-top: 3px; }
-.nset-crew-list { display: flex; flex-direction: column; gap: 10px; padding-top: 10px; }
-.nset-crew-head { display: flex; align-items: center; gap: 11px; }
-.nset-crew-main { flex: 1; min-width: 0; }
-.nset-crew-name { display: block; font-size: 14px; font-weight: 700; }
-.nset-crew-hint { display: block; font-size: 11.5px; color: #9AA1AD; margin-top: 1px; }
-.nseg { display: flex; gap: 3px; background: #F1F3F6; border-radius: 11px; padding: 3px; margin-top: 11px; }
-.nseg-btn {
-  display: flex; align-items: center; justify-content: center; flex: 1; height: 38px;
-  border: none; cursor: pointer; border-radius: 9px; font-size: 12.5px; font-weight: 600;
-  background: transparent; color: #6B7280;
-  transition: background 140ms, color 140ms;
-}
-.nseg-btn.on { background: #FFFFFF; color: #16181D; font-weight: 800; box-shadow: 0 1px 2px rgba(22, 24, 29, 0.14); }
 .nset-cm { margin-top: 10px; padding: 2px 15px; }
 .nset-cm-row { display: flex; align-items: center; gap: 12px; padding: 14px 0; }
 .nset-cm-row + .nset-cm-row { border-top: 1px solid #F5F6F8; }
-.nset-cm-row.col { display: block; }
 .nset-cm-main { flex: 1; min-width: 0; display: block; }
 .nset-cm-title { display: flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 700; }
 .nset-locked svg { color: #9AA1AD; }
@@ -1396,17 +1382,6 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
   transition: transform 180ms;
 }
 .nswitch.on .nswitch-knob { transform: translateX(20px); }
-.nset-quiet-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.nset-quiet-times { display: flex; align-items: center; gap: 8px; margin-top: 14px; transition: opacity 140ms; }
-.nset-time {
-  flex: 1; height: 44px; cursor: pointer; border: 1px solid #E4E7EC; border-radius: 12px;
-  background: #FFFFFF; font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums;
-  color: #16181D; transition: border-color 120ms, background 120ms;
-}
-.nset-time:hover:enabled { border-color: #CDD2DB; background: #F8F9FB; }
-.nset-time:disabled { cursor: default; }
-.nset-time-word { font-size: 12.5px; color: #9AA1AD; flex: none; }
-.nset-quiet-note { font-size: 12px; color: #9AA1AD; line-height: 1.6; margin-top: 12px; }
 /* ---------- 로그인(이름 선택) 화면 ---------- */
 .login-screen {
   min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center;

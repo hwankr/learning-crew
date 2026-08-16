@@ -42,6 +42,12 @@ export function revealEntries(filter: FeedFilter): FeedFilter {
   return filter === 'posts' ? 'all' : filter;
 }
 
+/** 라운지 글로 향하는 동작(새 글 알림 열기) 뒤의 필터 — revealEntries의 거울.
+    기록만 보기였다면 전체로 풀어 준다. 안 풀면 알림이 가리킨 라운지 글이 화면에 없다. */
+export function revealPosts(filter: FeedFilter): FeedFilter {
+  return filter === 'entries' ? 'all' : filter;
+}
+
 export interface UiState {
   view: DesktopView;
   mtab: MobileTab;

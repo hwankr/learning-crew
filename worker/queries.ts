@@ -1163,15 +1163,29 @@ export async function insertNotificationDedup(
   db: Db,
   row: NewNotification,
 ): Promise<Notification | null> {
+  const returned = await insertNotificationsDedup(db, [row]);
+  return returned[0] ?? null;
+}
+
+/** 위와 같은 dedup 삽입의 배치판 — 새 글 팬아웃(항목 × 수신자)이 쓴다.
+    한 문장이라 원자적이다: waitUntil이 도중에 끊겨도 "일부 수신자만 행이 생긴" 상태가
+    남지 않고, 다음 재전송 판정이 없어도 행 유실이 생기지 않는다.
+    돌려주는 것은 실제로 삽입된 행뿐(충돌 행은 빠진다) — 푸시는 그 행들에만 나간다.
+    aggKey를 함께 돌려주는 이유: 호출부가 어느 원본 항목의 행인지 되찾는 유일한 열쇠다
+    (Notification 공용 타입에는 aggKey가 없다 — 클라이언트가 볼 일이 없는 서버 내부 키라서). */
+export async function insertNotificationsDedup(
+  db: Db,
+  rows: NewNotification[],
+): Promise<(Notification & { aggKey: string | null })[]> {
+  if (rows.length === 0) return [];
   const returned = await db
     .insert(notifications)
-    .values(toNotifInsert(row))
+    .values(rows.map(toNotifInsert))
     .onConflictDoNothing({
       target: [notifications.memberId, notifications.day, notifications.aggKey],
     })
     .returning();
-  const r = returned[0];
-  return r ? toNotification(r) : null;
+  return returned.map((r) => ({ ...toNotification(r), aggKey: r.aggKey }));
 }
 
 /** 응원 하루 요약 집계 — (수신자, 날짜)당 1행에 count를 누적하고 참여자를 합친다.
@@ -1242,15 +1256,6 @@ export async function markNotificationsRead(
   return reads.map((r) => r.id);
 }
 
-/** 발송 도장 — 다이제스트가 같은 행을 다시 쓸어 담지 않게 한다. */
-export async function markNotificationsPushed(db: Db, ids: string[]): Promise<void> {
-  if (ids.length === 0) return;
-  await db
-    .update(notifications)
-    .set({ pushedAt: sql`now()` })
-    .where(inArray(notifications.id, ids));
-}
-
 /** 발송 소유권 선점 — pushed_at이 null인 행만 조건부로 도장 찍고, 실제로 찍힌 id를 돌려준다.
     cron 두 인스턴스가 겹쳐 돌아도 같은 행을 두 번 푸시하지 않는다(찍은 쪽만 보낸다).
     선점 후 발송 전에 죽으면 그 푸시는 유실된다 — 이 앱의 푸시는 어디서나 best-effort고
@@ -1265,32 +1270,9 @@ export async function claimNotificationsPushed(db: Db, ids: string[]): Promise<S
   return new Set(rows.map((r) => r.id));
 }
 
-/** 방해 금지 창 동안 쌓인 미발송·미확인 알림 — 다이제스트 재료.
-    이미 앱에서 읽었으면 뺀다(모아서 알려 줄 이유가 없다). */
-export async function unpushedQuietRows(
-  db: Db,
-  me: MemberId,
-  sinceIso: string,
-): Promise<Notification[]> {
-  const rows = await db
-    .select()
-    .from(notifications)
-    .where(
-      and(
-        eq(notifications.memberId, me),
-        isNull(notifications.pushedAt),
-        isNull(notifications.readAt),
-        ne(notifications.kind, 'system'),
-        sql`${notifications.createdAt} >= ${sinceIso}::timestamptz`,
-      ),
-    )
-    .orderBy(notifications.createdAt);
-  return rows.map(toNotification);
-}
-
 /** 발송 대기 중인 응원 하루 요약 행 전부 — 저녁 요약 푸시 대상.
-    날짜로 거르지 않는다: 20시 이후에 생기거나 방해 금지에 걸려 보류된 행은 "오늘" 필터로는
-    영영 잡히지 않는다 — 다음 20시에 밀린 요약까지 내보내는 것이 유실보다 낫다.
+    날짜로 거르지 않는다: 20시 이후에 생긴 행은 "오늘" 필터로는 영영 잡히지 않는다 —
+    다음 20시에 밀린 요약까지 내보내는 것이 유실보다 낫다.
     앱에서 이미 읽었으면 뺀다(요약해 줄 이유가 없다). */
 export async function unpushedReactDailyAll(
   db: Db,
@@ -1487,6 +1469,7 @@ function toNotifPrefs(r: typeof notifPrefs.$inferSelect): NotifPrefs {
     cmMine: r.cmMine,
     cmReply: r.cmReply,
     cmAll: r.cmAll,
+    newWrites: r.newWrites,
     reactMode: asMode(r.reactMode) ?? DEFAULT_NOTIF_PREFS.reactMode,
     quietEnabled: r.quietEnabled,
     quietFrom: r.quietFrom,
@@ -1526,6 +1509,7 @@ export async function putNotifPrefs(
     cmMine: p.cmMine,
     cmReply: p.cmReply,
     cmAll: p.cmAll,
+    newWrites: p.newWrites,
     reactMode: p.reactMode,
     quietEnabled: p.quietEnabled,
     quietFrom: p.quietFrom,

@@ -19,12 +19,15 @@ export const WHY_BADGE: Record<NotifWhy, { label: string; bg: string; fg: string
   daily: { label: '시작 · 하루 1회', bg: '#F1F3F6', fg: '#4E555F' },
   live: { label: '시작 · 실시간', bg: '#F1F3F6', fg: '#4E555F' },
   quiet: { label: '방해 금지 시간', bg: '#F1F3F6', fg: '#4E555F' },
+  entry: { label: '새 기록', bg: '#F0EAFD', fg: '#6941C6' },
+  post: { label: '라운지 글', bg: '#F0EAFD', fg: '#6941C6' },
 };
 
 const FILTERS = [
   { id: 'all', label: '전체' },
   { id: 'unread', label: '안 읽음' },
   { id: 'start', label: '공부 시작' },
+  { id: 'write', label: '새 글' },
   { id: 'comment', label: '댓글' },
   { id: 'mention', label: '멘션' },
   { id: 'react', label: '반응' },
@@ -52,6 +55,9 @@ export function restOf(n: Notification): string {
   }
   if (n.kind === 'start') {
     return n.why === 'daily' ? '님이 오늘 첫 공부를 시작했어요' : '님이 공부를 시작했어요';
+  }
+  if (n.kind === 'write') {
+    return n.why === 'post' ? '님이 라운지에 글을 올렸어요' : '님이 새 기록을 남겼어요';
   }
   // react
   if (n.why === 'react_daily') {
@@ -132,6 +138,12 @@ export function groupDayRows(items: Notification[], dayId: string): NotiRow[] {
 /** 행 하나를 읽음 처리 — 접힌 줄은 안에 든 알림 전부가 대상이다. */
 export function readRow(row: NotiRow, onRead: (id: string) => void): void {
   for (const x of row.group) if (x.readAt === null) onRead(x.id);
+}
+
+/** 알림을 눌렀을 때 데려갈 곳 — 라운지 새 글 알림만 라운지 글을 가리키고, 나머지는 전부
+    기록이다. 피드 필터를 어느 쪽으로 풀어 줄지(revealPosts/revealEntries)가 이걸 따른다. */
+export function feedTargetOf(n: Notification): 'entry' | 'post' {
+  return n.kind === 'write' && n.why === 'post' ? 'post' : 'entry';
 }
 
 /** 행 앞에 세울 사람 — 하루 요약은 actor 대신 actors에 참여자를 담아 오므로 첫 사람을 쓴다.

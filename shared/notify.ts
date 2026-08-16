@@ -63,41 +63,15 @@ export function resolveCommentRecipients(
 
 /* ---------- 공부 시작 모드 ---------- */
 
-/** 수신자 r이 행위자 actor의 시작 알림을 어떤 모드로 받는가 — 크루별 오버라이드 우선. */
-export function resolvedStartMode(p: NotifPrefs, actor: MemberId): NotifMode {
-  return p.perMember[actor] ?? p.startMode;
+/** 수신자의 시작 알림 모드 — 크루 구분 없이 하나다. 크루별 오버라이드 UI는 걷어냈고,
+    서버 행에 남아 있을 수 있는 옛 perMember 값도 여기서 무시한다: 설정 화면에 보이지 않는
+    값이 알림을 좌우하면 화면이 거짓말이 된다(perMember 열 자체는 하위 호환으로 남긴다). */
+export function resolvedStartMode(p: NotifPrefs): NotifMode {
+  return p.startMode;
 }
 
-/* ---------- 방해 금지 시간 ---------- */
-
-/** 'HH:MM' → 하루 안의 분(0..1439). 형식이 깨졌으면 null. */
-export function parseHM(s: string): number | null {
-  const m = /^(\d{2}):(\d{2})$/.exec(s);
-  if (!m) return null;
-  const h = Number(m[1]);
-  const min = Number(m[2]);
-  return h < 24 && min < 60 ? h * 60 + min : null;
-}
-
-/** 지금(그 지역 기준 분)이 방해 금지 창 안인가 — 자정을 넘는 창(22:00→07:00)도 처리한다.
-    from == to는 창이 비었다고 본다(항상 false). */
-export function inQuietHours(p: NotifPrefs, minutesOfDay: number): boolean {
-  if (!p.quietEnabled) return false;
-  const from = parseHM(p.quietFrom);
-  const to = parseHM(p.quietTo);
-  if (from === null || to === null || from === to) return false;
-  return from < to
-    ? minutesOfDay >= from && minutesOfDay < to
-    : minutesOfDay >= from || minutesOfDay < to;
-}
-
-/** 방해 금지 창의 길이(분) — 다이제스트가 "창이 시작된 이후" 행만 쓸어 담는 데 쓴다. */
-export function quietSpanMinutes(p: NotifPrefs): number {
-  const from = parseHM(p.quietFrom);
-  const to = parseHM(p.quietTo);
-  if (from === null || to === null) return 0;
-  return (24 * 60 + to - from) % (24 * 60);
-}
+/* 방해 금지 시간은 기능째 걷어냈다 — 푸시는 늘 바로 나간다. NotifPrefs의 quiet* 필드와
+   저장 열은 하위 호환으로만 남아 있고 어디서도 읽지 않는다. */
 
 /* ---------- KST 시각 ----------
    크루가 전원 한국이라 서버의 "그 날"·"그 시각" 판정은 KST 고정이다.
@@ -115,7 +89,7 @@ export function kstDayStr(ms: number): string {
   return kstDate(ms).toISOString().slice(0, 10);
 }
 
-/** KST 기준 하루 안의 분(0..1439) — 방해 금지 판정용. */
+/** KST 기준 하루 안의 분(0..1439). */
 export function kstMinutes(ms: number): number {
   const d = kstDate(ms);
   return d.getUTCHours() * 60 + d.getUTCMinutes();

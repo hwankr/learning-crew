@@ -32,8 +32,9 @@ import {
   rearmPhotoTombstone,
 } from './queries';
 import { NOTIFY_COOLDOWN_MS, shouldNotify } from './push';
-import { notifyCommentEvents, notifyStart, runHourly } from './notify';
+import { notifyCommentEvents, notifyNewWrites, notifyStart, runHourly } from './notify';
 import {
+  DEFAULT_NOTIF_PREFS,
   MEMBER_IDS,
   NOTIF_MODES,
   PLACES,
@@ -489,6 +490,16 @@ app.post('/api/sync/push', async (c) => {
       notifyCommentEvents(db, c.env, me, newComments, reactionDeltas, now),
     );
   }
+  /* 새 글 알림 — "작성"만 알린다.
+     기록: CAS 첫 반영이 v=1이다(신규 행은 base+1 = 1). 편집은 v≥2, 재전송은 conflicts로
+     빠지고, 만들자마자 지운 행은 deletedAt으로 거른다. 구버전(LWW) 경로는 신규·편집을
+     구별할 수 없어 알리지 않는다 — 이 기능이 실린 번들은 전부 CAS로 보낸다.
+     라운지 글: 불변 규약이라 applied 자체가 "첫 삽입 아니면 tombstone 갱신"뿐이다. */
+  const newEntries = outcome.applied.filter((e) => e.v === 1 && e.deletedAt === null);
+  const newPosts = pOut.applied.filter((p) => p.deletedAt === null);
+  if (newEntries.length || newPosts.length) {
+    c.executionCtx.waitUntil(notifyNewWrites(db, c.env, me, newEntries, newPosts, now));
+  }
   const res: PushResponse = {
     ok: true,
     serverTime: new Date().toISOString(),
@@ -709,6 +720,8 @@ function invalidPrefsReason(x: Omit<NotifPrefs, 'm' | 'updatedAt'>): string | nu
   for (const k of ['cmMine', 'cmReply', 'cmAll', 'quietEnabled'] as const) {
     if (typeof x[k] !== 'boolean') return `bad ${k}`;
   }
+  // 배포 이행기의 옛 번들은 이 키 없이 PUT한다 — 없으면 기본값(켬)으로 받고, 있으면 boolean만
+  if (x.newWrites !== undefined && typeof x.newWrites !== 'boolean') return 'bad newWrites';
   if (typeof x.quietFrom !== 'string' || !HOUR_RE.test(x.quietFrom)) return 'bad quietFrom';
   if (typeof x.quietTo !== 'string' || !HOUR_RE.test(x.quietTo)) return 'bad quietTo';
   if (x.perMember === null || typeof x.perMember !== 'object' || Array.isArray(x.perMember)) {
@@ -740,6 +753,7 @@ app.put('/api/notify/prefs', async (c) => {
     cmMine: body.cmMine,
     cmReply: body.cmReply,
     cmAll: body.cmAll,
+    newWrites: body.newWrites ?? DEFAULT_NOTIF_PREFS.newWrites,
     reactMode: body.reactMode,
     quietEnabled: body.quietEnabled,
     quietFrom: body.quietFrom,
