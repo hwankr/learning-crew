@@ -838,6 +838,7 @@ function toMemberStatus(r: typeof status.$inferSelect): MemberStatus {
     on: r.on,
     place: r.place as Place | null,
     since: r.since === null ? null : isoTs(r.since),
+    lastStartedAt: r.lastStartedAt === null ? null : isoTs(r.lastStartedAt),
     updatedAt: isoTs(r.updatedAt),
   };
 }
@@ -848,26 +849,44 @@ function toMemberStatus(r: typeof status.$inferSelect): MemberStatus {
 export async function setStatus(
   db: Db,
   me: MemberId,
-  s: { on: boolean; place: Place | null; since: string | null; at: string },
+  s: {
+    on: boolean;
+    place: Place | null;
+    since: string | null;
+    lastStartedAt: string | null;
+    at: string;
+  },
 ): Promise<{ status: MemberStatus; applied: boolean }> {
   const [row] = await db
     .insert(status)
-    .values({ memberId: me, on: s.on, place: s.place, since: s.since, updatedAt: s.at })
+    .values({
+      memberId: me,
+      on: s.on,
+      place: s.place,
+      since: s.since,
+      lastStartedAt: s.lastStartedAt,
+      updatedAt: s.at,
+    })
     .onConflictDoUpdate({
       target: status.memberId,
       set: {
-        on: sql`excluded.is_on`,
-        place: sql`excluded.place`,
-        since: sql`excluded.since`,
-        updatedAt: sql`excluded.updated_at`,
+        on: sql`case when excluded.updated_at >= ${status.updatedAt} then excluded.is_on else ${status.on} end`,
+        place: sql`case when excluded.updated_at >= ${status.updatedAt} then excluded.place else ${status.place} end`,
+        since: sql`case when excluded.updated_at >= ${status.updatedAt} then excluded.since else ${status.since} end`,
+        updatedAt: sql`case when excluded.updated_at >= ${status.updatedAt} then excluded.updated_at else ${status.updatedAt} end`,
+        lastStartedAt: sql`
+          case
+            when excluded.last_started_at is null then ${status.lastStartedAt}
+            when ${status.lastStartedAt} is null then excluded.last_started_at
+            when excluded.last_started_at > ${status.lastStartedAt} then excluded.last_started_at
+            else ${status.lastStartedAt}
+          end
+        `,
       },
-      // 같은 시각(재전송)은 멱등하게 허용, 더 오래된 액션만 거부한다
-      setWhere: sql`excluded.updated_at >= ${status.updatedAt}`,
     })
     .returning();
-  if (row) return { status: toMemberStatus(row), applied: true };
-  const [cur] = await db.select().from(status).where(eq(status.memberId, me)).limit(1);
-  return { status: toMemberStatus(cur!), applied: false };
+  const saved = toMemberStatus(row!);
+  return { status: saved, applied: saved.updatedAt === isoTs(s.at) };
 }
 
 export async function allStatuses(db: Db): Promise<MemberStatus[]> {

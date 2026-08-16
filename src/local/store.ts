@@ -35,11 +35,14 @@ import {
   canonicalUuid,
   entryTags,
   isOffTags,
+  mergeMemberStatus,
   normalizeCustomTagList,
   normalizeEmojis,
+  normalizeMemberStatus,
   normalizePhotos,
   primaryTag,
   PUSH_LIMITS,
+  sameStatusActionIdentity,
   UUID_RE,
 } from '../../shared/types';
 import {
@@ -157,6 +160,9 @@ export class PhotoStorageUnavailableError extends Error {
 // meta 스토어의 지금 상태 저장 키
 const MY_STATUS_KEY = 'myStatus';
 const STATUS_DIRTY_KEY = 'statusDirty';
+/** 마지막 status ACK가 정산한 원래 로컬 액션 시각. 서버가 빠른 클라이언트 시각을
+    낮춰 저장해도, 다른 탭이 같은 pending 액션의 ACK인지 판별할 수 있게 한다. */
+const STATUS_ACK_SENT_UPDATED_AT_KEY = 'statusAckSentUpdatedAt';
 /** 지금 상태와 달리 태그 캐시는 멤버를 바꿔 로그인해도 각자 남아야 한다. */
 const tagPrefsKey = (m: MemberId): string => `tagPrefs:${m}`;
 const tagPrefsDirtyKey = (m: MemberId): string => `tagPrefsDirty:${m}`;
@@ -545,7 +551,25 @@ function asReactionCursor(v: unknown): ReactionCursor | null {
 }
 /** meta의 지금 상태 — 리액션 커서도 m을 가지므로 on으로 가려야 한다. */
 function asMemberStatus(v: unknown): MemberStatus | null {
-  return v !== null && typeof v === 'object' && 'on' in v ? (v as MemberStatus) : null;
+  return normalizeMemberStatus(v);
+}
+
+function sameMemberStatus(a: MemberStatus, b: MemberStatus): boolean {
+  return (
+    a.m === b.m &&
+    a.on === b.on &&
+    a.place === b.place &&
+    a.since === b.since &&
+    a.lastStartedAt === b.lastStartedAt &&
+    a.updatedAt === b.updatedAt
+  );
+}
+
+interface MyStatusPullWrite {
+  proposed: MemberStatus;
+  dirty: boolean;
+  memoryWasDirty: boolean;
+  expectedMemory: MemberStatus | null;
 }
 
 /** IDB·HTTP 경계의 태그 설정 복원. 목록은 공용 정규화를 다시 거치고,
@@ -1002,7 +1026,7 @@ export class CrewStore implements PhotoUploadStorage {
     const tx = db.transaction(['photoBlobs'], 'readwrite');
     await tx.objectStore('photoBlobs').put(row, photoId);
     await tx.done;
-    this.bc?.postMessage('changed');
+    this.broadcastChanged();
   }
 
   /** 사진 소유 행 — Entry 또는 라운지 글(Post). PhotoBlobRecord.entryId는 이 둘 중 하나의
@@ -1530,13 +1554,18 @@ export class CrewStore implements PhotoUploadStorage {
 
   /** 지금 상태 토글 — 켜면 since가 지금으로 시작한다(장소 변경도 새로 시작). */
   setMyStatus(on: boolean, place: Place | null): void {
-    const nowIso = new Date().toISOString();
+    const previous = this.statuses.get(this.me);
+    const previousUpdatedAt = Date.parse(previous?.updatedAt ?? '');
+    const actionAt = Math.max(Date.now(), Number.isFinite(previousUpdatedAt) ? previousUpdatedAt + 1 : 0);
+    const actionIso = new Date(actionAt).toISOString();
+    const lastStartedAt = on ? actionIso : (previous?.lastStartedAt ?? null);
     const st: MemberStatus = {
       m: this.me,
       on,
       place: on ? place : null,
-      since: on ? nowIso : null,
-      updatedAt: nowIso, // 액션 시각 — 서버가 이 시각 기준 LWW로 판정한다
+      since: on ? actionIso : null,
+      lastStartedAt,
+      updatedAt: actionIso, // 액션 시각 — 서버가 이 시각 기준 LWW로 판정한다
     };
     this.statuses.set(this.me, st);
     if (!this.demo) {
@@ -1545,6 +1574,7 @@ export class CrewStore implements PhotoUploadStorage {
       this.txWrite(['meta'], (tx) => {
         void tx.objectStore('meta').put(st, MY_STATUS_KEY);
         void tx.objectStore('meta').put(true, STATUS_DIRTY_KEY);
+        void tx.objectStore('meta').delete(STATUS_ACK_SENT_UPDATED_AT_KEY);
       });
       this.onLocalWrite?.();
     }
@@ -1782,17 +1812,60 @@ export class CrewStore implements PhotoUploadStorage {
         puts.push(row);
       }
     }
-    let myStatus: MemberStatus | null = null;
+    let myStatusWrite: MyStatusPullWrite | null = null;
     if (statuses) {
-      for (const r of statuses) {
-        if (r.m === this.me && this.statusDirty) continue; // 아직 push 안 된 내 상태가 이긴다
+      for (const raw of statuses) {
+        const r = normalizeMemberStatus(raw);
+        if (!r) continue;
         const cur = this.statuses.get(r.m);
-        if (cur && cur.updatedAt === r.updatedAt) continue;
-        // 느린 pull 응답(오래된 스냅샷)이 그 사이 채택된 더 새 상태를 되돌리지 못하게 —
-        // 서버 타임스탬프는 전부 ISO라 사전순 비교가 곧 시간 비교다
-        if (cur && r.updatedAt < cur.updatedAt) continue;
-        this.statuses.set(r.m, r);
-        if (r.m === this.me) myStatus = r;
+        const memoryWasDirty = r.m === this.me && this.statusDirty;
+        const expectedMemory = r.m === this.me ? (cur ?? null) : null;
+        const merged = mergeMemberStatus(cur, r);
+        if (r.m === this.me && cur && this.statusDirty && r.updatedAt <= cur.updatedAt) {
+          const preserved = { ...cur, lastStartedAt: merged.lastStartedAt };
+          if (!sameMemberStatus(cur, preserved)) {
+            this.statuses.set(r.m, preserved);
+            myStatusWrite = {
+              proposed: preserved,
+              dirty: true,
+              memoryWasDirty,
+              expectedMemory,
+            };
+            changed = true;
+          }
+          continue;
+        }
+        if (cur && sameMemberStatus(cur, merged)) {
+          if (r.m === this.me && this.statusDirty && r.updatedAt > cur.updatedAt) {
+            this.statusDirty = false;
+            myStatusWrite = {
+              proposed: merged,
+              dirty: false,
+              memoryWasDirty,
+              expectedMemory,
+            };
+            changed = true;
+          }
+          continue;
+        }
+        this.statuses.set(r.m, merged);
+        if (r.m === this.me) {
+          let dirtyWrite: boolean | null = null;
+          if (!cur || r.updatedAt >= cur.updatedAt) {
+            this.statusDirty = false;
+            dirtyWrite = false;
+          } else if (this.statusDirty) {
+            dirtyWrite = true;
+          }
+          if (dirtyWrite !== null) {
+            myStatusWrite = {
+              proposed: merged,
+              dirty: dirtyWrite,
+              memoryWasDirty,
+              expectedMemory,
+            };
+          }
+        }
         changed = true;
       }
     }
@@ -1915,7 +1988,7 @@ export class CrewStore implements PhotoUploadStorage {
     const notify =
       puts.length > 0 ||
       dels.length > 0 ||
-      myStatus !== null ||
+      myStatusWrite !== null ||
       cPuts.length > 0 ||
       cDels.length > 0 ||
       rPuts.length > 0 ||
@@ -2044,7 +2117,73 @@ export class CrewStore implements PhotoUploadStorage {
           }
         }
         const meta = tx.objectStore('meta');
-        if (myStatus) void meta.put(myStatus, MY_STATUS_KEY);
+        if (myStatusWrite) {
+          const [persistedRaw, dirtyRaw] = await Promise.all([
+            meta.get(MY_STATUS_KEY),
+            meta.get(STATUS_DIRTY_KEY),
+          ]);
+          const persisted = asMemberStatus(persistedRaw);
+          const persistedMine = persisted && persisted.m === this.me ? persisted : null;
+          const persistedDirty = dirtyRaw === true;
+          const writeClean = (row: MemberStatus): void => {
+            void meta.put(row, MY_STATUS_KEY);
+            void meta.delete(STATUS_DIRTY_KEY);
+          };
+          const writeDirty = (row: MemberStatus): void => {
+            void meta.put(row, MY_STATUS_KEY);
+            void meta.put(true, STATUS_DIRTY_KEY);
+          };
+
+          if (myStatusWrite.memoryWasDirty) {
+            const expected = myStatusWrite.expectedMemory;
+            if (
+              expected &&
+              persistedMine &&
+              persistedDirty &&
+              sameStatusActionIdentity(persistedMine, expected)
+            ) {
+              const guarded = mergeMemberStatus(persistedMine, myStatusWrite.proposed);
+              if (myStatusWrite.dirty) writeDirty(guarded);
+              else writeClean(guarded);
+              if (!sameMemberStatus(guarded, myStatusWrite.proposed)) this.scheduleRefresh();
+            } else {
+              if (
+                expected &&
+                persistedMine &&
+                persistedDirty &&
+                persistedMine.updatedAt === expected.updatedAt &&
+                !sameStatusActionIdentity(persistedMine, expected)
+              ) {
+                const current = this.statuses.get(this.me);
+                if (current && sameStatusActionIdentity(current, myStatusWrite.proposed)) {
+                  const history = mergeMemberStatus(current, persistedMine).lastStartedAt;
+                  const repaired = persistedMine.lastStartedAt === history
+                    ? persistedMine
+                    : { ...persistedMine, lastStartedAt: history };
+                  this.statuses.set(this.me, repaired);
+                  this.statusDirty = true;
+                  this.bump();
+                }
+              }
+              this.scheduleRefresh();
+            }
+          } else if (persistedDirty) {
+            this.scheduleRefresh();
+          } else {
+            const guarded = persistedMine
+              ? mergeMemberStatus(persistedMine, myStatusWrite.proposed)
+              : myStatusWrite.proposed;
+            writeClean(guarded);
+            if (
+              (myStatusWrite.expectedMemory &&
+                persistedMine &&
+                !sameMemberStatus(persistedMine, myStatusWrite.expectedMemory)) ||
+              !sameMemberStatus(guarded, myStatusWrite.proposed)
+            ) {
+              this.scheduleRefresh();
+            }
+          }
+        }
         if (cursor) void meta.put(cursor, ENTRY_CURSOR_KEY);
         // 커서는 응답 객체를 글자 그대로 저장한다 — 행의 updatedAt으로 재구성하면
         // Postgres 마이크로초가 밀리초로 잘려 같은 행을 영원히 다시 싣는다
@@ -2473,15 +2612,72 @@ export class CrewStore implements PhotoUploadStorage {
   }
 
   /** 상태 push 완료(반영 또는 다른 기기 승리) — 전송 중 또 토글했으면 dirty를 유지해 재전송. */
-  ackStatus(sentUpdatedAt: string, server: MemberStatus): void {
-    if (this.statuses.get(this.me)?.updatedAt !== sentUpdatedAt) return;
+  async ackStatus(sentUpdatedAt: string, raw: MemberStatus): Promise<void> {
+    const cur = this.statuses.get(this.me);
+    if (cur?.updatedAt !== sentUpdatedAt) return;
+    const server = normalizeMemberStatus(raw);
+    if (!server || server.m !== this.me) return;
+    const db = this.db;
+    if (db) {
+      let settled: MemberStatus | null = null;
+      let changedDB = false;
+      try {
+        const tx = db.transaction('meta', 'readwrite');
+        const meta = tx.objectStore('meta');
+        const [persistedRaw, dirtyRaw] = await Promise.all([
+          meta.get(MY_STATUS_KEY),
+          meta.get(STATUS_DIRTY_KEY),
+        ]);
+        const persisted = asMemberStatus(persistedRaw);
+        if (
+          persisted &&
+          persisted.m === this.me &&
+          dirtyRaw === true &&
+          sameStatusActionIdentity(persisted, cur)
+        ) {
+          settled = this.settledStatusAck(sentUpdatedAt, cur, server, persisted);
+          void meta.put(settled, MY_STATUS_KEY);
+          void meta.delete(STATUS_DIRTY_KEY);
+          void meta.put(sentUpdatedAt, STATUS_ACK_SENT_UPDATED_AT_KEY);
+          changedDB = true;
+        }
+        await tx.done;
+      } catch {
+        // IDB 정산이 실패하면 이 탭 메모리만 clean 처리하지 않는다. 다음 sync가 중복 전송하더라도
+        // 공유 DB의 새 pending을 지우는 것보다 로컬 의도를 보존하는 편이 안전하다.
+        return;
+      }
+      if (!changedDB) {
+        this.scheduleRefresh();
+        return;
+      }
+      this.broadcastChanged();
+      if (!settled) return;
+      const after = this.statuses.get(this.me);
+      if (after?.updatedAt !== sentUpdatedAt) return;
+      this.statusDirty = false;
+      this.statuses.set(this.me, settled);
+      this.bump();
+      return;
+    }
+
+    const settled = this.settledStatusAck(sentUpdatedAt, cur, server);
+    const after = this.statuses.get(this.me);
+    if (after?.updatedAt !== sentUpdatedAt) return;
     this.statusDirty = false;
-    this.statuses.set(server.m, server);
-    this.txWrite(['meta'], (tx) => {
-      void tx.objectStore('meta').delete(STATUS_DIRTY_KEY);
-      void tx.objectStore('meta').put(server, MY_STATUS_KEY);
-    });
+    this.statuses.set(this.me, settled);
     this.bump();
+  }
+
+  private settledStatusAck(
+    sentUpdatedAt: string,
+    cur: MemberStatus,
+    server: MemberStatus,
+    persisted?: MemberStatus,
+  ): MemberStatus {
+    if (server.updatedAt < sentUpdatedAt) return server;
+    const local = persisted ? mergeMemberStatus(cur, persisted) : cur;
+    return mergeMemberStatus(local, server);
   }
 
   /** SyncClient가 사이클 결과를 알려 준다 — 값이 바뀔 때만 스냅샷을 갱신한다. */
@@ -2604,7 +2800,7 @@ export class CrewStore implements PhotoUploadStorage {
       void Promise.resolve(fill(tx)).catch(() => {});
       tx.done.then(
         () => {
-          if (notify) this.bc?.postMessage('changed');
+          if (notify) this.broadcastChanged();
         },
         () => {},
       );
@@ -2612,6 +2808,15 @@ export class CrewStore implements PhotoUploadStorage {
     } catch {
       // 닫힌 DB 등 — 메모리 상태는 유효하므로 무시
       return false;
+    }
+  }
+
+  private broadcastChanged(): void {
+    try {
+      this.bc?.postMessage('changed');
+    } catch {
+      // BroadcastChannel can be closed between commit and notification. The IDB
+      // transaction is already settled, so notification failure must not poison callers.
     }
   }
 
@@ -2667,6 +2872,7 @@ export class CrewStore implements PhotoUploadStorage {
         dbPhotoRows,
         dbSt,
         dbDirty,
+        dbStatusAckSentUpdatedAt,
         dbTagPrefs,
         dbTagPrefsDirty,
       ] = await Promise.all([
@@ -2688,6 +2894,7 @@ export class CrewStore implements PhotoUploadStorage {
         tx.objectStore('photoBlobs').getAll(),
         tx.objectStore('meta').get(MY_STATUS_KEY),
         tx.objectStore('meta').get(STATUS_DIRTY_KEY),
+        tx.objectStore('meta').get(STATUS_ACK_SENT_UPDATED_AT_KEY),
         tx.objectStore('meta').get(tagPrefsKey(this.me)),
         tx.objectStore('meta').get(tagPrefsDirtyKey(this.me)),
       ]);
@@ -2762,13 +2969,45 @@ export class CrewStore implements PhotoUploadStorage {
       const dbMine = asMemberStatus(dbSt);
       if (dbMine && dbMine.m === this.me) {
         const mem = this.statuses.get(this.me);
-        if (!mem || dbMine.updatedAt > mem.updatedAt) {
-          this.statuses.set(this.me, dbMine);
-          this.statusDirty = !!dbDirty;
-          changed = true;
-        } else if (dbMine.updatedAt === mem.updatedAt && this.statusDirty && !dbDirty) {
-          this.statusDirty = false;
-          changed = true;
+        const dbDirtyBool = !!dbDirty;
+        const ackSentUpdatedAt =
+          typeof dbStatusAckSentUpdatedAt === 'string' ? dbStatusAckSentUpdatedAt : null;
+        if (mem && this.statusDirty && !dbDirtyBool && dbMine.updatedAt < mem.updatedAt) {
+          if (ackSentUpdatedAt === mem.updatedAt) {
+            if (!sameMemberStatus(mem, dbMine)) {
+              this.statuses.set(this.me, dbMine);
+              changed = true;
+            }
+            this.statusDirty = false;
+            changed = true;
+          } else if (!sameMemberStatus(dbMine, mem)) {
+            this.txWrite(['meta'], (tx2) => {
+              const meta = tx2.objectStore('meta');
+              void meta.put(mem, MY_STATUS_KEY);
+              void meta.put(true, STATUS_DIRTY_KEY);
+            });
+          }
+        } else {
+          const merged = mergeMemberStatus(mem, dbMine);
+          if (!mem || !sameMemberStatus(mem, merged)) {
+            this.statuses.set(this.me, merged);
+            changed = true;
+          }
+          if (mem && dbMine.updatedAt === mem.updatedAt && this.statusDirty !== dbDirtyBool) {
+            this.statusDirty = dbDirtyBool;
+            changed = true;
+          } else if (!mem || dbMine.updatedAt > mem.updatedAt) {
+            const dirty = dbDirtyBool;
+            if (this.statusDirty !== dirty) {
+              this.statusDirty = dirty;
+              changed = true;
+            }
+          }
+          if (!sameMemberStatus(dbMine, merged)) {
+            this.txWrite(['meta'], (tx2) => {
+              void tx2.objectStore('meta').put(merged, MY_STATUS_KEY);
+            });
+          }
         }
       }
 

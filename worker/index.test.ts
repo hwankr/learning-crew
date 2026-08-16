@@ -32,6 +32,20 @@ const mocks = vi.hoisted(() => ({
     applied: true,
     prefs: { m, tags: p.tags, updatedAt: p.at },
   })),
+  getStatusRow: vi.fn(async () => null as {
+    on: boolean;
+    since: string | null;
+    lastNotifiedAt: string | null;
+  } | null),
+  setStatus: vi.fn(async (
+    _db: unknown,
+    m: string,
+    s: { on: boolean; place: string | null; since: string | null; lastStartedAt: string | null; at: string },
+  ) => ({
+    applied: true,
+    status: { m, ...s, updatedAt: s.at },
+  })),
+  claimNotifySlot: vi.fn(async () => false),
   put: vi.fn(),
 }));
 
@@ -43,6 +57,9 @@ vi.mock('./queries', async (importOriginal) => ({
   rearmPhotoTombstone: mocks.rearmPhotoTombstone,
   getTagPrefs: mocks.getTagPrefs,
   putTagPrefs: mocks.putTagPrefs,
+  getStatusRow: mocks.getStatusRow,
+  setStatus: mocks.setStatus,
+  claimNotifySlot: mocks.claimNotifySlot,
   pullSince: mocks.pullSince,
   allStatuses: mocks.allStatuses,
   pullComments: mocks.pullComments,
@@ -53,6 +70,170 @@ vi.mock('./queries', async (importOriginal) => ({
 }));
 
 import worker from './index';
+
+describe('POST /api/sync/status', () => {
+  const secret = 'test-secret';
+  const env = { DATABASE_URL: 'postgres://unused', AUTH_SECRET: secret };
+
+  beforeEach(() => {
+    mocks.getStatusRow.mockReset();
+    mocks.setStatus.mockClear();
+    mocks.claimNotifySlot.mockClear();
+    mocks.getStatusRow.mockResolvedValue(null);
+    mocks.setStatus.mockImplementation(async (_db, m, s) => ({
+      applied: true,
+      status: { m, ...s, updatedAt: s.at },
+    }));
+    mocks.claimNotifySlot.mockResolvedValue(false);
+  });
+
+  it('오래된 since만 있는 legacy ON은 TTL OFF로 강등하되 오늘 lastStartedAt을 만들지 않는다', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime('2026-08-15T12:00:00.000Z');
+    try {
+      const token = await makeToken('sh', secret);
+      const response = await worker.fetch(
+        new Request('https://example.test/api/sync/status', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            on: true,
+            place: '도서관',
+            since: '2026-08-13T11:59:00.000Z',
+          }),
+        }),
+        env as never,
+        { waitUntil: vi.fn() } as unknown as ExecutionContext,
+      );
+
+      expect(response.status).toBe(200);
+      expect(mocks.setStatus).toHaveBeenCalledWith({}, 'sh', {
+        on: false,
+        place: null,
+        since: null,
+        lastStartedAt: '2026-08-13T11:59:00.000Z',
+        at: '2026-08-13T11:59:00.000Z',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('정상 legacy ON은 raw since를 시작 이력으로 보존해 오늘 도장을 만들 수 있다', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime('2026-08-15T12:00:00.000Z');
+    try {
+      mocks.getStatusRow.mockResolvedValue({
+        on: true,
+        since: '2026-08-15T11:55:00.000Z',
+        lastNotifiedAt: null,
+      });
+      const token = await makeToken('sh', secret);
+      const response = await worker.fetch(
+        new Request('https://example.test/api/sync/status', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            on: true,
+            place: '도서관',
+            since: '2026-08-15T11:50:00.000Z',
+          }),
+        }),
+        env as never,
+        { waitUntil: vi.fn() } as unknown as ExecutionContext,
+      );
+
+      expect(response.status).toBe(200);
+      expect(mocks.setStatus).toHaveBeenCalledWith({}, 'sh', {
+        on: true,
+        place: '도서관',
+        since: '2026-08-15T11:50:00.000Z',
+        lastStartedAt: '2026-08-15T11:50:00.000Z',
+        at: '2026-08-15T11:50:00.000Z',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('valid ON의 parseable 시작 후보가 at보다 뒤면 action at을 시작 이력으로 저장한다', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime('2026-08-15T12:00:00.000Z');
+    try {
+      const token = await makeToken('sh', secret);
+      const response = await worker.fetch(
+        new Request('https://example.test/api/sync/status', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            on: true,
+            place: '도서관',
+            since: '2026-08-15T11:00:00.000Z',
+            lastStartedAt: '2026-08-15T11:30:00.000Z',
+            at: '2026-08-15T10:00:00.000Z',
+          }),
+        }),
+        env as never,
+        { waitUntil: vi.fn() } as unknown as ExecutionContext,
+      );
+
+      expect(response.status).toBe(200);
+      expect(mocks.setStatus).toHaveBeenCalledWith({}, 'sh', {
+        on: true,
+        place: '도서관',
+        since: '2026-08-15T11:00:00.000Z',
+        lastStartedAt: '2026-08-15T10:00:00.000Z',
+        at: '2026-08-15T10:00:00.000Z',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('OFF의 explicit lastStartedAt이 at보다 뒤면 시작 이력 후보를 저장하지 않는다', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime('2026-08-15T12:00:00.000Z');
+    try {
+      const token = await makeToken('sh', secret);
+      const response = await worker.fetch(
+        new Request('https://example.test/api/sync/status', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            on: false,
+            lastStartedAt: '2026-08-15T11:00:00.000Z',
+            at: '2026-08-15T10:00:00.000Z',
+          }),
+        }),
+        env as never,
+        { waitUntil: vi.fn() } as unknown as ExecutionContext,
+      );
+
+      expect(response.status).toBe(200);
+      expect(mocks.setStatus).toHaveBeenCalledWith({}, 'sh', {
+        on: false,
+        place: null,
+        since: null,
+        lastStartedAt: null,
+        at: '2026-08-15T10:00:00.000Z',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
 
 describe('GET/PUT /api/tags/prefs', () => {
   const secret = 'test-secret';

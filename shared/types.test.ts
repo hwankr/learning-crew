@@ -5,7 +5,10 @@ import {
   TAGS,
   TAG_LIMITS,
   entryTags,
+  hasTodayStudyStamp,
   isOffTags,
+  mergeMemberStatus,
+  normalizeMemberStatus,
   normalizeCustomTagList,
   normalizePhotos,
   normalizeTags,
@@ -179,5 +182,134 @@ describe('isOffTags', () => {
   });
   it('정규화를 지나면 OFF가 섞인 조합 자체가 존재할 수 없다', () => {
     expect(isOffTags(normalizeTags(['OFF', '영어']))).toBe(true);
+  });
+});
+
+describe('status stamp helpers', () => {
+  const today = '2026-08-14';
+  const now = Date.parse('2026-08-14T12:00:00+09:00');
+  const base = {
+    m: 'sh' as const,
+    on: false,
+    place: null,
+    since: null,
+    lastStartedAt: null,
+    updatedAt: '2026-08-14T00:00:00.000Z',
+  };
+
+  it('구버전 OFF status 행의 누락된 lastStartedAt은 null로 둔다', () => {
+    expect(normalizeMemberStatus({
+      m: 'sh',
+      on: false,
+      place: '도서관',
+      since: null,
+      updatedAt: '2026-08-14T01:00:00Z',
+    })).toEqual({
+      m: 'sh',
+      on: false,
+      place: '도서관',
+      since: null,
+      lastStartedAt: null,
+      updatedAt: '2026-08-14T01:00:00.000Z',
+    });
+  });
+
+  it('구버전 ON status 행은 since를 lastStartedAt으로 복구한다', () => {
+    expect(normalizeMemberStatus({
+      m: 'sh',
+      on: true,
+      place: '도서관',
+      since: '2026-08-14T00:30:00Z',
+      updatedAt: '2026-08-14T01:00:00Z',
+    })).toEqual({
+      m: 'sh',
+      on: true,
+      place: '도서관',
+      since: '2026-08-14T00:30:00.000Z',
+      lastStartedAt: '2026-08-14T00:30:00.000Z',
+      updatedAt: '2026-08-14T01:00:00.000Z',
+    });
+  });
+
+  it('오늘 시작 이력과 자정 전 시작 후 오늘 종료를 도장으로 센다', () => {
+    expect(hasTodayStudyStamp({
+      ...base,
+      lastStartedAt: '2026-08-14T01:00:00.000Z',
+    }, now, today)).toBe(true);
+    expect(hasTodayStudyStamp({
+      ...base,
+      lastStartedAt: '2026-08-13T14:30:00.000Z',
+      updatedAt: '2026-08-14T00:30:00.000Z',
+    }, now, today)).toBe(true);
+  });
+
+  it('자정을 넘긴 라이브는 오늘 도장 fallback이고 TTL이 지나면 제외한다', () => {
+    expect(hasTodayStudyStamp({
+      ...base,
+      on: true,
+      place: '도서관',
+      since: '2026-08-13T15:00:00.000Z',
+      lastStartedAt: '2026-08-13T15:00:00.000Z',
+      updatedAt: '2026-08-13T15:00:00.000Z',
+    }, Date.parse('2026-08-14T01:00:00+09:00'), today)).toBe(true);
+    expect(hasTodayStudyStamp({
+      ...base,
+      on: true,
+      place: '도서관',
+      since: '2026-08-13T00:00:00.000Z',
+      lastStartedAt: '2026-08-13T00:00:00.000Z',
+      updatedAt: '2026-08-13T00:00:00.000Z',
+    }, now, today)).toBe(false);
+  });
+
+  it('과거 시작과 과거 종료만 있으면 오늘 도장이 아니다', () => {
+    expect(hasTodayStudyStamp({
+      ...base,
+      lastStartedAt: '2026-08-12T10:00:00.000Z',
+      updatedAt: '2026-08-13T10:00:00.000Z',
+    }, now, today)).toBe(false);
+    expect(hasTodayStudyStamp({
+      ...base,
+      lastStartedAt: '2026-08-12T10:00:00.000Z',
+      updatedAt: '2026-08-14T10:00:00.000Z',
+    }, now, today)).toBe(false);
+  });
+
+  it('status 병합은 current-state를 updatedAt LWW로 고르고 시작 이력은 max로 보존한다', () => {
+    const current = {
+      ...base,
+      on: true,
+      place: '도서관' as const,
+      since: '2026-08-15T10:00:00.000Z',
+      lastStartedAt: '2026-08-15T10:00:00.000Z',
+      updatedAt: '2026-08-15T10:00:00.000Z',
+    };
+
+    expect(mergeMemberStatus(current, {
+      ...current,
+      on: false,
+      place: null,
+      since: null,
+      lastStartedAt: '2026-08-15T09:00:00.000Z',
+      updatedAt: current.updatedAt,
+    })).toEqual({
+      ...current,
+      on: false,
+      place: null,
+      since: null,
+      lastStartedAt: current.lastStartedAt,
+    });
+
+    expect(mergeMemberStatus(current, {
+      ...current,
+      on: false,
+      place: null,
+      since: null,
+      lastStartedAt: '2026-08-15T10:30:00.000Z',
+      updatedAt: '2026-08-15T09:30:00.000Z',
+    })).toEqual({
+      ...current,
+      lastStartedAt: '2026-08-15T10:30:00.000Z',
+    });
   });
 });

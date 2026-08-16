@@ -1,7 +1,7 @@
 /* 크루 패널 — 체크인 · 오늘의 크루 · 이번 달 요약 · 동기화 한 줄.
    데스크톱에서는 접히는 왼쪽 열이고, 좁은 화면에서는 본문 위에 그대로 선다. */
 import type { Entry, MemberId, MemberStatus, Place } from '../../shared/types';
-import { MEMBERS, pad2, type CopySet } from '../lib/constants';
+import { MEMBERS, dayKey, pad2, type CopySet } from '../lib/constants';
 import { daysOf, monthDaysOf, streakOf } from '../lib/stats';
 import type { PhotoUploadInfo, SyncInfo } from '../local/store';
 import { Avatar } from './icons';
@@ -54,7 +54,8 @@ export function CrewPanel({
   return (
     <>
       <StatusBar status={statuses[meId]} wit={wit} now={now} onSet={onSetStatus} />
-      <Board todays={todays} statuses={statuses} now={now} meId={meId} wit={wit}
+      <Board todays={todays} statuses={statuses} now={now} todayKey={dayKey(today)}
+        meId={meId} wit={wit}
         photoUploads={photoUploads} onOpenPhoto={onOpenPhoto} />
       <MonthSummary entries={entries} meId={meId} today={today} />
       {sync && <SyncStatus sync={sync} variant="panel" />}

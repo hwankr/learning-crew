@@ -569,6 +569,32 @@ function normalizeSince(raw: unknown, now: number): string {
   return new Date(now).toISOString();
 }
 
+function rawTimestamp(raw: unknown): number | null {
+  if (typeof raw !== 'string') return null;
+  const t = Date.parse(raw);
+  return Number.isFinite(t) ? t : null;
+}
+
+/** 마지막 시작 이력은 raw payload의 실제 시작 시각만 후보로 삼는다.
+    미래 시각은 서버 now로 캡하되, 이 액션 시각보다 뒤인 후보는 malformed history로 버린다. */
+function normalizeStartedAtCandidate(
+  rawLastStartedAt: unknown,
+  rawSince: unknown,
+  now: number,
+  at: string,
+): string | null {
+  const atMs = Date.parse(at);
+  if (!Number.isFinite(atMs)) return null;
+  for (const raw of [rawLastStartedAt, rawSince]) {
+    const t = rawTimestamp(raw);
+    if (t === null) continue;
+    const capped = Math.min(t, now);
+    if (capped > atMs) continue;
+    return new Date(capped).toISOString();
+  }
+  return null;
+}
+
 /** 액션 시각(LWW 기준) 정규화 — 미래는 지금으로 캡하고 과거는 그대로 둔다.
     · 과거를 끌어올리면 아주 오래된 오프라인 토글이 더 새 액션을 이겨 버린다 —
       오래된 액션은 LWW에서 자연히 지는 것이 정답이다.
@@ -598,13 +624,18 @@ app.post('/api/sync/status', async (c) => {
   // at이 없는 구버전 클라이언트의 ON은 도착 시각이 아니라 본인이 주장하는 시작 시각(since)을
   // 액션 시각으로 삼는다 — 도착 시각을 쓰면 뒤늦게 재접속한 옛 ON이 최신 OFF를 이겨 버린다
   const at = normalizeAt(body.at ?? (body.on ? body.since : undefined), now);
+  const since = body.on ? normalizeSince(body.since, now) : null;
+  const currentOnIsValid = body.on && isFreshSince(at, now);
+  const lastStartedAt =
+    normalizeStartedAtCandidate(body.lastStartedAt, body.since, now, at) ??
+    (currentOnIsValid ? at : null);
   let s = body.on
-    ? { on: true, place: body.place!, since: normalizeSince(body.since, now), at }
-    : { on: false, place: null, since: null, at };
+    ? { on: true, place: body.place!, since, lastStartedAt, at }
+    : { on: false, place: null, since: null, lastStartedAt, at };
   // TTL(14시간)보다 오래된 ON 액션은 이미 끝난 세션 — 뒤늦게 도착해도 "지금 공부 중"으로
   // 되살리거나 시작 알림을 쏘지 않고, 꺼짐으로 기록한다 (LWW 순서는 at이 그대로 지킨다)
   if (s.on && !isFreshSince(at, now)) {
-    s = { on: false, place: null, since: null, at };
+    s = { on: false, place: null, since: null, lastStartedAt: s.lastStartedAt, at };
   }
   const db = drizzle(neon(c.env.DATABASE_URL));
   const prev = await getStatusRow(db, me);

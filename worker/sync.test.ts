@@ -222,6 +222,45 @@ describe('photo tombstone owner DB 마이그레이션', () => {
   });
 });
 
+describe('status lastStartedAt DB 마이그레이션', () => {
+  it('0012가 현재 ON 행의 since를 last_started_at으로 백필한다', async () => {
+    const pg = new PGlite();
+    try {
+      const migrations = readdirSync('migrations').filter((f) => f.endsWith('.sql')).sort();
+      const statusMigration = migrations.find((f) => f.startsWith('0012_'));
+      expect(statusMigration).toBeDefined();
+
+      for (const migration of migrations.filter((f) => f < statusMigration!)) {
+        const ddl = readFileSync(`migrations/${migration}`, 'utf8');
+        for (const stmt of ddl.split('--> statement-breakpoint')) await pg.exec(stmt);
+      }
+      await pg.exec(`
+        insert into status (member_id, is_on, place, since, updated_at)
+        values
+          ('sh', true, '도서관', '2026-08-15T00:00:00.000Z', '2026-08-15T01:00:00.000Z'),
+          ('wg', false, null, null, '2026-08-15T02:00:00.000Z')
+      `);
+
+      const ddl = readFileSync(`migrations/${statusMigration!}`, 'utf8');
+      for (const stmt of ddl.split('--> statement-breakpoint')) await pg.exec(stmt);
+      const migrated = await pg.query<{ member_id: string; last_started_at: string | null }>(`
+        select member_id, last_started_at
+        from status
+        order by member_id
+      `);
+      expect(migrated.rows.map((r) => ({
+        member_id: r.member_id,
+        last_started_at: r.last_started_at ? new Date(r.last_started_at).toISOString() : null,
+      }))).toEqual([
+        { member_id: 'sh', last_started_at: '2026-08-15T00:00:00.000Z' },
+        { member_id: 'wg', last_started_at: null },
+      ]);
+    } finally {
+      await pg.close();
+    }
+  });
+});
+
 describe('sync queries', () => {
   let cursor: PullCursor | null = null;
 
@@ -705,7 +744,9 @@ describe('status queries', () => {
 
   it('켜면 멤버당 1행이 저장되고 저장된 행을 돌려준다', async () => {
     const since = iso(t0);
-    const r = await setStatus(db, 'sh', { on: true, place: '도서관', since, at: iso(t0) });
+    const r = await setStatus(db, 'sh', {
+      on: true, place: '도서관', since, lastStartedAt: since, at: iso(t0),
+    });
     expect(r.applied).toBe(true);
     expect(r.status.m).toBe('sh');
     expect(r.status.on).toBe(true);
@@ -713,18 +754,22 @@ describe('status queries', () => {
     // 상태 타임스탬프도 ISO로 정규화되어 나간다 (클라이언트는 사전순 비교에 의존한다)
     expect(r.status.updatedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
     expect(r.status.since).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(r.status.lastStartedAt).toBe(since);
     const all = await allStatuses(db);
     expect(all.filter((s) => s.m === 'sh')).toHaveLength(1);
   });
 
   it('재설정은 같은 행을 덮어쓴다 (끄면 place/since가 비워진다)', async () => {
-    const r = await setStatus(db, 'sh', { on: false, place: null, since: null, at: iso(t0 + 1000) });
+    const r = await setStatus(db, 'sh', {
+      on: false, place: null, since: null, lastStartedAt: iso(t0), at: iso(t0 + 1000),
+    });
     expect(r.applied).toBe(true);
     const all = await allStatuses(db);
     const sh = all.find((s) => s.m === 'sh')!;
     expect(sh.on).toBe(false);
     expect(sh.place).toBeNull();
     expect(sh.since).toBeNull();
+    expect(sh.lastStartedAt).toBe(iso(t0));
     expect(all.filter((s) => s.m === 'sh')).toHaveLength(1);
   });
 
@@ -732,7 +777,11 @@ describe('status queries', () => {
     // 시나리오: 휴대폰이 오프라인에서 t0-10분에 ON → 노트북이 t0+1초에 OFF(위 테스트)
     // → 휴대폰이 재접속해 옛 ON을 밀어 올린다. 도착은 늦지만 액션은 과거 — 거부돼야 한다.
     const stale = await setStatus(db, 'sh', {
-      on: true, place: '도서관', since: iso(t0 - 600_000), at: iso(t0 - 600_000),
+      on: true,
+      place: '도서관',
+      since: iso(t0 - 600_000),
+      lastStartedAt: iso(t0 - 600_000),
+      at: iso(t0 - 600_000),
     });
     expect(stale.applied).toBe(false);
     expect(stale.status.on).toBe(false); // 서버의 현재 상태(OFF)를 돌려준다 — 클라이언트가 채택
@@ -740,13 +789,33 @@ describe('status queries', () => {
     expect(sh.on).toBe(false);
   });
 
+  it('LWW가 거부돼도 lastStartedAt은 단조 병합하고 updatedAt은 올리지 않는다', async () => {
+    const before = iso(t0 + 1000);
+    const laterStart = iso(t0 + 2_000);
+    const stale = await setStatus(db, 'sh', {
+      on: true,
+      place: '카페',
+      since: laterStart,
+      lastStartedAt: laterStart,
+      at: iso(t0 - 1_000),
+    });
+    expect(stale.applied).toBe(false);
+    expect(stale.status.on).toBe(false);
+    expect(stale.status.updatedAt).toBe(before);
+    expect(stale.status.lastStartedAt).toBe(laterStart);
+  });
+
   it('같은 액션 시각의 재전송은 멱등하게 허용된다 (잃어버린 응답 재시도)', async () => {
-    const r = await setStatus(db, 'sh', { on: false, place: null, since: null, at: iso(t0 + 1000) });
+    const r = await setStatus(db, 'sh', {
+      on: false, place: null, since: null, lastStartedAt: null, at: iso(t0 + 1000),
+    });
     expect(r.applied).toBe(true);
   });
 
   it('멤버별로 행이 따로 쌓인다', async () => {
-    await setStatus(db, 'wg', { on: true, place: '카페', since: iso(t0), at: iso(t0) });
+    await setStatus(db, 'wg', {
+      on: true, place: '카페', since: iso(t0), lastStartedAt: iso(t0), at: iso(t0),
+    });
     const all = await allStatuses(db);
     expect(all).toHaveLength(2);
     expect(all.find((s) => s.m === 'wg')!.on).toBe(true);
@@ -758,6 +827,7 @@ describe('isStatusActive (표시 규칙)', () => {
   const st = (over: Partial<MemberStatus>): MemberStatus => ({
     m: 'sh', on: true, place: '도서관',
     since: new Date(now - 60_000).toISOString(),
+    lastStartedAt: new Date(now - 60_000).toISOString(),
     updatedAt: new Date(now).toISOString(),
     ...over,
   });
@@ -889,7 +959,9 @@ describe('push subscription queries', () => {
 
   it('claimNotifySlot은 첫 선점만 성공한다 — 두 기기 동시 켜기의 중복 발송 방지', async () => {
     const now = new Date().toISOString();
-    await setStatus(db, 'jj', { on: true, place: '도서관', since: now, at: now });
+    await setStatus(db, 'jj', {
+      on: true, place: '도서관', since: now, lastStartedAt: now, at: now,
+    });
     expect((await getStatusRow(db, 'jj'))!.lastNotifiedAt).toBeNull();
     expect(await claimNotifySlot(db, 'jj', NOTIFY_COOLDOWN_MS)).toBe(true);
     expect((await getStatusRow(db, 'jj'))!.lastNotifiedAt).not.toBeNull();

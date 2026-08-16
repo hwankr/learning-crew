@@ -428,8 +428,8 @@ export function seedStatuses(): MemberStatus[] {
   const now = Date.now();
   const ago = (min: number) => new Date(now - min * 60_000).toISOString();
   return [
-    { m: 'wg', on: true, place: '도서관', since: ago(95), updatedAt: ago(95) },
-    { m: 'jj', on: true, place: '카페', since: ago(20), updatedAt: ago(20) },
-    { m: 'kj', on: true, place: '집', since: ago(48), updatedAt: ago(48) },
+    { m: 'wg', on: true, place: '도서관', since: ago(95), lastStartedAt: ago(95), updatedAt: ago(95) },
+    { m: 'jj', on: true, place: '카페', since: ago(20), lastStartedAt: ago(20), updatedAt: ago(20) },
+    { m: 'kj', on: true, place: '집', since: ago(48), lastStartedAt: ago(48), updatedAt: ago(48) },
   ];
 }

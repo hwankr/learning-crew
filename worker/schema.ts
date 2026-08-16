@@ -65,6 +65,7 @@ export const status = pgTable('status', {
   on: boolean('is_on').notNull().default(false),
   place: text('place'),
   since: timestamp('since', { withTimezone: true, mode: 'string' }),
+  lastStartedAt: timestamp('last_started_at', { withTimezone: true, mode: 'string' }),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   // 마지막으로 크루에게 푸시를 보낸 시각 — 껐켰다 반복 스팸 방지 쿨다운의 기준
   lastNotifiedAt: timestamp('last_notified_at', { withTimezone: true, mode: 'string' }),

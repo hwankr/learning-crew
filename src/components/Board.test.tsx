@@ -15,7 +15,7 @@ const base: Entry = {
 function board(entry: Entry): string {
   return renderToStaticMarkup(
     <Board todays={[entry]} statuses={{}} now={Date.parse('2026-08-14T12:00:00+09:00')}
-      meId="sh" wit={COPY} photoUploads={new Map()} onOpenPhoto={() => {}} />,
+      todayKey="2026-08-14" meId="sh" wit={COPY} photoUploads={new Map()} onOpenPhoto={() => {}} />,
   );
 }
 
@@ -28,5 +28,49 @@ describe('크루 패널 최신 기록 요약', () => {
 
   it('본문이 빈 기록은 할 일을 대체 요약으로 쓴다', () => {
     expect(board({ ...base, body: '' })).toContain('할 일 첫 줄');
+  });
+
+  it('기록만 있으면 행은 강조되지만 도장 카운트에는 들지 않는다', () => {
+    const html = board(base);
+    expect(html).toContain('5명 중 0명 도장 찍음');
+    expect(html).toContain('본문 첫 줄');
+  });
+
+  it('도장만 있으면 오늘 공부함을 보여 주고 카운트에 포함한다', () => {
+    const html = renderToStaticMarkup(
+      <Board todays={[]} now={Date.parse('2026-08-14T12:00:00+09:00')} todayKey="2026-08-14"
+        statuses={{
+          wg: {
+            m: 'wg',
+            on: false,
+            place: null,
+            since: null,
+            lastStartedAt: '2026-08-14T00:30:00.000Z',
+            updatedAt: '2026-08-14T02:00:00.000Z',
+          },
+        }}
+        meId="sh" wit={COPY} photoUploads={new Map()} onOpenPhoto={() => {}} />,
+    );
+    expect(html).toContain('5명 중 1명 도장 찍음');
+    expect(html).toContain('오늘 공부함');
+  });
+
+  it('자정을 넘긴 라이브 세션은 오늘 도장으로 센다', () => {
+    const html = renderToStaticMarkup(
+      <Board todays={[]} now={Date.parse('2026-08-14T01:00:00+09:00')} todayKey="2026-08-14"
+        statuses={{
+          wg: {
+            m: 'wg',
+            on: true,
+            place: '도서관',
+            since: '2026-08-13T15:00:00.000Z',
+            lastStartedAt: '2026-08-13T15:00:00.000Z',
+            updatedAt: '2026-08-13T15:00:00.000Z',
+          },
+        }}
+        meId="sh" wit={COPY} photoUploads={new Map()} onOpenPhoto={() => {}} />,
+    );
+    expect(html).toContain('5명 중 1명 도장 찍음');
+    expect(html).toContain('도서관에서');
   });
 });
