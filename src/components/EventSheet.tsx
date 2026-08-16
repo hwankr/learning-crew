@@ -281,7 +281,7 @@ export function EventSheet({
           {pickerTags.map((t) => {
             const on = t === tag;
             const tm = tagMeta(t);
-            /* 채움 색은 태그마다 달라 인라인이지만(cal-pill-dot과 같은 기준), 고른 칩의
+            /* 채움 색은 태그마다 달라 인라인이지만(캘린더 점 색과 같은 기준), 고른 칩의
                투명 테두리는 늘 같은 값이라 클래스가 맡는다 */
             const paint = on ? { background: tm.bg, color: tm.fg } : undefined;
             /* 편집 중에는 어떤 칩도 토글이 아니다(span) — 지우려고 켠 모드에서 탭 한 번이

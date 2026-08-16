@@ -1,8 +1,5 @@
 import type { Comment, CrewEvent, Entry, MemberId, ReactionSet } from '../../shared/types';
-import { entryTags, primaryTag } from '../../shared/types';
-import {
-  MEMBERS, W, dayKey, memberOf, membersOfEntries, pad2, tagMeta, type CopySet,
-} from '../lib/constants';
+import { MEMBERS, W, dayKey, membersOfEntries, pad2, type CopySet } from '../lib/constants';
 import {
   eventDdayLabel, eventMembers, eventParticipants, eventPhase, eventSpanLabel, eventWhenLabel,
   eventsByDay, eventsDayMembers, participantsLabel, upcomingEvent,
@@ -14,10 +11,6 @@ import { Chip } from './Chip';
 import { Avatar, Icon, PLUS_D } from './icons';
 import { EntryCard, type EntryActions } from './EntryCard';
 
-/** 셀 하나에 보여줄 최대 알약 수 — 넘치면 "+N개 더".
-    일정과 기록이 이 예산을 함께 쓴다: 일정이 먼저고 남는 자리를 기록이 받는다.
-    ("동그라미는 기록, 네모는 일정" — 약속은 지나가면 끝이라 놓치면 손해가 크다) */
-const MAX_PILLS = 3;
 /** 격자는 늘 42칸(6주) — 뒤를 빈 칸으로 채워 5주 달과 6주 달 사이에 높이가 튀지 않게 한다.
     선행 공백(최대 6) + 날짜(최대 31)는 37칸이라 항상 이 안에 들어온다. */
 const CELLS = 42;
@@ -59,6 +52,17 @@ export function topEventOf(
   const onDay = selEvents[0];
   if (onDay) return { ev: onDay, label: '이 날의 일정' };
   return upcoming ? { ev: upcoming, label: '다가오는 일정' } : null;
+}
+
+/** 날짜 버튼이 낭독기에 읽히는 이름 — "8월 16일, 기록 3개, 일정 1개"(없는 쪽은 빼고,
+    둘 다 없으면 날짜만). 세는 대상은 화면과 같다: 필터가 걸려 있으면 그 사람 것만이다.
+    제목까지 싣지 않는 이유: 42칸을 훑는 낭독에서 한 칸이 길어지면 달 전체를 지나기가 힘들다 —
+    무엇이었는지는 그 날을 고르면 선택일 패널이 말한다. */
+export function cellLabel(month: number, day: number, entries: number, events: number): string {
+  const parts = [`${month}월 ${day}일`];
+  if (entries > 0) parts.push(`기록 ${entries}개`);
+  if (events > 0) parts.push(`일정 ${events}개`);
+  return parts.join(', ');
 }
 
 /** 이 달에 걸린 일정 수 — 기간 일정은 달을 걸치기만 해도 이 달의 일정이다.
@@ -138,57 +142,27 @@ export function CalendarView({
     const isToday = k === todayKey;
     const isSel = k === selDay;
     const isFuture = k > todayKey;
-    // 세 개만 남기므로 최신 기록부터 — 오래된 세 개를 고정하면 뒤에 온 기록은 +N에만 묻힌다
-    const dayEntries = (byDay.get(k) ?? []).slice().sort((a, b) => b.time.localeCompare(a.time));
+    const dayEntries = byDay.get(k) ?? [];
     const dayEvents = evByDay.get(k) ?? [];
     // 점은 기록에서 뽑는다 — 명부로 거르면 모르는 멤버만 기록한 날에 점이 하나도 안 찍혀
-    // "아무도 기록 안 한 날"이 된다 (알약은 이미 memberOf라 그 셀 안에서도 어긋난다)
+    // "아무도 기록 안 한 날"이 된다
     const dots = membersOfEntries(dayEntries);
     // 일정 점은 참여자에서 뽑는다 — 등록자 하나로 찍으면 셋이 함께 치는 시험이 한 사람 일이 된다
     const eventDayMembers = eventsDayMembers(dayEvents);
-    const overflow = dayEvents.length + dayEntries.length - MAX_PILLS;
     cells.push(
       <button key={k}
         className={'cal-cell' + (isSel ? ' sel' : '') + (isToday ? ' today' : '') + (isFuture ? ' future' : '')}
         aria-pressed={isSel}
         aria-current={isToday ? 'date' : undefined}
+        /* 눈으로는 점이 말하는 것을 귀로도 들려준다 — 라벨이 숫자뿐이면 낭독기로는
+           42칸 어디에 기록·일정이 있는지 알 길이 없다(점은 색이라 읽히지 않는다) */
+        aria-label={cellLabel(calBase.getMonth() + 1, n, dayEntries.length, dayEvents.length)}
         onClick={() => setSelDay(k)}>
         <span className="cal-num">{n}</span>
-        {/* 와이드: 멤버·태그 알약 / 모바일: 색 점 (CSS로 전환) */}
-        <span className="cal-pills">
-          {dayEvents.slice(0, MAX_PILLS).map((ev) => (
-            // 옷(지남·임박·그 밖)은 클래스가 입히고, 점만 사람의 색을 쓴다.
-            // 알약은 일정당 하나라 점도 하나다 — 여럿이 함께하는 일정은 대표(크루 차례 첫 사람)로
-            // 끊는다. 누가 함께하는지는 아래 선택일 패널의 아바타 스택이 말한다.
-            <span key={ev.id} className={'cal-pill ev ' + eventPhase(ev, todayKey)}>
-              <span className="cal-pill-dot"
-                style={{ background: memberOf(eventParticipants(ev)[0] ?? ev.m).color }} />
-              <span className="cal-pill-label">
-                {eventDdayLabel(ev, todayKey)} {ev.title}
-              </span>
-            </span>
-          ))}
-          {dayEntries.slice(0, Math.max(0, MAX_PILLS - dayEvents.length)).map((e) => {
-            // 모르는 멤버 id는 중립 표시로 — 알약의 점 색·이름이 남의 것이 되면 안 된다
-            const mm = memberOf(e.m);
-            // 알약은 한 줄이라 색도 라벨도 대표 태그 하나로 끊는다 —
-            // 태그를 다 이어 붙이면 142px 셀에서 이름이 먼저 말줄임으로 잘린다
-            const tag = primaryTag(entryTags(e));
-            const tm = tagMeta(tag);
-            return (
-              <span key={e.id} className="cal-pill" style={{ background: tm.bg }}>
-                <span className="cal-pill-dot" style={{ background: mm.color }} />
-                <span className="cal-pill-label" style={{ color: tm.fg }}>
-                  {mm.name} {tag}
-                </span>
-              </span>
-            );
-          })}
-          {overflow > 0 && <span className="cal-more">+{overflow}개 더</span>}
-        </span>
-        {/* 일정 네모가 기록 동그라미보다 앞이다 — 좁은 셀에서 줄이 바뀌어도 약속이 먼저 보인다.
+        {/* 일정 네모가 기록 동그라미보다 앞이다 — 줄이 바뀌어도 약속이 먼저 보인다.
             네모 하나가 일정 하나가 아니라 사람 하나다(기록 동그라미와 같은 문법): 그 날 일정들의
-            참여자를 합쳐 사람별로 한 번씩만 찍는다 — 셋이 함께 치는 시험은 네모 셋이다. */}
+            참여자를 합쳐 사람별로 한 번씩만 찍는다 — 셋이 함께 치는 시험은 네모 셋이다.
+            두 셸이 같은 문법을 쓴다: 무엇이 있었나는 점이 말하고, 무엇이었나는 옆(아래) 패널이 말한다. */}
         <span className="cal-day-dots">
           {eventDayMembers.map((m) => (
             <span key={m.id} className="cal-day-dot ev" style={{ background: m.color }} />
@@ -210,7 +184,12 @@ export function CalendarView({
   const selD = new Date(selDay + 'T12:00:00');
   // 배너·카드도 필터를 탄다 — '웅'만 켠 화면이 태현의 시험을 D-2로 알리면 필터가 거짓말이 된다
   const nextEvent = upcomingEvent(shownEvents, todayKey);
-  const topEvent = topEventOf(selEvents, nextEvent);
+  /* 격자 위 배너에 세울 일정 — 좁은 화면은 늘 "다음 일정"이다(격자 위는 알림 자리).
+     와이드는 열이 넓어 고른 날의 일정을 먼저 세운다(옛 오른쪽 열 카드의 규칙 그대로) —
+     라벨이 무엇을 세웠는지 밝힌다. */
+  const banner = desktop
+    ? topEventOf(selEvents, nextEvent)
+    : nextEvent && { ev: nextEvent, label: '' };
 
   return (
     <div>
@@ -276,21 +255,31 @@ export function CalendarView({
               </button>
             ))}
           </div>
-          {/* 다가오는 일정 하나 — 홈 배너(CrewPanel)와 같은 말이지만 이쪽은 필터를 탄다.
-              남은 일정이 없으면 접는다: 빈 카드는 격자 위 자리만 먹는다. */}
-          {!desktop && nextEvent && (
-            <button className={'cal-banner ' + eventPhase(nextEvent, todayKey)}
-              onClick={() => setSelDay(nextEvent.day)}>
-              <span className="cal-banner-bar" aria-hidden="true" />
-              <span className="cal-banner-dday">{eventDdayLabel(nextEvent, todayKey)}</span>
-              <span className="cal-banner-main">
-                <span className="cal-banner-title">{nextEvent.title}</span>
-                <span className="cal-banner-sub">
-                  {participantsLabel(eventMembers(nextEvent))} · {eventWhenLabel(nextEvent.day, nextEvent.endDay)}
+          {/* 일정 하나가 격자 위에 슬림 배너로 선다 — 홈 배너(CrewPanel)와 같은 말이지만
+              이쪽은 필터를 탄다. 세울 일정이 없으면 접는다: 빈 배너는 격자 위 자리만 먹는다.
+              와이드는 무엇을 세웠는지(이 날 / 다가오는)를 위에 한 줄로 밝힌다 — 고른 날을 따라
+              배너가 바뀌는 자리라 라벨이 없으면 왜 바뀌었는지 알 수 없다. */}
+          {banner && (
+            <>
+              {banner.label && (
+                <div className="cal-top-label">
+                  <span>{banner.label}</span>
+                  <span className="cal-top-rule" aria-hidden="true" />
+                </div>
+              )}
+              <button className={'cal-banner ' + eventPhase(banner.ev, todayKey)}
+                onClick={() => setSelDay(banner.ev.day)}>
+                <span className="cal-banner-bar" aria-hidden="true" />
+                <span className="cal-banner-dday">{eventDdayLabel(banner.ev, todayKey)}</span>
+                <span className="cal-banner-main">
+                  <span className="cal-banner-title">{banner.ev.title}</span>
+                  <span className="cal-banner-sub">
+                    {participantsLabel(eventMembers(banner.ev))} · {eventWhenLabel(banner.ev.day, banner.ev.endDay)}
+                  </span>
                 </span>
-              </span>
-              <Chip tag={nextEvent.tag} variant="sm2" />
-            </button>
+                <Chip tag={banner.ev.tag} variant="sm2" />
+              </button>
+            </>
           )}
           <div className="cal-week">
             {W.map((d, i) => (
@@ -310,38 +299,6 @@ export function CalendarView({
           </div>
         </div>
         <div className="cal-sel">
-          {/* 와이드 전용 — 오른쪽 열의 첫 자리는 "언제까지 얼마나 남았나"가 가져간다.
-              좁은 화면에서 격자 위에 서는 D-day 배너와 같은 말이되, 열이 넓어 숫자를 크게 세우고
-              참여자·태그·메모까지 편다(디자인). 노드 자체를 와이드에서만 그리므로 이 스타일에는
-              미디어 쿼리가 없다 — 모바일 전용 노드와 같은 규약이다. */}
-          {desktop && topEvent && (
-            <>
-              <div className="cal-top-label">
-                <span>{topEvent.label}</span>
-                <span className="cal-top-rule" aria-hidden="true" />
-              </div>
-              <button className={'cal-top-card ' + eventPhase(topEvent.ev, todayKey)}
-                onClick={() => setSelDay(topEvent.ev.day)}>
-                <span className="cal-top-head">
-                  <span className="cal-top-dday">{eventDdayLabel(topEvent.ev, todayKey)}</span>
-                  <span className="cal-top-when">
-                    {eventWhenLabel(topEvent.ev.day, topEvent.ev.endDay)}
-                  </span>
-                </span>
-                <span className="cal-top-title">{topEvent.ev.title}</span>
-                <span className="cal-top-by">
-                  <span className="sel-event-avatars">
-                    {eventMembers(topEvent.ev).map((m) => (
-                      <Avatar key={m.id} m={m} size={20} className="sel-av" bg={m.soft} />
-                    ))}
-                  </span>
-                  <span className="cal-top-names">{participantsLabel(eventMembers(topEvent.ev))}</span>
-                  <Chip tag={topEvent.ev.tag} variant="sm2" />
-                </span>
-                {topEvent.ev.memo && <span className="cal-top-memo">{topEvent.ev.memo}</span>}
-              </button>
-            </>
-          )}
           <div className="sel-head">
             <span className="sel-label">{selD.getMonth() + 1}월 {selD.getDate()}일 ({W[selD.getDay()]})</span>
             <span className="sel-count">

@@ -1,12 +1,12 @@
-/* 캘린더에 실린 일정 — 셀·선택일 패널이 같은 일정을 같은 자리에 그리는지.
-   특히 기간 일정은 시작일에만 찍히면 시험 기간이 하루로 읽히고, 알약 예산(3)을 기록과
-   나눠 쓰지 않으면 그 날의 약속이 "+N개 더" 뒤로 숨는다. */
+/* 캘린더에 실린 일정 — 격자의 점·격자 위 배너·선택일 패널이 같은 일정을 같은 자리에 그리는지.
+   특히 기간 일정은 시작일에만 찍히면 시험 기간이 하루로 읽히고, 참여자 대신 등록자를 세면
+   함께 치는 시험이 한 사람 일이 된다. */
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { CrewEvent, Entry, MemberId } from '../../shared/types';
 import { COPY } from '../lib/constants';
 import {
-  CalendarView, entriesOfMember, eventsOfMember, headActionOrder, topEventOf,
+  CalendarView, cellLabel, entriesOfMember, eventsOfMember, headActionOrder, topEventOf,
 } from './CalendarView';
 import { ComposeMenu } from './ComposeMenu';
 
@@ -46,35 +46,45 @@ function view(opts: {
 describe('캘린더의 일정', () => {
   it('기간 일정은 걸친 모든 날의 셀에 선다', () => {
     const html = view({ events: [event({ id: 'a', day: '2026-08-18', endDay: '2026-08-20' })] });
-    // 알약은 셀마다 하나씩 — 사흘이면 세 번. 제목 자체는 배너에도 한 번 더 실린다
-    expect(html.split('class="cal-pill ev').length - 1).toBe(3);
-    expect(html.split('정보처리기사 실기').length - 1).toBe(4);
+    // 셀에는 글자가 아니라 점이 선다 — 사흘이면 네모 셋(참여자 하나짜리 일정)
+    expect(html.split('class="cal-day-dot ev"').length - 1).toBe(3);
+    // 제목이 서는 자리는 격자 밖이다 — 격자 위 배너 하나뿐(그 날을 고르면 선택일 행이 하나 더)
+    expect(html.split('정보처리기사 실기').length - 1).toBe(1);
   });
 
   it('임박한 일정과 지난 일정이 다른 옷을 입는다', () => {
-    expect(view({ events: [event({ id: 'a', day: '2026-08-19' })] })).toContain('cal-pill ev near');
-    expect(view({ events: [event({ id: 'a', day: '2026-08-10' })] })).toContain('cal-pill ev past');
-    expect(view({ events: [event({ id: 'a', day: '2026-08-10' })] })).toContain('지남');
+    expect(view({ events: [event({ id: 'a', day: '2026-08-19' })] })).toContain('cal-banner near');
+    // 지난 일정은 배너에 서지 않는다(다가오는 것만 세운다) — 그 날을 고르면 패널 행이 말한다
+    const past = view({ events: [event({ id: 'a', day: '2026-08-10' })], selDay: '2026-08-10' });
+    expect(past).toContain('sel-event-dday past');
+    expect(past).toContain('지남');
   });
 
-  /* 시험 6일째 알약이 'D+6 정보처리기사 실기'로 서면 이미 끝난 일처럼 읽힌다 —
-     격자 알약과 선택일 패널 행이 함께 "진행 중"이라 말하고 임박과 같은 노란 옷을 입는다. */
-  it('진행 중인 기간 일정은 셀·패널 모두에서 "진행 중"이고 임박 옷을 입는다', () => {
+  /* 시험 6일째가 'D+6'으로 서면 이미 끝난 일처럼 읽힌다 —
+     격자 위 배너와 선택일 패널 행이 함께 "진행 중"이라 말하고 임박과 같은 노란 옷을 입는다. */
+  it('진행 중인 기간 일정은 배너·패널 모두에서 "진행 중"이고 임박 옷을 입는다', () => {
     const html = view({ events: [event({ id: 'a', day: '2026-08-10', endDay: '2026-08-20' })] });
-    expect(html).toContain('cal-pill ev near');
+    expect(html).toContain('cal-banner near');
     expect(html).toContain('sel-event-dday near');
     expect(html).toContain('진행 중');
     expect(html).not.toContain('D+');
   });
 
-  // 알약 예산은 셋뿐이다 — 일정이 먼저 서고 남는 자리를 기록이 받는다
-  it('일정이 기록보다 앞서 알약 자리를 가져간다', () => {
+  /* 점에는 예산이 없다 — 알약 시절의 "세 개까지 + N개 더"는 사라졌다.
+     사람이 늘면 점도 그만큼 늘고, 무엇이었는지는 옆(아래) 패널이 말한다. */
+  it('그 날의 사람 수만큼 점이 찍힌다(잘라내지 않는다)', () => {
     const html = view({
-      events: [event({ id: 'a', day: TODAY, title: '면접' })],
-      entries: [entry('e1', TODAY), entry('e2', TODAY), entry('e3', TODAY)],
+      events: [event({ id: 'a', day: TODAY, title: '면접', participants: ['sh'] })],
+      entries: [
+        entry('e1', TODAY),
+        { ...entry('e2', TODAY), m: 'th' as const },
+        { ...entry('e3', TODAY), m: 'jj' as const },
+        { ...entry('e4', TODAY), m: 'kj' as const },
+      ],
     });
-    expect(html).toContain('면접');
-    expect(html).toContain('+1개 더');
+    expect(html.split('class="cal-day-dot ev"').length - 1).toBe(1);
+    expect(html.split('class="cal-day-dot"').length - 1).toBe(4);
+    expect(html).not.toContain('개 더');
   });
 
   it('선택일 패널이 일정 수를 병기하고 내 일정에만 삭제를 연다', () => {
@@ -82,6 +92,28 @@ describe('캘린더의 일정', () => {
     expect(mine).toContain('일정 1개');
     expect(mine).toContain('sel-event-del');
     expect(view({ events: [event({ id: 'a', day: TODAY, m: 'wg' })] })).not.toContain('sel-event-del');
+  });
+
+  /* 점은 색이라 낭독기에 읽히지 않는다 — 그 날에 무엇이 있는지는 버튼 이름이 대신 말한다.
+     두 셸이 같은 셀을 쓰므로 한 번 고치면 양쪽이 함께 좋아진다. */
+  it('셀 이름이 그 날의 기록·일정 수를 말한다', () => {
+    const html = view({
+      events: [event({ id: 'a', day: TODAY })],
+      entries: [entry('e1', TODAY), { ...entry('e2', TODAY), m: 'sh' as const }],
+    });
+    expect(html).toContain('aria-label="8월 16일, 기록 2개, 일정 1개"');
+    // 아무것도 없는 날은 날짜만 — 없는 것을 세어 읽어 줄 이유가 없다
+    expect(html).toContain('aria-label="8월 17일"');
+    // 고른 날·오늘 표시는 그대로 이름 밖에서 말한다
+    expect(html).toContain('aria-pressed="true"');
+    expect(html).toContain('aria-current="date"');
+  });
+
+  it('셀 이름은 있는 쪽만 센다', () => {
+    expect(cellLabel(8, 16, 3, 1)).toBe('8월 16일, 기록 3개, 일정 1개');
+    expect(cellLabel(8, 16, 3, 0)).toBe('8월 16일, 기록 3개');
+    expect(cellLabel(12, 2, 0, 2)).toBe('12월 2일, 일정 2개');
+    expect(cellLabel(1, 9, 0, 0)).toBe('1월 9일');
   });
 
   /* 범례 밑선이 격자와 선택일 섹션을 가르는 구분선이다 — 좁은 화면에서는 일정이 없는 달에도
@@ -97,7 +129,7 @@ describe('캘린더의 일정', () => {
 /* 참여 인원 — 셋이 함께 치는 시험이 등록자 한 사람의 일로 보이면 나머지 둘은 제 캘린더에서
    그 날을 놓친다. 셀 점·패널 행이 등록자가 아니라 참여자를 센다. */
 describe('캘린더의 참여 인원', () => {
-  /** 모바일 셀의 네모 점(cal-day-dot ev)에 쓰인 색만 순서대로 */
+  /** 셀의 네모 점(cal-day-dot ev)에 쓰인 색만 순서대로 — 두 셸이 같은 점을 쓴다 */
   function eventDots(html: string): string[] {
     return [...html.matchAll(/class="cal-day-dot ev" style="background:(#[0-9A-F]{6})"/g)]
       .map((m) => m[1]!);
@@ -117,10 +149,10 @@ describe('캘린더의 참여 인원', () => {
     expect(eventDots(html)).toEqual(['#FFB800', '#12B76A']);
   });
 
-  // 알약은 일정당 하나라 점도 하나 — 대표는 크루 차례 첫 사람이다(등록자가 아니다)
-  it('데스크톱 알약의 점은 대표 참여자 색이다', () => {
+  // 등록자가 아니라 참여자다 — 경진이 등록해 준 시험이라도 점은 치는 사람들에게 찍힌다
+  it('등록자는 참여자가 아니면 점을 받지 않는다', () => {
     const html = view({ events: [event({ id: 'a', day: TODAY, m: 'kj', participants: ['wg', 'th'] })] });
-    expect(html).toContain('class="cal-pill-dot" style="background:#12B76A"');
+    expect(eventDots(html)).toEqual(['#12B76A', '#2E90FA']);
   });
 
   it('선택일 패널 행은 아바타 스택과 이름 요약으로 참여자를 말한다', () => {
