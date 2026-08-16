@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import type { Comment, CrewEvent, Entry, MemberId, ReactionSet } from '../../shared/types';
 import { entryTags, primaryTag } from '../../shared/types';
 import {
@@ -23,10 +22,11 @@ const MAX_PILLS = 3;
     선행 공백(최대 6) + 날짜(최대 31)는 37칸이라 항상 이 안에 들어온다. */
 const CELLS = 42;
 
-/** 좁은 화면 머리에 붙는 크루 이름 배지 — 상단 바가 없는 셸이라 여기가 "어디를 보고 있나"의 유일한 자리다. */
+/** 머리에 붙는 크루 이름 배지 — 좁은 셸에는 상단 바가 없어 여기가 "어디를 보고 있나"의
+    유일한 자리이고, 와이드에서는 같은 문법을 캘린더 머리에도 한 번 더 세운다(디자인). */
 const CREW_NAME = '러닝 크루';
 
-/** 멤버 필터(모바일 전용) — null이면 전체.
+/** 멤버 필터 — null이면 전체.
     기록은 쓴 사람으로, 일정은 참여자로 가른다: 남이 등록해 준 시험도 내가 치는 것이면
     내 달력에 남아야 한다(등록자로 거르면 그 날이 통째로 사라진다). */
 export function entriesOfMember(entries: readonly Entry[], m: MemberId | null): Entry[] {
@@ -48,6 +48,19 @@ export function headActionOrder(desktop: boolean): HeadAction[] {
   return desktop ? ['event', 'today'] : ['today', 'event'];
 }
 
+/** 와이드 오른쪽 열 맨 위에 서는 일정 하나 — 고른 날에 일정이 있으면 그 날의 첫 일정이고,
+    없으면 다가오는 다음 일정이다(라벨이 둘을 가른다). 둘 다 없으면 카드를 세우지 않는다:
+    빈 카드는 선택일 목록을 아래로 밀기만 한다.
+    "이 날"이 "다가오는"보다 먼저인 이유: 사용자가 방금 고른 날이 화면의 주제다. */
+export function topEventOf(
+  selEvents: readonly CrewEvent[],
+  upcoming: CrewEvent | null,
+): { ev: CrewEvent; label: string } | null {
+  const onDay = selEvents[0];
+  if (onDay) return { ev: onDay, label: '이 날의 일정' };
+  return upcoming ? { ev: upcoming, label: '다가오는 일정' } : null;
+}
+
 /** 이 달에 걸린 일정 수 — 기간 일정은 달을 걸치기만 해도 이 달의 일정이다.
     필터와 무관하게 늘 전체다(머리의 메타는 "이 달에 무엇이 있나"를 말한다). */
 function monthEventCount(events: readonly CrewEvent[], monthPrefix: string, daysIn: number): number {
@@ -57,13 +70,17 @@ function monthEventCount(events: readonly CrewEvent[], monthPrefix: string, days
 }
 
 export function CalendarView({
-  entries, events, selDay, setSelDay, todayKey, meId, editingId, comments, reactions, photoUploads,
-  wit, actions, onOpenEventSheet, onOpenCompose, onDeleteEvent,
+  entries, events, selDay, setSelDay, filterM, setFilterM, todayKey, meId, editingId, comments,
+  reactions, photoUploads, wit, actions, onOpenEventSheet, onOpenCompose, onDeleteEvent,
 }: {
   entries: Entry[];
   events: CrewEvent[];
   selDay: string;
   setSelDay: (k: string) => void;
+  /** 멤버 필터 — null이면 전체. 셸이 갈리면 이 컴포넌트가 통째로 다시 마운트되므로 App이 든다
+      (여기 로컬 state로 두면 900px 경계를 넘는 순간 고른 사람이 '전체'로 돌아간다) */
+  filterM: MemberId | null;
+  setFilterM: (m: MemberId | null) => void;
   todayKey: string;
   meId: MemberId;
   editingId: string | null;
@@ -79,16 +96,12 @@ export function CalendarView({
   /** 삭제는 확인을 거친다 — 물음과 토스트는 App이 맡는다(기록 삭제와 같은 규칙) */
   onDeleteEvent: (ev: CrewEvent) => void;
 }) {
-  /* 좁은 화면은 풀블리드 미니멀 격자(멤버 필터·D-day 배너·작성 메뉴)로 갈리고, 데스크톱은
-     알약이 들어가는 격자 + 우측 선택일 열 그대로다. 옷 차이는 CSS가 맡지만 여기 갈림은
-     "무엇을 그리는가"라 렌더 중에 알아야 한다(알림 셸을 가르는 useIsDesktop과 같은 이유). */
+  /* 좁은 화면은 풀블리드 미니멀 격자(점 + D-day 배너)로, 와이드는 알약이 들어가는 큰 셀 +
+     우측 선택일 열로 갈린다. 옷 차이는 CSS가 맡지만 여기 갈림은 "무엇을 그리는가"라
+     렌더 중에 알아야 한다(알림 셸을 가르는 useIsDesktop과 같은 이유). */
   const desktop = useIsDesktop();
-  /* 멤버 필터 — 컴포넌트 로컬이다(저장하지 않는다). 데스크톱에는 칩 자체가 없으므로 필터도
-     끈다: 좁은 화면에서 한 사람만 켠 채 폭이 넓어지면 되돌릴 입구 없이 격자가 비어 보인다. */
-  const [filterM, setFilterM] = useState<MemberId | null>(null);
-  const filter = desktop ? null : filterM;
-  const shownEntries = entriesOfMember(entries, filter);
-  const shownEvents = eventsOfMember(events, filter);
+  const shownEntries = entriesOfMember(entries, filterM);
+  const shownEvents = eventsOfMember(events, filterM);
 
   const now = new Date();
   // 달 이동이 선택일도 함께 옮기는 지금은 선택일이 화면 달의 단일 원본이다. calOff를 별도
@@ -115,8 +128,6 @@ export function CalendarView({
   }
   // 기간 일정은 걸친 모든 날에 들어간다 — 시작일에만 찍으면 시험 기간이 하루로 읽힌다
   const evByDay = eventsByDay(shownEvents);
-  // 이 달에 걸린 일정이 하나도 없으면 범례를 그리지 않는다 — 없는 것을 설명할 이유가 없다
-  const monthHasEvent = [...evByDay.keys()].some((k) => k.startsWith(monthPrefix));
 
   const cells = [];
   for (let i = 0; i < lead; i++) {
@@ -197,8 +208,9 @@ export function CalendarView({
   const selEvents = evByDay.get(selDay) ?? [];
   const selMembers = membersOfEntries(selList); // 헤더 아바타도 같은 규칙 — 아래 카드와 인원이 맞아야 한다
   const selD = new Date(selDay + 'T12:00:00');
-  // 배너도 필터를 탄다 — '웅'만 켠 화면이 태현의 시험을 D-2로 알리면 필터가 거짓말이 된다
+  // 배너·카드도 필터를 탄다 — '웅'만 켠 화면이 태현의 시험을 D-2로 알리면 필터가 거짓말이 된다
   const nextEvent = upcomingEvent(shownEvents, todayKey);
+  const topEvent = topEventOf(selEvents, nextEvent);
 
   return (
     <div>
@@ -206,14 +218,11 @@ export function CalendarView({
         <div className="cal-head-text">
           <div className="cal-title-row">
             <div className="cal-title">{calBase.getFullYear()}년 {calBase.getMonth() + 1}월</div>
-            {/* 상단 바가 없는 셸이라 크루 이름이 설 자리가 여기뿐이다 — 데스크톱은 상단 바가 맡는다 */}
-            {!desktop && <span className="cal-crew-badge">{CREW_NAME}</span>}
+            <span className="cal-crew-badge">{CREW_NAME}</span>
           </div>
           <div className="cal-meta">
-            기록 {monthCount}개
-            {/* 좁은 화면은 일정 수를 함께 센다 — 격자의 네모가 몇 개인지 미리 말해 준다.
-                크루 수는 반대로 좁은 화면에서 접는다(모바일 머리는 두 줄이라 더 길어지면 안 된다) */}
-            {!desktop && ` · 일정 ${monthEvents}개`}
+            기록 {monthCount}개 · 일정 {monthEvents}개
+            {/* 크루 수만 좁은 화면에서 접는다 — 모바일 머리는 두 줄이라 더 길어지면 안 된다 */}
             <span className="cal-meta-crew"> · 크루 {MEMBERS.length}명</span>
           </div>
         </div>
@@ -250,24 +259,23 @@ export function CalendarView({
       {/* 와이드에서만 격자|패널 2열 — 좁은 화면은 격자 아래로 흐른다 (CSS) */}
       <div className="cal-layout">
         <div className="cal-grid-col">
-          {/* 좁은 화면 전용 — 크루 다섯 명의 점·기록·일정이 한 격자에 겹치면 내 것을 찾기가 어렵다.
-              고른 사람은 격자 점·선택일 목록·아래 배너까지 함께 따라간다(머리의 수만 전체 그대로). */}
-          {!desktop && (
-            <div className="cal-filter" role="group" aria-label="멤버 필터">
-              <button className={'cal-filter-chip' + (filterM === null ? ' on' : '')}
-                aria-pressed={filterM === null} onClick={() => setFilterM(null)}>
-                전체
+          {/* 크루 다섯 명의 점·알약이 한 격자에 겹치면 내 것을 찾기가 어렵다. 고른 사람은
+              격자·선택일 목록·위 카드(배너)까지 함께 따라간다(머리의 수만 전체 그대로).
+              두 셸이 같은 줄을 쓰고 상태는 App이 든다 — 폭이 바뀌어도 고른 사람이 그대로 남는다. */}
+          <div className="cal-filter" role="group" aria-label="멤버 필터">
+            <button className={'cal-filter-chip' + (filterM === null ? ' on' : '')}
+              aria-pressed={filterM === null} onClick={() => setFilterM(null)}>
+              전체
+            </button>
+            {MEMBERS.map((m) => (
+              // 켜도 점은 그 사람의 색 그대로다 — 검은 알약 위에서도 누구인지가 색으로 먼저 읽힌다
+              <button key={m.id} className={'cal-filter-chip' + (filterM === m.id ? ' on' : '')}
+                aria-pressed={filterM === m.id} onClick={() => setFilterM(m.id)}>
+                <span className="cal-filter-dot" style={{ background: m.color }} />
+                {m.name}
               </button>
-              {MEMBERS.map((m) => (
-                // 켜도 점은 그 사람의 색 그대로다 — 검은 알약 위에서도 누구인지가 색으로 먼저 읽힌다
-                <button key={m.id} className={'cal-filter-chip' + (filterM === m.id ? ' on' : '')}
-                  aria-pressed={filterM === m.id} onClick={() => setFilterM(m.id)}>
-                  <span className="cal-filter-dot" style={{ background: m.color }} />
-                  {m.name}
-                </button>
-              ))}
-            </div>
-          )}
+            ))}
+          </div>
           {/* 다가오는 일정 하나 — 홈 배너(CrewPanel)와 같은 말이지만 이쪽은 필터를 탄다.
               남은 일정이 없으면 접는다: 빈 카드는 격자 위 자리만 먹는다. */}
           {!desktop && nextEvent && (
@@ -291,20 +299,49 @@ export function CalendarView({
           </div>
           <div className="cal-grid">{cells}</div>
           {/* 모양이 곧 뜻이다 — 동그라미는 기록, 네모는 일정. 격자에는 글자가 들어갈 자리가 없다.
-              좁은 화면에서는 늘 선다(디자인): 이 줄의 밑선이 격자와 선택일 섹션을 가르는 구분선이라
-              일정 없는 달에 통째로 접으면 안내와 함께 그 선까지 사라진다. 와이드는 옛 규칙 그대로 —
-              일정이 하나도 없는 달에 없는 것을 설명할 이유가 없다. */}
-          {(!desktop || monthHasEvent) && (
-            <div className="cal-legend">
-              <span className="cal-legend-key"><span className="cal-legend-dot" />기록</span>
-              <span className="cal-legend-key"><span className="cal-legend-dot ev" />일정</span>
-              <span className="spacer" />
-              {/* 손가락과 마우스는 다른 말을 쓴다 — 같은 안내라도 셸마다 제 동사로 말한다 */}
-              <span className="cal-legend-hint">{desktop ? '눌러서 그 날 보기' : '터치하여 상세 보기'}</span>
-            </div>
-          )}
+              두 셸 모두 늘 선다: 이 줄의 밑선이 격자와 그 아래를 가르는 구분선이라, 일정 없는
+              달에 통째로 접으면 안내와 함께 그 선까지 사라진다. */}
+          <div className="cal-legend">
+            <span className="cal-legend-key"><span className="cal-legend-dot" />기록</span>
+            <span className="cal-legend-key"><span className="cal-legend-dot ev" />일정</span>
+            <span className="spacer" />
+            {/* 손가락과 마우스는 다른 말을 쓴다 — 같은 안내라도 셸마다 제 동사로 말한다 */}
+            <span className="cal-legend-hint">{desktop ? '날짜를 눌러 상세 보기' : '터치하여 상세 보기'}</span>
+          </div>
         </div>
         <div className="cal-sel">
+          {/* 와이드 전용 — 오른쪽 열의 첫 자리는 "언제까지 얼마나 남았나"가 가져간다.
+              좁은 화면에서 격자 위에 서는 D-day 배너와 같은 말이되, 열이 넓어 숫자를 크게 세우고
+              참여자·태그·메모까지 편다(디자인). 노드 자체를 와이드에서만 그리므로 이 스타일에는
+              미디어 쿼리가 없다 — 모바일 전용 노드와 같은 규약이다. */}
+          {desktop && topEvent && (
+            <>
+              <div className="cal-top-label">
+                <span>{topEvent.label}</span>
+                <span className="cal-top-rule" aria-hidden="true" />
+              </div>
+              <button className={'cal-top-card ' + eventPhase(topEvent.ev, todayKey)}
+                onClick={() => setSelDay(topEvent.ev.day)}>
+                <span className="cal-top-head">
+                  <span className="cal-top-dday">{eventDdayLabel(topEvent.ev, todayKey)}</span>
+                  <span className="cal-top-when">
+                    {eventWhenLabel(topEvent.ev.day, topEvent.ev.endDay)}
+                  </span>
+                </span>
+                <span className="cal-top-title">{topEvent.ev.title}</span>
+                <span className="cal-top-by">
+                  <span className="sel-event-avatars">
+                    {eventMembers(topEvent.ev).map((m) => (
+                      <Avatar key={m.id} m={m} size={20} className="sel-av" bg={m.soft} />
+                    ))}
+                  </span>
+                  <span className="cal-top-names">{participantsLabel(eventMembers(topEvent.ev))}</span>
+                  <Chip tag={topEvent.ev.tag} variant="sm2" />
+                </span>
+                {topEvent.ev.memo && <span className="cal-top-memo">{topEvent.ev.memo}</span>}
+              </button>
+            </>
+          )}
           <div className="sel-head">
             <span className="sel-label">{selD.getMonth() + 1}월 {selD.getDate()}일 ({W[selD.getDay()]})</span>
             <span className="sel-count">
@@ -317,13 +354,9 @@ export function CalendarView({
                 <Avatar key={m.id} m={m} size={22} className="sel-av" bg={m.soft} />
               ))}
             </span>
-            {/* 데스크톱은 일정 하나로 곧장 간다(기록은 상단 바 CTA가 늘 떠 있다). 좁은 화면에는
-                그런 상시 입구가 없어서, 고른 날에 무엇을 남길지부터 묻고 둘 다 그 날로 채운다. */}
-            {desktop ? (
-              <button className="sel-event-add" onClick={() => onOpenEventSheet(selDay)}>+ 일정 등록</button>
-            ) : (
-              <button className="sel-compose" onClick={() => onOpenCompose(selDay)}>+ 작성하기</button>
-            )}
+            {/* 고른 날에 무엇을 남길지부터 묻고 기록·일정 둘 다 그 날로 채운다 — 두 셸이 같은
+                입구를 쓴다. 머리의 "일정 등록" 알약은 오늘로 여는 다른 길이라 그대로 남는다. */}
+            <button className="sel-compose" onClick={() => onOpenCompose(selDay)}>+ 작성하기</button>
           </div>
           {/* 일정이 기록 위에 선다 — 앞으로 할 일이 지난 하루의 요약보다 먼저 눈에 들어와야 한다 */}
           {selEvents.length > 0 && (

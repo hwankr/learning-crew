@@ -3,9 +3,11 @@
    나눠 쓰지 않으면 그 날의 약속이 "+N개 더" 뒤로 숨는다. */
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import type { CrewEvent, Entry } from '../../shared/types';
+import type { CrewEvent, Entry, MemberId } from '../../shared/types';
 import { COPY } from '../lib/constants';
-import { CalendarView, entriesOfMember, eventsOfMember, headActionOrder } from './CalendarView';
+import {
+  CalendarView, entriesOfMember, eventsOfMember, headActionOrder, topEventOf,
+} from './CalendarView';
 import { ComposeMenu } from './ComposeMenu';
 
 const TODAY = '2026-08-16';
@@ -26,11 +28,15 @@ function event(p: Partial<CrewEvent> & Pick<CrewEvent, 'id' | 'day'>): CrewEvent
 }
 
 /* 정적 마크업은 늘 좁은 화면이다(useIsDesktop의 서버 스냅샷 = false) — 이 파일이 보는 것은
-   모바일 셸의 캘린더다. 데스크톱에만 서는 노드(선택일 열의 "+ 일정 등록")는 여기 없다. */
-function view(opts: { entries?: Entry[]; events?: CrewEvent[]; selDay?: string }): string {
+   모바일 셸의 캘린더다. 데스크톱에만 서는 노드(오른쪽 열의 일정 카드)는 여기 없다.
+   멤버 필터는 App이 드는 상태라 여기서는 값을 그대로 넣어 준다(기본은 전체 = null). */
+function view(opts: {
+  entries?: Entry[]; events?: CrewEvent[]; selDay?: string; filterM?: MemberId | null;
+}): string {
   return renderToStaticMarkup(
     <CalendarView entries={opts.entries ?? []} events={opts.events ?? []}
-      selDay={opts.selDay ?? TODAY} setSelDay={() => {}} todayKey={TODAY} meId="sh"
+      selDay={opts.selDay ?? TODAY} setSelDay={() => {}}
+      filterM={opts.filterM ?? null} setFilterM={() => {}} todayKey={TODAY} meId="sh"
       editingId={null} comments={new Map()} reactions={new Map()} photoUploads={new Map()}
       wit={COPY} actions={{} as never}
       onOpenEventSheet={() => {}} onOpenCompose={() => {}} onDeleteEvent={() => {}} />,
@@ -168,6 +174,15 @@ describe('캘린더의 멤버 필터', () => {
     // 켜진 칩은 하나뿐 — 처음 상태에서 사람 칩이 켜져 있으면 격자가 이미 걸러져 있다
     expect(html.split('cal-filter-chip on').length - 1).toBe(1);
   });
+
+  /* 필터 값은 App이 들고 내려 준다(셸이 갈려도 살아남게) — 내려온 값이 격자에 그대로 닿는지.
+     시드 기록은 웅(#12B76A)의 것이라, 승환만 켜면 그 날의 점이 사라져야 한다. */
+  it('내려받은 필터 값이 격자 점에 그대로 적용된다', () => {
+    const wgDot = 'class="cal-day-dot" style="background:#12B76A"';
+    expect(view({ entries: [entry('e1', TODAY)] })).toContain(wgDot);
+    expect(view({ entries: [entry('e1', TODAY)], filterM: 'sh' })).not.toContain(wgDot);
+    expect(view({ entries: [entry('e1', TODAY)], filterM: 'wg' })).toContain(wgDot);
+  });
 });
 
 /* 좁은 화면의 머리·배너·작성 입구 — 이미지 기준 리디자인.
@@ -223,8 +238,8 @@ describe('모바일 캘린더의 머리와 배너', () => {
   });
 });
 
-describe('모바일 선택일 섹션', () => {
-  it('선택일 머리의 입구는 "+ 작성하기"다(데스크톱의 일정 등록이 아니다)', () => {
+describe('선택일 섹션', () => {
+  it('선택일 머리의 입구는 두 셸 모두 "+ 작성하기"다', () => {
     const html = view({});
     expect(html).toContain('sel-compose');
     expect(html).toContain('+ 작성하기');
@@ -240,6 +255,26 @@ describe('모바일 선택일 섹션', () => {
     const html = view({ events: [event({ id: 'a', day: TODAY })] });
     expect(html).not.toContain(COPY.calEmptyDay);
     expect(html).toContain('기록 0개 · 일정 1개');
+  });
+});
+
+/* 와이드 오른쪽 열 맨 위의 일정 카드 — 무엇을 세울지 고르는 규칙만 순수 함수로 검사한다
+   (정적 마크업은 늘 좁은 화면이라 카드 자체는 여기서 렌더되지 않는다). */
+describe('오른쪽 열의 일정 카드', () => {
+  const onDay = event({ id: 'a', day: TODAY, title: '면접' });
+  const next = event({ id: 'b', day: '2026-08-18' });
+
+  it('고른 날에 일정이 있으면 그 날의 첫 일정이 선다', () => {
+    expect(topEventOf([onDay], next)).toEqual({ ev: onDay, label: '이 날의 일정' });
+  });
+
+  it('고른 날이 비었으면 다가오는 일정이 대신 선다', () => {
+    expect(topEventOf([], next)).toEqual({ ev: next, label: '다가오는 일정' });
+  });
+
+  // 빈 카드는 선택일 목록을 아래로 밀기만 한다
+  it('둘 다 없으면 카드를 세우지 않는다', () => {
+    expect(topEventOf([], null)).toBeNull();
   });
 });
 

@@ -854,6 +854,45 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 .cal-layout { display: block; }
 .cal-grid-col { min-width: 0; }
 .cal-sel { min-width: 0; margin-top: 26px; min-height: 220px; }
+
+/* 오른쪽 열 맨 위의 일정 카드 — 와이드에서만 그리는 노드라(조건 렌더) 여기에는 미디어
+   쿼리가 없다. 좁은 화면의 D-day 배너와 같은 말이지만, 열이 넓어 남은 날 수를 크게 세우고
+   참여자·태그·메모까지 편다. */
+.cal-top-label { display: flex; align-items: center; gap: 8px; margin: 0 0 9px; }
+.cal-top-label > span:first-child {
+  flex: none; font-size: 11.5px; font-weight: 800; color: #9AA1AD; letter-spacing: 0.04em;
+}
+.cal-top-rule { flex: 1; height: 1px; background: #F1F3F6; }
+.cal-top-card {
+  display: block; width: 100%; margin: 0 0 22px; padding: 16px 18px; text-align: left;
+  border: 1.5px solid #E4E7EC; border-radius: 16px; background: #FFFFFF; cursor: pointer;
+  transition: border-color 120ms, box-shadow 120ms;
+}
+/* 임박한 일정만 노란 옷을 입는다 — 셀 알약·홈 배너와 같은 규칙(진행 중인 기간 일정도 여기 든다) */
+.cal-top-card.near { background: #FFF9E6; border-color: #FFD666; }
+.cal-top-card:hover { box-shadow: 0 2px 10px rgba(22, 24, 29, 0.06); }
+.cal-top-head { display: flex; align-items: baseline; gap: 10px; }
+.cal-top-dday {
+  font-size: 34px; font-weight: 800; letter-spacing: -0.03em; line-height: 1; color: #16181D;
+}
+.cal-top-card.near .cal-top-dday { color: #B37F00; }
+.cal-top-card.past .cal-top-dday { color: #9AA1AD; }
+.cal-top-when { font-size: 12px; font-weight: 700; color: #9AA1AD; white-space: nowrap; }
+.cal-top-title {
+  display: block; font-size: 16px; font-weight: 800; letter-spacing: -0.015em; color: #16181D;
+  margin-top: 9px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+.cal-top-by { display: flex; align-items: center; gap: 7px; margin-top: 8px; min-width: 0; }
+.cal-top-names {
+  font-size: 12px; font-weight: 700; color: #6B7280;
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+.cal-top-by .chip { flex: none; }
+/* 메모는 두 줄까지 — 긴 메모가 카드를 늘려 선택일 목록을 화면 밖으로 밀지 않게 한다 */
+.cal-top-memo {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden;
+  font-size: 12.5px; color: #4E555F; margin-top: 8px; line-height: 1.55;
+}
 /* 아바타는 최대 인원까지 늘어난다 — flex:none인 라벨과 부딪히면 줄을 바꿔 받는다(말줄임 대신) */
 .sel-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; row-gap: 6px; margin: 0 0 2px; }
 .sel-label { font-size: 14px; font-weight: 800; color: #16181D; flex: none; white-space: nowrap; }
@@ -861,14 +900,7 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 .sel-avatars { display: flex; flex: none; }
 .sel-av { display: block; flex: none; border-radius: 50%; border: 2px solid #FFFFFF; }
 .sel-av + .sel-av { margin-left: -7px; }
-/* 아바타 뒤에 붙는 등록 입구 — 그 날을 보고 있을 때 일정을 더하는 가장 짧은 길 */
-.sel-event-add {
-  flex: none; border: none; background: none; padding: 0; cursor: pointer;
-  font-size: 12px; font-weight: 700; color: #B37F00; white-space: nowrap;
-}
-.sel-event-add:hover { color: #8F6600; }
-/* 좁은 화면의 입구 — 기록이냐 일정이냐를 먼저 묻는다(좁은 셸에는 상시 CTA가 없다).
-   일정 등록 입구와 같은 옷을 입되 글자만 한 단계 크다: 이 줄에서 유일하게 누르는 자리다. */
+/* 아바타 뒤에 붙는 입구 — 기록이냐 일정이냐를 먼저 묻고 고른 날로 채운다(두 셸 공용) */
 .sel-compose {
   flex: none; border: none; background: none; padding: 0; cursor: pointer;
   font-size: 13px; font-weight: 700; color: #B37F00; white-space: nowrap;
@@ -1750,7 +1782,15 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
   .cal-num { margin: 0 auto 2px; }
   .cal-pills { display: flex; }
   .cal-day-dots { display: none; }
-  .cal-layout { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 32px; align-items: start; }
+  /* 필터 칩은 손가락이 아니라 마우스가 겨눈다 — 좁은 화면에서 375px 한 줄에 맞춰 깎았던
+     치수를 여기서는 한 단계 되돌린다(격자 위 한 줄인 것은 같다) */
+  .cal-filter { gap: 6px; margin-bottom: 16px; }
+  .cal-filter-chip { height: 30px; padding: 0 12px; gap: 5px; font-size: 12px; }
+  .cal-filter-dot { width: 6px; height: 6px; }
+  /* 격자 아래 범례도 한 단계 크게 — 옆 열의 잔글씨(12px)와 같은 급으로 읽힌다 */
+  .cal-legend { margin-top: 14px; padding: 9px 2px; }
+  .cal-legend-key, .cal-legend-hint { font-size: 11.5px; }
+  .cal-layout { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 32px; align-items: start; }
   /* 격자를 훑는 동안 선택일이 따라 붙는다. 상단 바가 sticky라 그 아래(65px)부터 24px 띄운다 —
      디자인의 top:24는 자체 스크롤 프레임 기준이라 그대로 쓰면 바 뒤로 들어간다. */
   .cal-sel { position: sticky; top: 89px; margin-top: 0; min-height: 520px; }
@@ -1766,9 +1806,12 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
   .photo-drop { width: 20px; height: 20px; }
 }
 
-/* 900px 셸에서 크루 패널까지 열면 고정 340px 선택일 열이 격자를 108px까지 누른다.
-   본문이 다시 넉넉해질 때까지 선택일만 아래로 받아, 데스크톱 셀·알약은 그대로 유지한다. */
+/* 900px 셸에서 크루 패널까지 열면 고정 선택일 열이 격자를 100px 남짓까지 누른다.
+   본문이 다시 넉넉해질 때까지 선택일만 아래로 받아, 데스크톱 셀·알약은 그대로 유지한다.
+   패널을 닫은 상태에서도 이 구간에서는 열을 디자인 폭(380px) 대신 340px로 둔다 —
+   40px이 통째로 격자에서 빠지면 셀 하나가 6px씩 좁아져 알약 라벨이 먼저 잘린다. */
 @media (min-width: 900px) and (max-width: 1399px) {
+  .cal-layout { grid-template-columns: minmax(0, 1fr) 340px; }
   .body.open .cal-layout { display: block; }
   .body.open .cal-sel { position: static; margin-top: 26px; min-height: 220px; }
 }

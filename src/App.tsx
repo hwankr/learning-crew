@@ -6,7 +6,9 @@ import {
   useState,
   useSyncExternalStore,
 } from 'react';
-import type { CrewEvent, Entry, EntryPhoto, Post, ReactionEmoji, Tag, Todo } from '../shared/types';
+import type {
+  CrewEvent, Entry, EntryPhoto, MemberId, Post, ReactionEmoji, Tag, Todo,
+} from '../shared/types';
 import {
   ENTRY_PHOTO_LIMIT,
   PUSH_LIMITS,
@@ -277,6 +279,10 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
   const closeNoti = useCallback(() => setNotiOpen(false), []);
   const [panelOpen, setPanelOpen] = useState(ui.panelOpen ?? false);
   const [selDay, setSelDay] = useState<string | null>(ui.selDay ?? null);
+  /* 캘린더의 멤버 필터 — 셸(넓은/좁은)이 갈릴 때 CalendarView는 통째로 다시 마운트되므로,
+     고른 사람이 폭 하나 바뀌었다고 '전체'로 돌아가지 않게 여기서 든다(선택일과 같은 자리).
+     보던 탭·날짜와 달리 저장(saveUi)은 하지 않는다 — 새로고침이면 전체로 시작하는 게 자연스럽다. */
+  const [calFilter, setCalFilter] = useState<MemberId | null>(null);
   const [modal, setModal] = useState<ModalState>(EMPTY_MODAL);
   // 삭제 확인 대기 중인 기록 — 스냅샷에서 다시 찾으므로, 그 사이 다른 기기에서
   // 지워졌다면 물음도 함께 사라진다(이미 없는 걸 두고 물을 이유가 없다)
@@ -812,7 +818,7 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
   const calScreen = (
     <>
       <CalendarView entries={entries} events={snap.events} selDay={selDay ?? todayKey}
-        setSelDay={setSelDay} todayKey={todayKey}
+        setSelDay={setSelDay} filterM={calFilter} setFilterM={setCalFilter} todayKey={todayKey}
         meId={me.id} editingId={modal.editingId} comments={snap.comments}
         reactions={snap.reactions} photoUploads={snap.photoUploads} wit={wit} actions={actions}
         onOpenEventSheet={setEventSheetDay} onOpenCompose={setComposeDay}
