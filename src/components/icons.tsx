@@ -1,4 +1,4 @@
-import type { CSSProperties } from 'react';
+import { useRef, useState, type CSSProperties } from 'react';
 import type { Member } from '../lib/constants';
 
 export const STAR_D =
@@ -127,5 +127,35 @@ export function Avatar({
       <path d="M20.5 31.5c1 1.2 2.2 1.8 3.5 1.8s2.5-.6 3.5-1.8" stroke="#23262E" strokeWidth={1.6}
         fill="none" strokeLinecap="round" />
     </svg>
+  );
+}
+
+/** 워드마크 — "러닝" + 노란 네모를 입은 "크루". 네모는 뒤에 깔린 한 장의 배경이라
+    hover에서 두 단어 사이를 왕복한다(러닝 크루가 달린다). 치수가 전부 em이라 톱바(18px)·
+    모바일 홈(21px)·로그인(25px)에서 글자 크기를 그대로 따른다.
+    모션을 CSS :hover에 직접 걸지 않는 이유: 왕복 도중 마우스가 떠나면 애니메이션이
+    그 자리에서 뜯겨 네모가 제자리로 순간이동한다. 대신 상태로 걸고, 떠난 뒤에도
+    돌던 바퀴는 끝까지 돌게 두었다가 바퀴 경계(네모가 제자리인 순간)에서 멈춘다.
+    낭독기에는 "러닝 크루"로 읽힌다 — 단어 span 분리가 낭독을 가르지 않게 컨테이너가
+    이름을 들고 안쪽은 장식으로 접는다. */
+export function Wordmark() {
+  const [run, setRun] = useState(false);
+  const leaving = useRef(false);
+  return (
+    <span className={'brand' + (run ? ' run' : '')} role="img" aria-label="러닝 크루"
+      onMouseEnter={() => {
+        leaving.current = false;
+        setRun(true);
+      }}
+      onMouseLeave={() => {
+        leaving.current = true;
+      }}>
+      <span className="brand-box" aria-hidden="true"
+        onAnimationIteration={() => {
+          if (leaving.current) setRun(false);
+        }} />
+      <span className="brand-word" aria-hidden="true">러닝</span>
+      <span className="brand-word" aria-hidden="true">크루</span>
+    </span>
   );
 }

@@ -5,7 +5,7 @@ import type { ReactNode, RefObject } from 'react';
 import type { SyncInfo } from '../local/store';
 import type { CopySet, Member } from '../lib/constants';
 import type { DesktopView } from '../lib/uiState';
-import { Avatar, BELL_D, Icon, PENCIL_D } from './icons';
+import { Avatar, BELL_D, Icon, PENCIL_D, Wordmark } from './icons';
 import { SyncStatus } from './SyncStatus';
 
 /* 화살표는 "누르면 어느 쪽으로 움직이나"를 가리킨다 — 접혀 있으면 오른쪽(열림), 펴져 있으면 왼쪽. */
@@ -42,7 +42,11 @@ export function TopBar({
           <Icon d={panelOpen ? PANEL_OPEN_D : PANEL_SHUT_D} size={15} sw={2.4} />
           <span>크루</span>
         </button>
-        <div className="wordmark">러닝 크루 👟</div>
+        {/* 로고가 곧 홈 버튼 — 어디에 있든(캘린더·알림 설정) 피드로 돌아온다.
+            onView가 알림 드롭다운·설정 닫기까지 맡고 있어 그대로 태운다. */}
+        <button className="wordmark" aria-label="홈으로" onClick={() => onView('feed')}>
+          <Wordmark />
+        </button>
         <div className="seg">
           <button className={'seg-btn' + (view === 'feed' ? ' on' : '')} data-label="피드"
             aria-pressed={view === 'feed'} onClick={() => onView('feed')}>

@@ -44,7 +44,36 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 .panel-btn:hover { background: #F1F3F6; }
 /* 테두리 폭은 투명으로 남긴다 — 토글할 때 뒤 요소가 2px씩 흔들리지 않게 하기 위해서다 */
 .panel-btn.on { border-color: transparent; background: transparent; color: #6B7280; }
-.wordmark { font-size: 18px; font-weight: 800; letter-spacing: -0.02em; white-space: nowrap; flex: none; }
+/* 로고는 버튼이다(홈으로) — 버튼 기본 옷만 벗기고 글자 속성은 그대로 세운다 */
+.wordmark {
+  font-size: 18px; font-weight: 800; letter-spacing: -0.02em; white-space: nowrap; flex: none;
+  border: none; background: none; padding: 0; color: inherit; font-family: inherit; cursor: pointer;
+}
+/* 워드마크 — "러닝" + 노란 네모(라운드 사각, 태그 칩과 같은 문법)를 입은 "크루".
+   두 단어가 똑같이 두 글자(한글은 고정폭에 가깝다)라 "왼쪽 반 / 오른쪽 반" 기하가
+   성립한다: 네모는 오른쪽 반에 깔린 배경 한 장이고, hover하면 왼쪽 반으로 갔다 돌아오기를
+   반복한다 — 러닝 크루가 달린다.
+   검은 글자는 노랑 위에서도 흰 바탕 위에서도 읽히므로 글자색은 바꾸지 않는다. */
+.brand { position: relative; display: inline-flex; align-items: center; }
+.brand-word { position: relative; padding: 0.08em 0.26em 0.12em; }
+.brand-box {
+  position: absolute; top: 0; bottom: 0; left: 50%; width: 50%;
+  background: #FFB800; border-radius: 0.3em;
+}
+/* 왕복은 느긋하게 — 건너가서 잠깐 머물고 돌아와 다시 머문다(양 끝 dwell).
+   쉼 없이 오가면 로고가 조급해 보인다. :hover가 아니라 .run(상태)인 이유는
+   Wordmark 주석에 — 마우스가 떠나도 돌던 바퀴는 끝까지 돌고 경계에서 멈춘다. */
+.brand.run .brand-box {
+  animation: brand-shuttle 2.8s cubic-bezier(0.65, 0, 0.35, 1) infinite;
+}
+@keyframes brand-shuttle {
+  0%, 14% { transform: translateX(0); }
+  42%, 62% { transform: translateX(-100%); }
+  90%, 100% { transform: translateX(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .brand.run .brand-box { animation: none; }
+}
 /* 프로토타입은 워드마크와 세그먼트 사이만 기본 gap보다 6px 더 벌린다. */
 /* 디자인 원본(라운지.dc.html)의 상단 내비 — 회색 컨테이너 대신 투명 배경,
    활성 탭은 라벨 아래 노란 밑줄(2.5px #FFB800)이 말한다. */

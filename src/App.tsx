@@ -46,6 +46,7 @@ import {
 } from './lib/uiState';
 import { useIsDesktop } from './lib/useMediaQuery';
 import { useOverlayHistory } from './lib/useOverlayHistory';
+import { Wordmark } from './components/icons';
 import { TopBar } from './components/TopBar';
 import { TabBar } from './components/TabBar';
 import { Fab } from './components/Fab';
@@ -918,7 +919,7 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
             {mtab === 'home' ? (
               <>
                 <div className="mhome-head">
-                  <div className="mhome-title">러닝 크루 👟</div>
+                  <div className="mhome-title"><Wordmark /></div>
                   <div className="mhome-sub">
                     {now.getMonth() + 1}월 {now.getDate()}일 {W[now.getDay()]}요일 · {wit.greeting}
                   </div>
