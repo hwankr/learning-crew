@@ -49,6 +49,7 @@ import { Fab } from './components/Fab';
 import { CrewPanel } from './components/CrewPanel';
 import { Feed } from './components/Feed';
 import { CalendarView } from './components/CalendarView';
+import { ComposeMenu } from './components/ComposeMenu';
 import { NotiPage } from './components/NotiPage';
 import { NotiDropdown } from './components/NotiDropdown';
 import { NotiSettings } from './components/NotiSettings';
@@ -294,6 +295,9 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
      삭제 확인은 기록과 같은 규칙: id로 들고 있어 그 사이 다른 기기에서 지워지면 물음도 닫힌다. */
   const [eventSheetDay, setEventSheetDay] = useState<string | null>(null);
   const [eventDelId, setEventDelId] = useState<string | null>(null);
+  /* 캘린더의 "+ 작성하기" 메뉴 — 열린 날짜 하나가 곧 상태다(일정 시트와 같은 규칙).
+     고른 갈래로 넘어갈 때 이 날짜가 기록 시트·일정 시트에 그대로 실린다. */
+  const [composeDay, setComposeDay] = useState<string | null>(null);
   /* 사진 준비(디코드·리사이즈)는 시트 한 세션에 묶인다. 세션이 끝난 뒤 도착한 결과는 붙일
      자리가 없어 되돌리고, 준비가 남아 있는 동안 누른 저장은 끝날 때까지 기다렸다 이어 간다 —
      기다리지 않으면 방금 고른 사진이 조용히 빠지고 주인 없는 blob만 남는다. */
@@ -382,16 +386,20 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
     return true;
   }, [draftKey]);
 
-  const openNew = () => {
+  /* day를 주면 그 날로 연다(캘린더에서 날을 고르고 들어오는 길) — 없으면 오늘이다.
+     이벤트 핸들러에 직접 물리지 말 것: 클릭 이벤트가 day 자리에 들어온다. */
+  const openNew = (day?: string) => {
     if (revivingRef.current) return;
     // 자정을 지난 직후에도 마지막 분 단위 렌더의 날짜를 쓰지 않도록, 여는 순간 다시 읽는다
-    const openDay = dayKey(new Date());
+    const openDay = day ?? dayKey(new Date());
     photoSession.current += 1;
     editBase.current = null;
     const d = loadDraft(draftKey(null));
     if (d && draftHasContent(d)) {
-      // 마무리하지 못한 초안이 있으면 이어서 쓴다
-      setModal(modalFromDraft(d, null, openDay));
+      // 마무리하지 못한 초안이 있으면 이어서 쓴다 — 다만 날을 지정해 들어왔으면 그 날로 연다
+      // (28일을 고르고 들어왔는데 어제 쓰다 만 초안의 날짜가 이기면 고른 뜻이 사라진다)
+      const restored = modalFromDraft(d, null, openDay);
+      setModal(day ? { ...restored, day } : restored);
       return;
     }
     setModal({ ...EMPTY_MODAL, open: true, entryId: crypto.randomUUID(), day: openDay });
@@ -685,6 +693,7 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
 
   /* ---------- 일정 — 등록과 내 일정 삭제만 있다(수정 UI 없음) ---------- */
   const closeEventSheet = useCallback(() => setEventSheetDay(null), []);
+  const closeComposeMenu = useCallback(() => setComposeDay(null), []);
   const submitEvent = (draft: EventDraft) => {
     store.upsertEvent({
       id: crypto.randomUUID(),
@@ -733,6 +742,7 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
     { id: 'entry-delete', open: pendingDel !== null, close: () => setDelId(null) },
     { id: 'lounge-sheet', open: loungeDraft.open, close: closeLounge },
     { id: 'lounge-delete', open: pendingLoungeDel !== null, close: () => setLoungeDelId(null) },
+    { id: 'compose-menu', open: composeDay !== null, close: closeComposeMenu },
     { id: 'event-sheet', open: eventSheetDay !== null, close: closeEventSheet },
     { id: 'event-delete', open: pendingEventDel !== null, close: () => setEventDelId(null) },
     { id: 'entry-lightbox', open: entryLightOpen, close: () => setLight(null) },
@@ -805,7 +815,8 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
         setSelDay={setSelDay} todayKey={todayKey}
         meId={me.id} editingId={modal.editingId} comments={snap.comments}
         reactions={snap.reactions} photoUploads={snap.photoUploads} wit={wit} actions={actions}
-        onOpenEventSheet={setEventSheetDay} onDeleteEvent={(ev) => setEventDelId(ev.id)} />
+        onOpenEventSheet={setEventSheetDay} onOpenCompose={setComposeDay}
+        onDeleteEvent={(ev) => setEventDelId(ev.id)} />
       {footer}
     </>
   );
@@ -877,7 +888,7 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
                 onOpenFeed={() => { setNotiOpen(false); setView('feed'); setFeedFilter(revealEntries); }}
                 onClose={closeNoti} />
             ) : null}
-            onCompose={openNew} composeRef={ctaRef} />
+            onCompose={() => openNew()} composeRef={ctaRef} />
           {/* 패널 열은 접혀 있어도 마운트를 유지한다 — 열 폭만 300ms로 오가고 안쪽 래퍼는
               296px에 고정돼 있어서, 접히는 동안 내용이 찌그러지지 않는다(CSS가 맡는다) */}
           <div className={'body' + (panelOpen ? ' open' : '')}>
@@ -912,7 +923,9 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
               setMtab(t);
               setNotiSettings(false); // 탭을 누르면 그 탭의 첫 화면 — 설정에 갇힌 채 돌아오지 않는다
             }} />
-          {fabOn && <Fab done={todays.some((e) => e.m === me.id)} wit={wit} onClick={openNew} btnRef={ctaRef} />}
+          {fabOn && (
+            <Fab done={todays.some((e) => e.m === me.id)} wit={wit} onClick={() => openNew()} btnRef={ctaRef} />
+          )}
         </>
       )}
       {modal.open && (
@@ -979,6 +992,13 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
             setLoungeDelId(null);
             showToast(wit.loungeDeleted);
           }} />
+      )}
+      {/* 고른 갈래로 넘어갈 때 메뉴는 함께 닫힌다 — 시트 뒤에 남아 있으면 뒤로가기가 한 번 더 든다 */}
+      {composeDay !== null && (
+        <ComposeMenu day={composeDay} fallbackRef={ctaRef}
+          onEntry={() => { setComposeDay(null); openNew(composeDay); }}
+          onEvent={() => { setComposeDay(null); setEventSheetDay(composeDay); }}
+          onClose={closeComposeMenu} />
       )}
       {eventSheetDay !== null && (
         <EventSheet prefillDay={eventSheetDay} meId={me.id} customTags={snap.customEventTags} fallbackRef={ctaRef}

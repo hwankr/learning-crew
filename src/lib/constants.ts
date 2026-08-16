@@ -196,6 +196,8 @@ export interface CopySet {
   footer: string;
   count: (n: number) => string;
   calEmpty: string;
+  /** 좁은 화면의 빈 선택일 — 기록과 일정이 한 화면에 같이 서므로 둘을 함께 말한다 */
+  calEmptyDay: string;
   statusAsk: string; // 체크인 꺼짐 안내
   statusOn: string; // 체크인 켜짐 머리
   statusEnd: string; // 끄기 버튼
@@ -242,6 +244,7 @@ export const COPY: CopySet = {
   footer: '오늘도 크루 중 누군가는 공부를 합니다.',
   count: (n) => `${MEMBERS.length}명 중 ${n}명 도장 찍음`,
   calEmpty: '이 날은 기록이 없어요',
+  calEmptyDay: '등록된 공부 일지나 일정이 없습니다.',
   statusAsk: '공부 시작하면 켜주세요',
   statusOn: '공부 중',
   statusEnd: '공부 종료',

@@ -11,6 +11,8 @@ function subscribe(onChange: () => void): () => void {
   return () => mq.removeEventListener('change', onChange);
 }
 
+/* 서버 스냅샷은 늘 좁은 화면이다 — matchMedia가 없는 자리(정적 마크업 렌더)에서는
+   무엇을 그릴지 정해야 하고, 모바일 우선이 이 앱의 기본값이다. */
 export function useIsDesktop(): boolean {
-  return useSyncExternalStore(subscribe, () => matchMedia(DESKTOP).matches);
+  return useSyncExternalStore(subscribe, () => matchMedia(DESKTOP).matches, () => false);
 }

@@ -56,6 +56,13 @@ export function useFocusTrap(
     document.addEventListener('keydown', onKey);
     return () => {
       document.removeEventListener('keydown', onKey);
+      /* 닫히는 사이 다른 대화상자가 이미 초점을 가져갔으면 그대로 두고 나온다.
+         작성 메뉴에서 갈래를 고르면 메뉴가 닫히고 시트가 같은 커밋에서 열리는데, 시트의
+         autoFocus는 커밋 단계라 이 정리(패시브 단계)보다 먼저다 — 여기서 초점을 도로
+         끌어오면 방금 연 시트 밖에 초점이 남아 키보드로는 시트에 들어갈 수가 없다. */
+      const active = document.activeElement;
+      const dialog = active instanceof HTMLElement ? active.closest('[role="dialog"]') : null;
+      if (dialog?.isConnected && dialog !== box.current) return;
       /* 열었던 요소가 그새 사라졌으면(삭제 확정, 날짜를 바꿔 저장해 카드가 다른 날로 옮겨간
          경우 등) 정해 둔 자리로 보낸다. 살아 있어도 초점을 못 받는 상태(숨김·disabled)일 수
          있으니 "정말 들어갔는지" 확인하고, 안 들어갔으면 그때도 대체 자리로 보낸다. */

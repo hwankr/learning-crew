@@ -5,7 +5,8 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { CrewEvent, Entry } from '../../shared/types';
 import { COPY } from '../lib/constants';
-import { CalendarView } from './CalendarView';
+import { CalendarView, entriesOfMember, eventsOfMember, headActionOrder } from './CalendarView';
+import { ComposeMenu } from './ComposeMenu';
 
 const TODAY = '2026-08-16';
 
@@ -24,21 +25,24 @@ function event(p: Partial<CrewEvent> & Pick<CrewEvent, 'id' | 'day'>): CrewEvent
   };
 }
 
+/* 정적 마크업은 늘 좁은 화면이다(useIsDesktop의 서버 스냅샷 = false) — 이 파일이 보는 것은
+   모바일 셸의 캘린더다. 데스크톱에만 서는 노드(선택일 열의 "+ 일정 등록")는 여기 없다. */
 function view(opts: { entries?: Entry[]; events?: CrewEvent[]; selDay?: string }): string {
   return renderToStaticMarkup(
     <CalendarView entries={opts.entries ?? []} events={opts.events ?? []}
       selDay={opts.selDay ?? TODAY} setSelDay={() => {}} todayKey={TODAY} meId="sh"
       editingId={null} comments={new Map()} reactions={new Map()} photoUploads={new Map()}
       wit={COPY} actions={{} as never}
-      onOpenEventSheet={() => {}} onDeleteEvent={() => {}} />,
+      onOpenEventSheet={() => {}} onOpenCompose={() => {}} onDeleteEvent={() => {}} />,
   );
 }
 
 describe('캘린더의 일정', () => {
   it('기간 일정은 걸친 모든 날의 셀에 선다', () => {
     const html = view({ events: [event({ id: 'a', day: '2026-08-18', endDay: '2026-08-20' })] });
-    // 알약 라벨은 셀마다 하나씩 — 사흘이면 세 번
-    expect(html.split('정보처리기사 실기').length - 1).toBe(3);
+    // 알약은 셀마다 하나씩 — 사흘이면 세 번. 제목 자체는 배너에도 한 번 더 실린다
+    expect(html.split('class="cal-pill ev').length - 1).toBe(3);
+    expect(html.split('정보처리기사 실기').length - 1).toBe(4);
   });
 
   it('임박한 일정과 지난 일정이 다른 옷을 입는다', () => {
@@ -74,9 +78,13 @@ describe('캘린더의 일정', () => {
     expect(view({ events: [event({ id: 'a', day: TODAY, m: 'wg' })] })).not.toContain('sel-event-del');
   });
 
-  it('일정이 없는 달에는 범례를 그리지 않는다', () => {
+  /* 범례 밑선이 격자와 선택일 섹션을 가르는 구분선이다 — 좁은 화면에서는 일정이 없는 달에도
+     선다(디자인). 통째로 접으면 안내와 함께 그 선까지 사라져 두 섹션이 붙어 버린다. */
+  it('일정이 없는 달에도 좁은 화면의 범례 행은 선다', () => {
     expect(view({ events: [event({ id: 'a', day: TODAY })] })).toContain('cal-legend');
-    expect(view({ entries: [entry('e1', TODAY)] })).not.toContain('cal-legend');
+    const noEvents = view({ entries: [entry('e1', TODAY)] });
+    expect(noEvents).toContain('cal-legend');
+    expect(noEvents).toContain('터치하여 상세 보기');
   });
 });
 
@@ -122,5 +130,129 @@ describe('캘린더의 참여 인원', () => {
     const html = view({ events: [event({ id: 'a', day: TODAY, m: 'kj', participants: [] })] });
     expect(eventDots(html)).toEqual(['#9E77ED']);
     expect(html).toContain('경진 · 일정');
+  });
+});
+
+/* 멤버 필터 — 다섯 명의 점이 한 격자에 겹치면 내 것을 찾기가 어렵다.
+   거르는 기준이 기록과 일정에서 서로 달라야 한다: 일정은 등록자가 아니라 참여자다. */
+describe('캘린더의 멤버 필터', () => {
+  it('전체(null)는 그대로 두고, 고른 멤버의 기록만 남긴다', () => {
+    const list = [entry('e1', TODAY), { ...entry('e2', TODAY), m: 'sh' as const }];
+    expect(entriesOfMember(list, null)).toHaveLength(2);
+    expect(entriesOfMember(list, 'sh').map((e) => e.id)).toEqual(['e2']);
+  });
+
+  // 남이 등록해 준 시험도 내가 치는 것이면 내 달력에 남아야 한다
+  it('일정은 등록자가 아니라 참여자로 거른다', () => {
+    const evs = [
+      event({ id: 'a', day: TODAY, m: 'sh', participants: ['wg', 'th'] }),
+      event({ id: 'b', day: TODAY, m: 'sh', participants: ['sh'] }),
+    ];
+    expect(eventsOfMember(evs, 'wg').map((e) => e.id)).toEqual(['a']);
+    expect(eventsOfMember(evs, 'sh').map((e) => e.id)).toEqual(['b']);
+    expect(eventsOfMember(evs, null)).toHaveLength(2);
+  });
+
+  it('참여자가 비어 있는 옛 일정은 등록자의 것으로 걸린다', () => {
+    const evs = [event({ id: 'a', day: TODAY, m: 'kj', participants: [] })];
+    expect(eventsOfMember(evs, 'kj').map((e) => e.id)).toEqual(['a']);
+    expect(eventsOfMember(evs, 'wg')).toHaveLength(0);
+  });
+
+  it('칩 행은 전체 + 크루 다섯이고 기본은 전체다', () => {
+    const html = view({});
+    expect(html).toContain('cal-filter-chip on');
+    for (const name of ['전체', '승환', '웅', '태현', '진주', '경진']) {
+      expect(html).toContain(`${name}</button>`);
+    }
+    // 켜진 칩은 하나뿐 — 처음 상태에서 사람 칩이 켜져 있으면 격자가 이미 걸러져 있다
+    expect(html.split('cal-filter-chip on').length - 1).toBe(1);
+  });
+});
+
+/* 좁은 화면의 머리·배너·작성 입구 — 이미지 기준 리디자인.
+   격자 위에 서는 것들이라 하나가 어긋나면 그 아래 전부가 밀린다. */
+describe('모바일 캘린더의 머리와 배너', () => {
+  it('머리에 크루 배지와 기록·일정 수가 함께 선다', () => {
+    const html = view({
+      entries: [entry('e1', TODAY), entry('e2', '2026-08-02')],
+      events: [event({ id: 'a', day: '2026-08-18' })],
+    });
+    expect(html).toContain('cal-crew-badge');
+    expect(html).toContain('러닝 크루');
+    expect(html).toContain('기록 2개');
+    expect(html).toContain('일정 1개');
+  });
+
+  /* 머리의 버튼은 오늘 → + 차례로 보인다(이미지). CSS order로 자리만 바꾸면 Tab 차례가
+     화면과 어긋나므로 DOM 자체가 그 차례여야 한다. */
+  it('머리의 버튼 차례가 화면 차례(오늘 → 일정 등록)와 같다', () => {
+    const html = view({});
+    expect(html.indexOf('cal-today-btn')).toBeGreaterThan(-1);
+    expect(html.indexOf('cal-today-btn')).toBeLessThan(html.indexOf('cal-event-btn'));
+    expect(html).not.toContain('order:');
+  });
+
+  /* 차례는 셸마다 뒤집히지만 id는 의미에 고정된다 — 이 id가 곧 React key다.
+     key가 자리(index)를 따라가면 900px 경계를 넘는 리사이즈에서 React가 노드를 재사용해
+     '오늘'에 두었던 초점이 그대로 '일정 등록' 버튼이 된다(누르는 것이 달라진다). */
+  it('셸마다 차례만 뒤집히고 버튼 id(=key)는 그대로다', () => {
+    expect(headActionOrder(false)).toEqual(['today', 'event']);
+    expect(headActionOrder(true)).toEqual(['event', 'today']);
+    expect([...headActionOrder(true)].sort()).toEqual([...headActionOrder(false)].sort());
+  });
+
+  // 걸치기만 해도 이 달의 일정이다 — 7월에 시작해 8월까지 가는 시험은 8월에도 세어야 한다
+  it('달을 걸친 기간 일정도 그 달의 일정으로 센다', () => {
+    const html = view({ events: [event({ id: 'a', day: '2026-07-28', endDay: '2026-08-03' })] });
+    expect(html).toContain('일정 1개');
+  });
+
+  it('다가오는 일정이 D-day 배너로 서고 참여자·날짜를 말한다', () => {
+    const html = view({
+      events: [event({ id: 'a', day: '2026-08-18', title: '정보처리기사 실기', participants: ['jj'] })],
+    });
+    expect(html).toContain('cal-banner near');
+    expect(html).toContain('D-2');
+    expect(html).toContain('진주 · 8월 18일 (화)');
+  });
+
+  it('남은 일정이 없으면 배너를 접는다', () => {
+    expect(view({ events: [event({ id: 'a', day: '2026-08-10' })] })).not.toContain('cal-banner');
+    expect(view({})).not.toContain('cal-banner');
+  });
+});
+
+describe('모바일 선택일 섹션', () => {
+  it('선택일 머리의 입구는 "+ 작성하기"다(데스크톱의 일정 등록이 아니다)', () => {
+    const html = view({});
+    expect(html).toContain('sel-compose');
+    expect(html).toContain('+ 작성하기');
+    expect(html).not.toContain('sel-event-add');
+  });
+
+  it('아무것도 없는 날은 기록·일정을 함께 말하는 문구가 선다', () => {
+    expect(view({})).toContain(COPY.calEmptyDay);
+  });
+
+  // 일정만 있는 날에 "없습니다"가 함께 뜨면 바로 위 목록과 어긋난다
+  it('일정만 있는 날에는 빈 문구를 그리지 않는다', () => {
+    const html = view({ events: [event({ id: 'a', day: TODAY })] });
+    expect(html).not.toContain(COPY.calEmptyDay);
+    expect(html).toContain('기록 0개 · 일정 1개');
+  });
+});
+
+/* 작성 메뉴 — "+ 작성하기"가 여는 두 갈래. 어느 쪽이든 고른 날짜가 그대로 실린다. */
+describe('작성 선택 메뉴', () => {
+  it('고른 날짜를 머리에 달고 기록·일정 두 갈래를 준다', () => {
+    const html = renderToStaticMarkup(
+      <ComposeMenu day="2026-08-28" fallbackRef={{ current: null }}
+        onEntry={() => {}} onEvent={() => {}} onClose={() => {}} />,
+    );
+    expect(html).toContain('8월 28일 (금)에 남기기');
+    expect(html).toContain('기록 남기기');
+    expect(html).toContain('일정 등록');
+    expect(html.split('menu-row"').length - 1).toBe(2);
   });
 });

@@ -697,6 +697,14 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 .cal-title { font-size: 17px; font-weight: 800; letter-spacing: -0.02em; color: #16181D; white-space: nowrap; }
 .cal-meta { font-size: 12px; color: #9AA1AD; white-space: nowrap; flex: none; }
 .cal-meta-crew { display: none; }
+.cal-title-row { display: flex; align-items: center; gap: 5px; min-width: 0; }
+/* 크루 이름 배지 — 상단 바가 없는 좁은 셸에서 "어디를 보고 있나"를 말하는 자리다.
+   노드 자체가 좁은 화면에만 그려지므로(조건 렌더) 여기에는 미디어 쿼리가 없다. */
+.cal-crew-badge {
+  display: inline-flex; align-items: center; flex: none; height: 22px; padding: 0 7px;
+  border-radius: 999px; background: #FFF9E6; color: #B37F00;
+  font-size: 11px; font-weight: 800; white-space: nowrap;
+}
 .cal-head-actions { display: flex; align-items: center; gap: 8px; flex: none; }
 /* nowrap/flex:none이 없으면 "오늘"이 음절 단위로 쪼개져 두 줄이 된다 */
 .cal-today-btn {
@@ -725,6 +733,52 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
   cursor: pointer; color: #6B7280;
 }
 .icon-btn:hover { background: #F1F3F6; }
+/* 멤버 필터 칩 — 좁은 화면 전용 노드다(데스크톱에는 그리지 않는다).
+   흰 알약이 기본, 고른 사람은 검은 알약. 점만은 늘 그 사람의 색이라 켠 뒤에도 누구인지가
+   글자보다 먼저 읽힌다. */
+/* 크기는 375px에 여섯 칩(전체 + 다섯 명)이 한 줄로 서는 데서 나왔다 — 크루가 늘면
+   줄을 바꿔 받는다(가로 스크롤로 감추면 뒤에 선 사람은 없는 사람이 된다) */
+.cal-filter { display: flex; flex-wrap: wrap; gap: 5px; margin: 0 0 14px; }
+.cal-filter-chip {
+  display: flex; align-items: center; gap: 4px; flex: none; height: 28px; padding: 0 10px;
+  border: 1px solid #E4E7EC; border-radius: 999px; background: #FFFFFF; color: #4E555F;
+  font-size: 11.5px; font-weight: 600; white-space: nowrap; cursor: pointer;
+  transition: background 120ms, color 120ms, border-color 120ms;
+}
+.cal-filter-chip.on { background: #16181D; border-color: #16181D; color: #FFFFFF; font-weight: 800; }
+.cal-filter-chip:active { transform: scale(0.97); }
+.cal-filter-dot { display: block; width: 5px; height: 5px; border-radius: 50%; flex: none; }
+
+/* 다가오는 일정 배너 — 좁은 화면 전용 노드. 왼쪽 노란 세로 바가 격자 위에서 이 줄만
+   들어 올린다. 임박한 일정만 노란 옷을 입는 것은 셀 알약·홈 배너와 같은 규칙이다. */
+.cal-banner {
+  position: relative; display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 11px 12px 11px 16px; margin: 0 0 14px; overflow: hidden;
+  border: 1px solid #E4E7EC; border-radius: 14px; background: #FFFFFF;
+  cursor: pointer; text-align: left;
+}
+.cal-banner.near { background: #FFF9E6; border-color: #FFD666; }
+.cal-banner-bar { position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: #FFB800; }
+/* 남은 날 수의 색은 홈 배너·셀 알약과 같은 규칙이다 — 임박하면 노랑, 지났으면 회색,
+   그 밖은 검정(먼 약속을 노랗게 두면 매일 급한 일이 하나 있는 것처럼 읽힌다) */
+.cal-banner-dday {
+  flex: none; font-size: 16px; font-weight: 900; letter-spacing: -0.02em;
+  color: #16181D; white-space: nowrap;
+}
+.cal-banner.near .cal-banner-dday { color: #B37F00; }
+/* 지난 일정이 배너에 서는 일은 없지만(다가오는 것만 고른다) 규칙은 한자리에 다 적어 둔다 */
+.cal-banner.past .cal-banner-dday { color: #9AA1AD; }
+.cal-banner-main { flex: 1; min-width: 0; }
+.cal-banner-title {
+  display: block; font-size: 13.5px; font-weight: 800; letter-spacing: -0.01em; color: #16181D;
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+.cal-banner-sub {
+  display: block; font-size: 11.5px; color: #9AA1AD; margin-top: 3px;
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+.cal-banner .chip { flex: none; }
+
 /* 격자 간격은 디자인이 6px이지만 좁은 화면에서는 3px로 둔다 — 320px에서 6px 간격이면
    셀 트랙이 34.9px까지 좁아져 아래 색 점 5개(33px)가 한 줄에 못 선다 */
 .cal-week { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 3px; margin-bottom: 6px; }
@@ -813,6 +867,13 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
   font-size: 12px; font-weight: 700; color: #B37F00; white-space: nowrap;
 }
 .sel-event-add:hover { color: #8F6600; }
+/* 좁은 화면의 입구 — 기록이냐 일정이냐를 먼저 묻는다(좁은 셸에는 상시 CTA가 없다).
+   일정 등록 입구와 같은 옷을 입되 글자만 한 단계 크다: 이 줄에서 유일하게 누르는 자리다. */
+.sel-compose {
+  flex: none; border: none; background: none; padding: 0; cursor: pointer;
+  font-size: 13px; font-weight: 700; color: #B37F00; white-space: nowrap;
+}
+.sel-compose:hover { color: #8F6600; }
 /* 첫 항목에도 윗줄을 둬 패널 머리와 목록을 가른다 (피드는 카드 사이만 가른다) */
 .sel-list .entry { border-top-color: #F1F3F6; }
 .sel-empty { text-align: center; font-size: 13px; color: #9AA1AD; padding: 28px 0 8px; }
@@ -835,6 +896,50 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 .sel-event-dday.past { color: #9AA1AD; }
 /* 삭제는 기록 카드와 같은 문법(빨간 잔글씨) — 촘촘한 목록이라 오탭하지 않게 여백만 좁힌다 */
 .sel-event-del { flex: none; margin-right: -6px; }
+
+/* ---------- 좁은 화면의 캘린더 — 풀블리드 미니멀 격자 ----------
+   셀의 테두리·배경을 걷어내고 숫자와 점만 남긴다: 42칸의 카드가 사라지면 격자가 아니라
+   날짜가 먼저 보인다. 여기 있는 것은 전부 데스크톱(≥900px)과 함께 쓰는 노드의 옷만 바꾸는
+   규칙이다 — 좁은 화면에만 그리는 노드(필터 칩·배너·크루 배지)는 위쪽 기본 규칙에 있다.
+   조건은 데스크톱 블록(min-width: 900px)의 정확한 여집합이다: max-width: 899.98px로 끊으면
+   899.98~900px 사이가 어느 쪽에도 안 들어가 그 폭에서만 옷이 벗겨진다. */
+@media not all and (min-width: 900px) {
+  /* 제목·배지 묶음도 버튼 묶음도 줄어들지 않는다(둘 다 nowrap) — 폭이 모자라면 겹치는 대신
+     버튼 묶음이 아래 줄로 내려가 오른쪽 끝에 선다. 360·320px에서 "러닝 크루"와 "오늘"이
+     서로 파고들던 자리다. 접는 폭을 숫자로 정하지 않는 이유: 한 줄에 드는지는 달 이름·기록 수·
+     크루 이름 길이가 함께 정하므로, 자리가 없을 때만 내려가게 두는 편이 늘 맞는다. */
+  .cal-head { align-items: flex-start; flex-wrap: wrap; column-gap: 6px; row-gap: 10px; }
+  /* 치수는 375px에서 가장 긴 달("2026년 12월")이 한 줄에 드는 데서 나왔다 —
+     제목+배지 174 + 사이 6 + 버튼 묶음 147 = 327 ≤ 335(본문 폭). 한 자리 달만 보고 맞추면
+     10~12월에 머리가 두 줄로 내려앉는다. 여기서 무엇이든 키우면 그 여유(8px)부터 사라진다. */
+  .cal-title { font-size: 20px; }
+  .cal-meta { margin-top: 3px; }
+  .cal-head-actions { gap: 4px; margin-left: auto; }
+  .cal-today-btn { padding: 6px 9px; }
+  /* 등록 버튼은 검은 원 하나 — 이 화면에서 유일하게 채워진 색이라 "여기서 시작한다"가 읽힌다 */
+  .cal-event-btn { width: 34px; height: 34px; background: #16181D; border-color: #16181D; color: #FFFFFF; }
+  .cal-event-btn:hover { background: #363B45; }
+  /* ‹ ›는 붙여 세운다 — 30px 버튼 둘이라 사이가 없어도 오탭하지 않고, 그 2px이 12월 여유다 */
+  .cal-nav { gap: 0; }
+  .cal-nav .icon-btn { width: 30px; height: 30px; }
+
+  .cal-cell { height: 56px; gap: 7px; background: transparent; border: none; }
+  /* 오늘·선택은 셀이 아니라 숫자가 입는다 — 셀에 남은 그림자·배경은 함께 걷는다 */
+  .cal-cell.today, .cal-cell.sel { background: transparent; box-shadow: none; }
+  .cal-cell:not(.sel):not(.today):hover { background: transparent; }
+  .cal-num { width: 24px; height: 24px; font-size: 13px; }
+  .cal-cell.sel .cal-num { background: #16181D; color: #FFFFFF; font-weight: 800; }
+  /* 오늘이면서 고른 날 — 노란 원에 검은 테두리 한 겹(둘 중 하나를 지우지 않는다) */
+  .cal-cell.today.sel .cal-num { background: #FFB800; color: #16181D; box-shadow: 0 0 0 2px #16181D; }
+  .cal-week { margin-bottom: 2px; }
+  .cal-legend { margin-top: 10px; }
+  /* 선택일 머리 — 날짜가 한 단계 크다(이 화면에서 가장 중요한 줄이다) */
+  .cal-sel { margin-top: 22px; }
+  .sel-label { font-size: 16px; }
+  /* 머리의 아바타 스택은 접는다 — 바로 아래 카드마다 같은 얼굴이 다시 서고, 그 자리를 두면
+     "+ 작성하기"가 줄을 바꿔 왼쪽으로 떨어진다(이 줄의 오른쪽 끝이 작성 입구다) */
+  .sel-head .sel-avatars { display: none; }
+}
 
 .footer { text-align: center; font-size: 12.5px; color: #9AA1AD; margin-top: 34px; }
 .demo-note { font-size: 11.5px; color: #C3C9D2; margin-top: 8px; }
@@ -1498,6 +1603,21 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 }
 .light-track::-webkit-scrollbar { display: none; }
 .light-page { position: relative; flex: none; width: 100%; height: 100%; scroll-snap-align: center; }
+
+/* ---------- 작성 선택 메뉴 — 캘린더의 "+ 작성하기" ----------
+   시트 규약(바닥에서 올라오는 흰 판)을 그대로 쓰되 내용은 줄 두 개뿐이다. */
+.menu-row-list { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
+.menu-row {
+  display: flex; align-items: center; gap: 10px; width: 100%; padding: 15px 16px;
+  border: 1px solid #F1F3F6; border-radius: 16px; background: #FFFFFF;
+  cursor: pointer; text-align: left; color: #CDD2DB;
+  transition: background 120ms, border-color 120ms;
+}
+.menu-row:hover { background: #F8F9FB; border-color: #E4E7EC; }
+.menu-row:active { transform: scale(0.99); }
+.menu-row-main { flex: 1; min-width: 0; }
+.menu-row-title { display: block; font-size: 14.5px; font-weight: 800; color: #16181D; }
+.menu-row-sub { display: block; font-size: 12px; color: #9AA1AD; margin-top: 3px; }
 
 /* ---------- 일정 등록 시트 ---------- */
 .event-sheet-sub { font-size: 12.5px; color: #9AA1AD; margin-top: 2px; }
