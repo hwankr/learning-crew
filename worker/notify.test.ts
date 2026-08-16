@@ -382,6 +382,15 @@ describe('notifyNewWrites', () => {
     expect(wg.map((r) => r.why).sort()).toEqual(['entry', 'post']);
   });
 
+  // 라운지 글 id는 aggKey에만 남는다 — 스냅샷의 postId는 거기서 파생돼야 딥링크가 선다
+  it('라운지 글 알림에는 aggKey에서 파생한 postId가 실리고, 기록 알림에는 없다', async () => {
+    const { send } = makeSender();
+    await notifyNewWrites(db, ENV, 'sh', [entry({ id: E1, m: 'sh' })], [post(P1)], Date.now(), send);
+    const wg = (await pullNotifications(db, 'wg', null)).rows;
+    expect(wg.find((r) => r.why === 'post')).toMatchObject({ entryId: null, postId: P1 });
+    expect(wg.find((r) => r.why === 'entry')).toMatchObject({ entryId: E1, postId: null });
+  });
+
   it('newWrites를 끈 수신자만 조용하다', async () => {
     await putNotifPrefs(db, 'wg', { ...DEFAULT_NOTIF_PREFS, newWrites: false });
     const { send } = makeSender();

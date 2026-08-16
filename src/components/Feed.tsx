@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import type {
   Comment,
   Entry,
@@ -26,6 +26,64 @@ const FILTERS: { id: FeedFilter; label: string }[] = [
 ];
 
 export type FeedItem = { kind: 'entry'; e: Entry } | { kind: 'post'; p: Post };
+
+/** 피드가 다음 렌더에서 데려가 보여줄 카드 — 알림 딥링크가 채우고, 하이라이트가 끝나면
+    App이 비운다(FeedItem의 kind와 같은 축이라 카드 종류 구분을 그대로 잇는다). */
+export interface FeedFocus {
+  kind: 'entry' | 'post';
+  id: string;
+}
+
+/** 하이라이트 효과가 대상 카드에서 실제로 쓰는 DOM 표면 — 테스트가 stub으로 채워
+    스크롤·플래시·타이머 수명주기를 돌려 본다(정적 렌더로는 effect가 돌지 않는다). */
+export interface FocusCardEl {
+  scrollIntoView(opts?: ScrollIntoViewOptions): void;
+  classList: { add(c: string): void; remove(c: string): void };
+}
+
+/** 알림 딥링크 도착 효과의 본체 — 아래 effect가 그대로 위임한다.
+    cleanup은 StrictMode의 가짜 해체인지 진짜 이탈(unmount·대상 교체)인지 모르므로,
+    일단 0ms 만료를 expire에 걸어 두고 곧바로 다시 돌아온 실행이 앞머리에서 취소한다.
+    취소되지 않으면 하이라이트를 다 채우기 전에 피드를 떠난 것 — 요청을 접어
+    다음 방문 때 이미 소비된 타깃으로 또 튀지 않게 한다.
+    expire.missed는 missing을 이미 알린 요청 — 같은 focus 객체로 setup이 겹으로 돌아도
+    (StrictMode replay는 부모가 요청을 접기 전에 온다) 토스트가 한 번만 선다. */
+export function runFeedFocus(
+  focus: FeedFocus | null,
+  el: FocusCardEl | null,
+  expire: { id: number; missed?: FeedFocus },
+  onFocusDone: () => void,
+  onFocusMissing: () => void,
+): (() => void) | undefined {
+  window.clearTimeout(expire.id);
+  if (!focus) return;
+  if (!el) {
+    // 필터까지 풀고 왔는데 카드가 없다 — 계획 뒤 커밋 사이에 지워졌거나 아직 동기화 전.
+    // 붙잡고 있으면 뒤늦게 도착한 순간 화면이 멋대로 튀므로 접고, 못 찾았다고 알린다.
+    if (expire.missed !== focus) {
+      expire.missed = focus;
+      onFocusMissing();
+    }
+    return;
+  }
+  // 완료는 이 호출에서 정확히 한 번 — 1.8초 타이머가 발화한 직후 진짜 unmount가 겹치면
+  // cleanup이 만료를 또 예약하므로, 취소만으로는 중복을 못 막는다.
+  let finished = false;
+  const finish = (): void => {
+    if (finished) return;
+    finished = true;
+    onFocusDone();
+  };
+  el.scrollIntoView({ block: 'center' });
+  el.classList.add('feed-flash');
+  // 플래시(1.6s)가 다 스러진 뒤에 접는다 — cleanup의 클래스 제거가 눈에 띄지 않는 시점
+  const t = window.setTimeout(finish, 1800);
+  return () => {
+    window.clearTimeout(t);
+    el.classList.remove('feed-flash');
+    expire.id = window.setTimeout(finish, 0);
+  };
+}
 
 /** 글의 날짜 키 — 작성 기기 시각의 로컬 날짜. 기록의 day와 같은 축이라 한 묶음에 선다.
     깨진 시각은 null — 스트림에서 조용히 빼는 쪽이 맨 앞/맨 뒤에 박히는 것보다 낫다. */
@@ -71,6 +129,7 @@ export function feedDayGroups(
 export function Feed({
   entries, posts, postComments, statuses, now, filter, onFilter, todayKey, yKey, meId,
   editingId, comments, reactions, photoUploads, wit, actions, loungeActions,
+  focus, onFocusDone, onFocusMissing,
 }: {
   entries: Entry[];
   posts: Post[];
@@ -90,6 +149,11 @@ export function Feed({
   wit: CopySet;
   actions: EntryActions;
   loungeActions: LoungeActions;
+  /** 알림 딥링크의 대상 — 렌더된 뒤 스크롤+하이라이트하고 onFocusDone으로 돌려준다 */
+  focus: FeedFocus | null;
+  onFocusDone: () => void;
+  /** 대상 카드가 이 커밋에 서지 못했다(계획 뒤 삭제·데이터 교체) — App이 접고 토스트를 띄운다 */
+  onFocusMissing: () => void;
 }) {
   // 요일은 넣지 않는다 — 그룹 머리는 "언제쯤"만 알려 주면 되고, 정확한 날짜는 캘린더가 맡는다
   const dayLabel = (k: string): string => {
@@ -101,6 +165,18 @@ export function Feed({
   const groups = useMemo(
     () => feedDayGroups(entries, posts, filter),
     [entries, posts, filter],
+  );
+
+  /* 알림 딥링크 도착 — 대상 카드가 이 커밋에 실제로 섰을 때만 스크롤+하이라이트.
+     하이라이트 클래스는 상태가 아니라 DOM에 직접 얹는다: 순수 표시용이고, StrictMode의
+     이중 실행도 cleanup이 클래스를 걷어내고 처음부터 다시 도는 것이라 안전하다.
+     ref는 렌더 중 대상 래퍼에만 붙으므로(아래 focused) 효과 시점엔 이미 서 있다.
+     본체는 runFeedFocus — 만료 타이머 자리(expire)만 렌더 사이에 여기서 든다. */
+  const focusRef = useRef<HTMLDivElement | null>(null);
+  const focusExpire = useRef({ id: 0 });
+  useEffect(
+    () => runFeedFocus(focus, focusRef.current, focusExpire.current, onFocusDone, onFocusMissing),
+    [focus, onFocusDone, onFocusMissing],
   );
 
   return (
@@ -145,21 +221,29 @@ export function Feed({
           </div>
           <div>
             {/* key에 종류 접두어 — 교차 유일성이 없는 두 id 공간이라 맨 id는 충돌할 수 있고,
-                충돌하면 카드의 펼침·캐러셀 상태가 엉뚱한 카드에 재사용된다 */}
-            {g.items.map((item) =>
-              item.kind === 'entry' ? (
-                <EntryCard key={'e:' + item.e.id} e={item.e} compact={false} mine={item.e.m === meId}
-                  meId={meId} editing={item.e.id === editingId}
-                  comments={comments.get(item.e.id) ?? []}
-                  reactions={reactions.get(item.e.id) ?? []} photoUploads={photoUploads}
-                  actions={actions} />
-              ) : (
-                <PostCard key={'p:' + item.p.id} post={item.p}
-                  comments={postComments.get(item.p.id) ?? []} meId={meId}
-                  live={isStatusActive(statuses[item.p.m], now)} photoUploads={photoUploads}
-                  wit={wit} actions={loungeActions} />
-              ),
-            )}
+                충돌하면 카드의 펼침·캐러셀 상태가 엉뚱한 카드에 재사용된다.
+                래퍼 div는 딥링크의 앵커다 — 카드 컴포넌트에 ref를 뚫지 않고 여기서 잡는다. */}
+            {g.items.map((item) => {
+              const id = item.kind === 'entry' ? item.e.id : item.p.id;
+              const focused = focus !== null && focus.kind === item.kind && focus.id === id;
+              return (
+                <div key={(item.kind === 'entry' ? 'e:' : 'p:') + id}
+                  ref={focused ? focusRef : undefined}>
+                  {item.kind === 'entry' ? (
+                    <EntryCard e={item.e} compact={false} mine={item.e.m === meId}
+                      meId={meId} editing={item.e.id === editingId}
+                      comments={comments.get(item.e.id) ?? []}
+                      reactions={reactions.get(item.e.id) ?? []} photoUploads={photoUploads}
+                      actions={actions} />
+                  ) : (
+                    <PostCard post={item.p}
+                      comments={postComments.get(item.p.id) ?? []} meId={meId}
+                      live={isStatusActive(statuses[item.p.m], now)} photoUploads={photoUploads}
+                      wit={wit} actions={loungeActions} />
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       ))}

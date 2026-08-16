@@ -182,6 +182,7 @@ export interface CopySet {
   feedEmpty: string; // 피드에 기록이 하나도 없을 때
   feedEmptyHint: string;
   notiReadAll: string; // 알림 모두 읽음 토스트
+  notiTargetGone: string; // 알림이 가리킨 글이 로컬에 없을 때(삭제됐거나 아직 동기화 전)
   offNote: string;
   savedToday: string; // 기록 저장 토스트 — 오늘 날짜
   savedPast: string; // 기록 저장 토스트 — 지난 날짜
@@ -233,6 +234,7 @@ export const COPY: CopySet = {
   empty: '아직 안 옴', emptyMe: '오늘 첫 기록을 남겨보세요',
   feedEmpty: '아직 기록이 없어요', feedEmptyHint: '오늘 기록 남기기로 첫 줄을 시작해보세요',
   notiReadAll: '알림을 모두 읽음으로 표시했어요',
+  notiTargetGone: '원본 글을 찾을 수 없어요 — 삭제됐을 수 있어요',
   offNote: '쉬는 날은 별점 없이 기록돼요.',
   savedToday: '오늘 기록을 남겼어요', savedPast: '기록을 남겼어요',
   edited: '기록을 수정했어요', deleted: '기록을 삭제했어요',

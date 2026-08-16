@@ -51,10 +51,10 @@ import { TopBar } from './components/TopBar';
 import { TabBar } from './components/TabBar';
 import { Fab } from './components/Fab';
 import { CrewPanel } from './components/CrewPanel';
-import { Feed } from './components/Feed';
+import { Feed, type FeedFocus } from './components/Feed';
 import { CalendarView } from './components/CalendarView';
 import { ComposeMenu } from './components/ComposeMenu';
-import { NotiPage } from './components/NotiPage';
+import { NotiPage, type NotiNavTarget } from './components/NotiPage';
 import { NotiDropdown } from './components/NotiDropdown';
 import { NotiSettings } from './components/NotiSettings';
 import { EMPTY_MODAL, EntryModal, saveGate, type ModalState } from './components/EntryModal';
@@ -249,6 +249,19 @@ export function draftPhotoResultIsCurrent(
   return startedSession === currentSession && !reviving;
 }
 
+/** 알림 타깃 → 피드 이동 계획 (순수 — 테스트가 직접 부른다). 대상이 로컬에 없으면
+    (다른 기기에서 삭제됐거나 아직 동기화 전) 스크롤 없이 피드만 열고 토스트로 알린다 —
+    reveal은 그래도 타깃 갈래를 따른다(그쪽에 있던 글이었다는 사실은 변하지 않는다). */
+export function notiNavPlan(
+  target: NotiNavTarget,
+  hasEntry: (id: string) => boolean,
+  hasPost: (id: string) => boolean,
+): { reveal: 'entry' | 'post'; focus: FeedFocus | null; missing: boolean } {
+  if (target.kind === 'feed') return { reveal: target.reveal, focus: null, missing: false };
+  const exists = target.kind === 'entry' ? hasEntry(target.id) : hasPost(target.id);
+  return { reveal: target.kind, focus: exists ? target : null, missing: !exists };
+}
+
 export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
   const snap = useSyncExternalStore(store.subscribe, store.getSnapshot);
   // 저장된 화면 상태는 첫 렌더에서 한 번만 읽는다 — 이후엔 아래 state가 원본이다
@@ -269,6 +282,12 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
   const [feedFilter, setFeedFilter] = useState<FeedFilter>(
     cfg.loungeFromUrl ? 'posts' : ui.feedFilter ?? 'all',
   );
+  // 알림 딥링크가 피드에 넘기는 "다음에 보여줄 카드" — 하이라이트가 끝나면 Feed가 되돌려
+  // 비운다. 화면 상태(saveUi)에는 넣지 않는다: 새로고침 뒤에 또 번쩍일 이유가 없다.
+  const [feedFocus, setFeedFocus] = useState<FeedFocus | null>(null);
+  // Feed의 스크롤 효과가 이 콜백을 의존성으로 갖는다 — 렌더마다 새 함수면 매 렌더가
+  // 플래시를 처음부터 다시 돌린다
+  const clearFeedFocus = useCallback(() => setFeedFocus(null), []);
   // 상단 바(+벨 드롭다운)와 하단 탭바·기록 버튼은 서로를 대신하는 셸이다 — 어느 쪽을
   // 그릴지가 갈리므로 CSS로는 못 나누고 렌더 중에 폭을 알아야 한다
   const desktop = useIsDesktop();
@@ -350,6 +369,13 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
   }, []);
 
   const wit = COPY;
+  /* 계획(notiNavPlan) 시점엔 있었지만 피드가 그리는 커밋 사이에 사라진 대상 — 계획의
+     missing과 같은 폴백으로 합친다: 피드는 이미 열렸으니 요청만 접고 같은 토스트를 띄운다.
+     clearFeedFocus처럼 Feed 효과의 의존성이라 렌더마다 새 함수면 안 된다. */
+  const missFeedFocus = useCallback(() => {
+    setFeedFocus(null);
+    showToast(COPY.notiTargetGone);
+  }, [showToast]);
   const me = BY_ID[cfg.memberId] ?? MEMBERS[0]!;
   const now = new Date();
   const todayKey = dayKey(now);
@@ -813,7 +839,8 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
         todayKey={todayKey} yKey={yKey} meId={me.id}
         editingId={modal.editingId} comments={snap.comments} reactions={snap.reactions}
         photoUploads={snap.photoUploads} wit={wit} actions={actions}
-        loungeActions={loungeActions} />
+        loungeActions={loungeActions}
+        focus={feedFocus} onFocusDone={clearFeedFocus} onFocusMissing={missFeedFocus} />
       {footer}
     </div>
   );
@@ -844,6 +871,22 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
         showToast(on && place ? wit.statusStarted(place) : wit.statusEnded);
       }} />
   );
+  /* 알림 행 → 피드. 계획(notiNavPlan)은 두 셸이 같이 쓰고, 화면 전환만 각자의 상태로 —
+     데스크톱은 드롭다운을 닫고 피드 뷰로, 모바일은 알림 탭에서 피드 탭으로 건너간다. */
+  const openNotiTarget = (target: NotiNavTarget) => {
+    const plan = notiNavPlan(
+      target,
+      (id) => entries.some((e) => e.id === id),
+      (id) => snap.posts.some((p) => p.id === id),
+    );
+    setNotiOpen(false);
+    if (desktop) setView('feed');
+    else setMtab('feed');
+    setFeedFilter(plan.reveal === 'post' ? revealPosts : revealEntries);
+    setFeedFocus(plan.focus);
+    if (plan.missing) showToast(wit.notiTargetGone);
+  };
+
   // 설정은 두 셸이 공유하는 알림 하위 화면이다 — 데스크톱에서 연 뒤 폭이 좁아져도
   // 기억해 둔 홈 뒤에 숨지 않도록, 대응하는 모바일 탭도 함께 알림으로 맞춘다.
   const openNotiSettings = () => {
@@ -860,7 +903,8 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
     <NotiPage notifications={snap.notifications}
       onRead={(id) => store.markNotificationRead(id)}
       onReadAll={() => store.markAllNotificationsRead()}
-      onOpenSettings={openNotiSettings} />
+      onOpenSettings={openNotiSettings}
+      onOpenTarget={openNotiTarget} />
   );
 
   // 떠 있는 기록 버튼은 홈·피드에만 선다 — 캘린더·알림은 아래 여백도 그만큼 줄어든다
@@ -892,13 +936,9 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
                 onRead={(id) => store.markNotificationRead(id)}
                 onReadAll={() => { store.markAllNotificationsRead(); showToast(wit.notiReadAll); }}
                 onOpenSettings={openNotiSettings}
-                // 알림이 가리키는 쪽(기록/라운지 글)이 보이도록 필터를 풀어 준다 —
-                // 라운지 새 글 알림을 눌렀는데 '기록만' 필터가 남으면 대상이 안 보인다
-                onOpenFeed={(target) => {
-                  setNotiOpen(false);
-                  setView('feed');
-                  setFeedFilter(target === 'post' ? revealPosts : revealEntries);
-                }}
+                // 알림이 가리키는 쪽(기록/라운지 글)이 보이도록 필터를 풀고, 구체 타깃이
+                // 있으면 그 카드로 스크롤+하이라이트까지 — 계획은 notiNavPlan 한 곳이다
+                onOpenFeed={openNotiTarget}
                 onClose={closeNoti} />
             ) : null}
             onCompose={() => openNew()} composeRef={ctaRef} />

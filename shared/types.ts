@@ -554,6 +554,9 @@ export interface Notification {
   why: NotifWhy;
   actor: MemberId | null; // 행위자 — system·집계 행은 null일 수 있다
   entryId: string | null; // 관련 기록 (없으면 null)
+  /** 관련 라운지 글 (kind=write·why=post만). 옵셔널인 이유: IDB에 남은 구버전 행과
+      구버전 번들의 스냅샷에는 이 필드가 없다 — 없으면 딥링크 없이 피드로만 간다. */
+  postId?: string | null;
   quote: string; // 인용문(댓글 본문, 이모지 등). '' = 없음
   ctx: string; // 부가 설명 한 줄. '' = 없음 (집계 행은 클라이언트가 count로 만든다)
   actors: MemberId[]; // 집계 행(react_daily)의 참여자 목록

@@ -1,6 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { MemberId, Notification } from '../../shared/types';
-import { WHY_BADGE, displayActorOf, feedTargetOf, matchesFilter, readRow, restOf, type NotiRow } from './NotiPage';
+import {
+  WHY_BADGE,
+  displayActorOf,
+  matchesFilter,
+  navTargetOf,
+  navTargetOfRow,
+  readRow,
+  restOf,
+  type NotiRow,
+} from './NotiPage';
 
 const base = (over: Partial<Notification> = {}): Notification => ({
   id: 'n1',
@@ -48,12 +57,42 @@ describe('알림 행 표시', () => {
     expect(displayActorOf(e)).toBe('wg'); // 사람이 쓴 글 — 아바타는 작성자
   });
 
-  // 라운지 글 알림을 눌렀는데 '기록만' 필터가 남으면 대상이 안 보인다 — 대상 판정이 갈림길
-  it('라운지 새 글 알림만 라운지를 가리키고, 나머지는 전부 기록이다', () => {
-    expect(feedTargetOf(base({ kind: 'write', why: 'post' }))).toBe('post');
-    expect(feedTargetOf(base({ kind: 'write', why: 'entry' }))).toBe('entry');
-    expect(feedTargetOf(base())).toBe('entry'); // 댓글
-    expect(feedTargetOf(base({ kind: 'react', why: 'react_daily' }))).toBe('entry');
+});
+
+describe('navTargetOf (알림 → 이동 타깃)', () => {
+  it('entryId가 있으면 종류 불문 기록 딥링크다', () => {
+    expect(navTargetOf(base({ entryId: 'e1' }))).toEqual({ kind: 'entry', id: 'e1' }); // 댓글
+    expect(navTargetOf(base({ kind: 'mention', why: 'mention', entryId: 'e1' })))
+      .toEqual({ kind: 'entry', id: 'e1' });
+    expect(navTargetOf(base({ kind: 'write', why: 'entry', entryId: 'e1' })))
+      .toEqual({ kind: 'entry', id: 'e1' });
+    expect(navTargetOf(base({ kind: 'react', why: 'react', entryId: 'e1' })))
+      .toEqual({ kind: 'entry', id: 'e1' });
+  });
+
+  it('라운지 새 글은 postId가 있으면 글 딥링크, 없으면(구버전 캐시 행) 피드 폴백이다', () => {
+    expect(navTargetOf(base({ kind: 'write', why: 'post', postId: 'p1' })))
+      .toEqual({ kind: 'post', id: 'p1' });
+    expect(navTargetOf(base({ kind: 'write', why: 'post' })))
+      .toEqual({ kind: 'feed', reveal: 'post' });
+  });
+
+  it('구체 카드가 없는 행(시작·시스템·하루 요약)은 기록 쪽 피드만 연다', () => {
+    expect(navTargetOf(base({ kind: 'start', why: 'daily' }))).toEqual({ kind: 'feed', reveal: 'entry' });
+    expect(navTargetOf(base({ kind: 'system', why: 'quiet', actor: null })))
+      .toEqual({ kind: 'feed', reveal: 'entry' });
+    expect(navTargetOf(base({ kind: 'react', why: 'react_daily', actors: ['th'] })))
+      .toEqual({ kind: 'feed', reveal: 'entry' });
+  });
+
+  // 접힌 줄은 서로 다른 기록의 댓글 묶음 — 대표 한 건으로 딥링크하면 나머지가 묻힌다
+  it('접힌 줄은 대표에 entryId가 있어도 피드만 연다', () => {
+    const a = base({ id: 'a', why: 'all', entryId: 'e1' });
+    const b = base({ id: 'b', why: 'all', entryId: 'e2' });
+    const row: NotiRow = { key: 'all:2026-08-14', head: a, group: [a, b] };
+    expect(navTargetOfRow(row)).toEqual({ kind: 'feed', reveal: 'entry' });
+    // 일반 행(원본 하나)은 그대로 head의 판정을 따른다
+    expect(navTargetOfRow({ key: 'a', head: a, group: [a] })).toEqual({ kind: 'entry', id: 'e1' });
   });
 });
 

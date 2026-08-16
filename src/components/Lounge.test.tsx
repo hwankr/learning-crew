@@ -1,8 +1,9 @@
 /* 라운지 글(피드에 섞이는 자유 글)의 순수 판정·정적 마크업 검증 — 디자인 원본의 규칙
    (3줄 클램프 문턱, 캐러셀 자리 계산, 내 글에만 삭제, N장 배지)과 통합 피드의 규칙
-   (날짜 묶음 혼합 정렬, 필터, 종류 칩)을 함께 본다. */
+   (날짜 묶음 혼합 정렬, 필터, 종류 칩)을 함께 본다. 딥링크 하이라이트의 타이머
+   수명주기는 effect 본체(runFeedFocus)를 stub DOM으로 직접 돌려 본다. */
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Entry, Post, PostComment } from '../../shared/types';
 import { COPY } from '../lib/constants';
 
@@ -18,7 +19,7 @@ import {
   postWhen,
   type LoungeActions,
 } from './Lounge';
-import { Feed, feedDayGroups, postDayKey } from './Feed';
+import { Feed, feedDayGroups, postDayKey, runFeedFocus } from './Feed';
 
 const TODAY = '2026-08-15';
 const YDAY = '2026-08-14';
@@ -73,7 +74,8 @@ function renderFeed(over: {
         onAddComment: () => undefined, onDeleteComment: () => undefined,
         onToggleReaction: () => undefined, onOpenPhoto: () => undefined,
         onRetryPhoto: () => false,
-      }} loungeActions={noopActions} />,
+      }} loungeActions={noopActions}
+      focus={null} onFocusDone={() => undefined} onFocusMissing={() => undefined} />,
   );
 }
 
@@ -137,6 +139,111 @@ describe('feedDayGroups (기록×자유 글 혼합 정렬)', () => {
     expect(feedDayGroups([e], [p], 'posts').flatMap((g) => g.items)).toHaveLength(1);
     expect(postDayKey(post({ id: 'p2', m: 'kj', createdAt: '깨진 값' }))).toBeNull();
     expect(feedDayGroups([], [post({ id: 'p2', m: 'kj', createdAt: '깨진 값' })], 'all')).toHaveLength(0);
+  });
+});
+
+describe('runFeedFocus (알림 딥링크 하이라이트 수명주기)', () => {
+  const FOCUS = { kind: 'entry' as const, id: 'e1' };
+
+  // FocusCardEl의 최소 stub — 스크롤 횟수와 클래스만 기록한다
+  function stubEl() {
+    const classes = new Set<string>();
+    const el = {
+      scrolls: 0,
+      classes,
+      scrollIntoView: () => { el.scrolls += 1; },
+      classList: { add: (c: string) => { classes.add(c); }, remove: (c: string) => { classes.delete(c); } },
+    };
+    return el;
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    // 효과 본체는 window.setTimeout을 쓴다 — node 테스트 환경엔 window가 없어 가짜 타이머로 잇는다
+    vi.stubGlobal('window', {
+      setTimeout: (fn: () => void, ms?: number) => setTimeout(fn, ms) as unknown as number,
+      clearTimeout: (id?: number) => clearTimeout(id),
+    });
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it('카드가 서 있으면 스크롤+플래시하고 1.8초 뒤 한 번만 접는다', () => {
+    const el = stubEl();
+    const done = vi.fn();
+    const expire = { id: 0 };
+    const cleanup = runFeedFocus(FOCUS, el, expire, done, vi.fn());
+    expect(el.scrolls).toBe(1);
+    expect(el.classes.has('feed-flash')).toBe(true);
+    vi.advanceTimersByTime(1800);
+    expect(done).toHaveBeenCalledTimes(1);
+    // App이 focus를 비우면 effect가 다시 돈다 — cleanup의 만료 예약은 다음 실행이 취소한다
+    cleanup!();
+    runFeedFocus(null, null, expire, done, vi.fn());
+    vi.runAllTimers();
+    expect(done).toHaveBeenCalledTimes(1);
+  });
+
+  it('필터까지 풀고 왔는데 카드가 없으면 missing 폴백을 부른다 (계획 뒤 삭제 레이스)', () => {
+    const done = vi.fn();
+    const missing = vi.fn();
+    expect(runFeedFocus(FOCUS, null, { id: 0 }, done, missing)).toBeUndefined();
+    expect(missing).toHaveBeenCalledTimes(1);
+    vi.runAllTimers();
+    expect(done).not.toHaveBeenCalled();
+  });
+
+  it('하이라이트 도중 피드를 떠나면(진짜 unmount) 요청이 만료된다 — 재방문 때 또 튀지 않는다', () => {
+    const el = stubEl();
+    const done = vi.fn();
+    const cleanup = runFeedFocus(FOCUS, el, { id: 0 }, done, vi.fn());
+    vi.advanceTimersByTime(1000);
+    cleanup!();
+    expect(el.classes.has('feed-flash')).toBe(false);
+    expect(done).not.toHaveBeenCalled();
+    vi.runAllTimers(); // 0ms 만료 — 되돌아온 effect가 없으니 요청을 접는다
+    expect(done).toHaveBeenCalledTimes(1);
+  });
+
+  it('1.8초 완료 직후 진짜 unmount가 겹쳐도 done은 한 번만 — 완료·만료 경합', () => {
+    const el = stubEl();
+    const done = vi.fn();
+    const cleanup = runFeedFocus(FOCUS, el, { id: 0 }, done, vi.fn());
+    vi.advanceTimersByTime(1800);
+    expect(done).toHaveBeenCalledTimes(1);
+    // focus=null 재실행이 도착하기 전에 실제 unmount cleanup이 먼저 끼어드는 경합 —
+    // 다음 setup이 없으니 cleanup의 0ms 만료를 취소할 손이 없다
+    cleanup!();
+    vi.runAllTimers();
+    expect(done).toHaveBeenCalledTimes(1); // 이미 완료한 요청 — 만료는 침묵한다
+  });
+
+  it('카드 없음 + StrictMode 재실행 조합에서도 missing은 요청당 한 번만 선다', () => {
+    const missing = vi.fn();
+    const expire = { id: 0 };
+    // missing 분기는 cleanup이 없다 — replay는 부모가 요청을 접기 전에 같은 focus로 또 돈다
+    runFeedFocus(FOCUS, null, expire, vi.fn(), missing);
+    runFeedFocus(FOCUS, null, expire, vi.fn(), missing);
+    expect(missing).toHaveBeenCalledTimes(1);
+    // 새 요청(새 객체)은 다시 알린다 — 같은 대상이라도 별개의 딥링크다
+    runFeedFocus({ ...FOCUS }, null, expire, vi.fn(), missing);
+    expect(missing).toHaveBeenCalledTimes(2);
+  });
+
+  it('StrictMode의 가짜 해체는 만료시키지 않는다 — 곧바로 온 재실행이 취소하고 처음부터 다시 돈다', () => {
+    const el = stubEl();
+    const done = vi.fn();
+    const expire = { id: 0 };
+    const cleanup = runFeedFocus(FOCUS, el, expire, done, vi.fn());
+    cleanup!();
+    runFeedFocus(FOCUS, el, expire, done, vi.fn()); // React가 같은 커밋에서 곧장 다시 부른다
+    vi.advanceTimersByTime(0);
+    expect(done).not.toHaveBeenCalled(); // 만료가 취소됐다
+    expect(el.classes.has('feed-flash')).toBe(true);
+    vi.advanceTimersByTime(1800);
+    expect(done).toHaveBeenCalledTimes(1);
   });
 });
 

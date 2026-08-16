@@ -140,10 +140,29 @@ export function readRow(row: NotiRow, onRead: (id: string) => void): void {
   for (const x of row.group) if (x.readAt === null) onRead(x.id);
 }
 
-/** 알림을 눌렀을 때 데려갈 곳 — 라운지 새 글 알림만 라운지 글을 가리키고, 나머지는 전부
-    기록이다. 피드 필터를 어느 쪽으로 풀어 줄지(revealPosts/revealEntries)가 이걸 따른다. */
-export function feedTargetOf(n: Notification): 'entry' | 'post' {
-  return n.kind === 'write' && n.why === 'post' ? 'post' : 'entry';
+/** 알림을 눌렀을 때 데려갈 곳.
+    - entry/post: 피드의 그 카드로 딥링크(스크롤 + 하이라이트)
+    - feed: 구체 카드는 없고 방향만 있다 — 필터를 reveal 쪽으로 풀어 피드만 연다
+    entryId가 있으면 종류 불문 기록 딥링크다(댓글·멘션·반응·새 기록이 전부 여기).
+    라운지 새 글은 postId가 구버전 캐시 행에는 없을 수 있다 — 그때는 피드 폴백. */
+export type NotiNavTarget =
+  | { kind: 'entry' | 'post'; id: string }
+  | { kind: 'feed'; reveal: 'entry' | 'post' };
+
+export function navTargetOf(n: Notification): NotiNavTarget {
+  if (n.entryId) return { kind: 'entry', id: n.entryId };
+  if (n.kind === 'write' && n.why === 'post') {
+    return n.postId ? { kind: 'post', id: n.postId } : { kind: 'feed', reveal: 'post' };
+  }
+  // start·system·집계(react_daily) — 가리키는 카드가 없다. 방향은 기록 쪽이 자연스럽다.
+  return { kind: 'feed', reveal: 'entry' };
+}
+
+/** 행 단위 판정 — 접힌 줄(크루 전체 댓글 여러 건)은 서로 다른 기록을 덮으므로
+    대표 한 건으로 딥링크하지 않고 피드만 연다(한 기록을 고르면 나머지가 묻힌다). */
+export function navTargetOfRow(row: NotiRow): NotiNavTarget {
+  if (row.group.length > 1) return { kind: 'feed', reveal: 'entry' };
+  return navTargetOf(row.head);
 }
 
 /** 행 앞에 세울 사람 — 하루 요약은 actor 대신 actors에 참여자를 담아 오므로 첫 사람을 쓴다.
@@ -191,8 +210,12 @@ export function NotiRowView({
     : restOf(n);
   const ctx = grouped ? '' : ctxOf(n);
   const av = compact ? 30 : 38;
-  // 드롭다운의 행은 읽음 처리에서 끝나지 않고 피드로 데려간다 — 라벨도 그 결과를 말한다
-  const label = compact ? '읽고 피드로 이동' : anyUnread ? '읽음으로 표시' : undefined;
+  // 라벨은 누른 결과를 말한다 — 드롭다운은 모든 행이 피드로 가고, 전체 화면(모바일)은
+  // 구체 타깃이 있는 행만 그 글로 이동하며 나머지는 읽음 처리에서 끝난다
+  const deepLink = navTargetOfRow(row).kind !== 'feed';
+  const label = deepLink
+    ? '읽고 해당 글로 이동'
+    : compact ? '읽고 피드로 이동' : anyUnread ? '읽음으로 표시' : undefined;
 
   // 행 자체는 role=button div — 안에 진짜 <button>(펼치기)이 서야 해서
   // button 안에 button을 중첩하는 무효 HTML을 피한다
@@ -256,9 +279,12 @@ interface Props {
   onRead: (id: string) => void;
   onReadAll: () => void;
   onOpenSettings: () => void;
+  /** 구체 타깃(기록·라운지 글)이 있는 행을 눌렀을 때 — 읽음 처리는 여기(NotiPage)가 이미
+      끝냈고, 피드 탭 전환·스크롤·하이라이트만 App이 맡는다 */
+  onOpenTarget: (target: NotiNavTarget) => void;
 }
 
-export function NotiPage({ notifications, onRead, onReadAll, onOpenSettings }: Props) {
+export function NotiPage({ notifications, onRead, onReadAll, onOpenSettings, onOpenTarget }: Props) {
   const [filter, setFilter] = useState<FilterId>('all');
   const [open, setOpen] = useState<Record<string, boolean>>({});
   // 자정을 넘기면 "오늘/어제" 라벨이 바뀌어야 한다 — 분 단위로 날짜 키를 확인해
@@ -329,7 +355,13 @@ export function NotiPage({ notifications, onRead, onReadAll, onOpenSettings }: P
               <NotiRowView key={row.key} row={row} compact={false}
                 expanded={!!open[row.key]}
                 onExpand={() => setOpen((p) => ({ ...p, [row.key]: !p[row.key] }))}
-                onActivate={() => readRow(row, onRead)} />
+                onActivate={() => {
+                  readRow(row, onRead);
+                  // 타깃 없는 행(start·system·집계·접힌 줄)은 지금처럼 읽음 처리에서 끝난다 —
+                  // 알림 탭에서 갑자기 피드로 튕기면 남은 알림을 마저 못 본다
+                  const target = navTargetOfRow(row);
+                  if (target.kind !== 'feed') onOpenTarget(target);
+                }} />
             ))}
           </div>
         </div>

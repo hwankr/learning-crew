@@ -1099,6 +1099,9 @@ function toNotification(r: typeof notifications.$inferSelect): Notification {
     why: r.why as NotifWhy,
     actor: (r.actor as MemberId | null) ?? null,
     entryId: r.entryId,
+    // 라운지 글 id는 전용 열이 없고(entry_id는 uuid 열이라 종류를 섞지 않는다) 중복 방지용
+    // aggKey('write:post:<id>')에만 남는다 — 딥링크가 쓰도록 여기서 파생해 내린다
+    postId: r.aggKey?.startsWith('write:post:') ? r.aggKey.slice('write:post:'.length) : null,
     quote: r.quote,
     ctx: r.ctx,
     actors: Array.isArray(r.actors)

@@ -372,6 +372,11 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
   transition: background 160ms;
 }
 .entry.editing { background: #FFF9E6; }
+/* 알림 딥링크 도착 플래시 — 앱 악센트(#FFB800) 계열을 옅게 스치고 지나간다. 배경만
+   건드리므로 레이아웃은 그대로고, 끝값이 transparent라 카드의 평소 배경으로 자연히
+   돌아온다(클래스는 Feed가 앵커 래퍼에 잠깐 얹었다 걷는다 — 라운지 카드도 같은 앵커). */
+@keyframes feed-flash { from { background: #FFEBAD; } 55% { background: #FFF7DE; } to { background: transparent; } }
+.feed-flash > .entry, .feed-flash > .post-card { animation: feed-flash 1.6s ease-out; }
 .entry-main { flex: 1; min-width: 0; }
 .entry-head { display: flex; align-items: center; gap: 7px; }
 /* 별점은 줄지 않는다 — 좁아질 때 줄어드는 쪽은 태그 라벨이어야 한다 */

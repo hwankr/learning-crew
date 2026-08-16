@@ -7,7 +7,7 @@ import type { RefObject } from 'react';
 import type { Notification } from '../../shared/types';
 import { dayKey } from '../lib/constants';
 import { GearIcon } from './icons';
-import { NotiRowView, displayAt, feedTargetOf, groupDayRows, readRow } from './NotiPage';
+import { NotiRowView, displayAt, groupDayRows, navTargetOfRow, readRow, type NotiNavTarget } from './NotiPage';
 
 export function NotiDropdown({
   notifications, unread, bellRef, onRead, onReadAll, onOpenSettings, onOpenFeed, onClose,
@@ -19,9 +19,9 @@ export function NotiDropdown({
   onRead: (id: string) => void;
   onReadAll: () => void;
   onOpenSettings: () => void;
-  /** 행을 누르면 읽음 처리 후 대상이 있는 피드로 데려간다 — 대상이 기록이냐 라운지 글이냐를
-      함께 넘겨, App이 그 대상이 보이는 쪽으로 필터를 풀게 한다 */
-  onOpenFeed: (target: 'entry' | 'post') => void;
+  /** 행을 누르면 읽음 처리 후 피드로 데려간다 — 구체 타깃(기록·라운지 글)이 있으면 App이
+      필터를 풀고 그 카드로 스크롤+하이라이트까지, 방향뿐이면(feed) 필터만 푼다 */
+  onOpenFeed: (target: NotiNavTarget) => void;
   onClose: () => void;
 }) {
   const [open, setOpen] = useState<Record<string, boolean>>({});
@@ -83,7 +83,7 @@ export function NotiDropdown({
               onExpand={() => setOpen((p) => ({ ...p, [row.key]: !p[row.key] }))}
               onActivate={() => {
                 readRow(row, onRead);
-                onOpenFeed(feedTargetOf(row.head));
+                onOpenFeed(navTargetOfRow(row));
               }} />
           ))
         )}
