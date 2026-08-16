@@ -835,7 +835,7 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 }
 .cal-cell-ev.near { background: #FFF9E6; color: #B37F00; }
 .cal-cell-ev.past { background: #F5F6F8; color: #B4BAC4; }
-/* 와이드 셀의 기록 한 줄 — "색 점 + 이름 · 태그". 배경 없는 글줄이라 채운 알약(일정)과
+/* 와이드 셀의 기록 한 줄 — "색 점 + 이름". 배경 없는 글줄이라 채운 알약(일정)과
    모양으로 갈리고, 점의 색이 누구인지를 말한다(격자 점 시절과 같은 문법). */
 .cal-cell-en {
   display: flex; align-items: center; gap: 5px; width: 100%; min-width: 0;

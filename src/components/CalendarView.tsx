@@ -170,8 +170,9 @@ export function CalendarView({
         onClick={() => setSelDay(k)}>
         <span className="cal-num">{n}</span>
         {/* 와이드 셀은 자리가 있어 내용이 글자로 선다(노션식) — 일정은 제목 알약(임박·지남의
-            색 규칙은 선택일 행과 같다), 기록은 "색 점 + 이름 · 태그" 한 줄이다. 채운 알약은
-            약속, 점 달린 글줄은 기록 — 모양이 종류를 가르고 색은 여전히 사람 몫이다. */}
+            색 규칙은 선택일 행과 같다), 기록은 "색 점 + 이름" 한 줄이다(태그까지 실으면
+            42칸에서 줄이 소란해진다 — 무엇을 했는지는 그 날을 고르면 패널이 말한다).
+            채운 알약은 약속, 점 달린 글줄은 기록 — 모양이 종류를 가르고 색은 사람 몫이다. */}
         {desktop && cellEvs.map((ev) => (
           <span key={ev.id} className={'cal-cell-ev ' + eventPhase(ev, todayKey)}>{ev.title}</span>
         ))}
@@ -180,7 +181,7 @@ export function CalendarView({
           return (
             <span key={e.id} className="cal-cell-en">
               <span className="cal-cell-en-dot" style={{ background: m.color }} />
-              <span className="cal-cell-en-text">{m.name} · {e.tag}</span>
+              <span className="cal-cell-en-text">{m.name}</span>
             </span>
           );
         })}

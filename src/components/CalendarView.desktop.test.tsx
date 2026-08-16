@@ -58,10 +58,11 @@ describe('와이드 셀의 일정 알약·기록 글줄', () => {
     expect(html.split('cal-cell-ev').length - 1).toBe(3);
   });
 
-  it('기록은 "이름 · 태그" 글줄로 선다', () => {
+  // 태그는 싣지 않는다 — 42칸에서 줄이 소란해지고, 무엇을 했는지는 선택일 패널이 말한다
+  it('기록은 이름만의 글줄로 선다', () => {
     const html = view({ entries: [entry('e1', '2026-08-14')] });
     expect(html).toContain('cal-cell-en');
-    expect(html).toContain('웅 · 영어');
+    expect(html).toContain('<span class="cal-cell-en-text">웅</span>');
   });
 
   // 일정이 기록보다 먼저다 — 약속이 먼저 보인다. 넘치면 마지막 줄을 "+N"에 내준다.
