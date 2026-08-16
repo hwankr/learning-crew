@@ -36,6 +36,7 @@ import {
   type MobileTab,
 } from './lib/uiState';
 import { useIsDesktop } from './lib/useMediaQuery';
+import { useOverlayHistory } from './lib/useOverlayHistory';
 import { TopBar } from './components/TopBar';
 import { TabBar } from './components/TabBar';
 import { Fab } from './components/Fab';
@@ -361,12 +362,13 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
   }, [modal, draftKey]);
 
   const closeModal = useCallback(() => {
-    if (revivingRef.current) return;
+    if (revivingRef.current) return false;
     photoSession.current += 1; // 이 세션은 끝났다 — 준비 중이던 사진 결과는 되돌아간다
     setModal((m) => {
       if (m.open) saveDraft(draftKey(m.editingId), m, editBase.current);
       return EMPTY_MODAL;
     });
+    return true;
   }, [draftKey]);
 
   const openNew = () => {
@@ -679,6 +681,36 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
   const lightIdx = light ? lightboxIndex(lightPhotos, light.photoId) : 0;
 
   const pendingDel = delId ? entries.find((e) => e.id === delId) ?? null : null;
+
+  const entryLightOpen = lightEntry !== null && lightPhotos.length > 0;
+  const loungeLightOpen = loungePost !== null && loungePhotos.length > 0;
+
+  // 이 배열은 실제 겹침 순서의 거울이다 — .overlay(z 50) < 라이트박스(z 55)의 z-index 층위와
+  // z 50 동층 내 아래 JSX 렌더 순서를 모두 그대로 따른다. 아래 JSX에서 오버레이 렌더 순서를
+  // 바꾸면 이 배열도 함께 바꿔야 한다.
+  useOverlayHistory([
+    { id: 'entry-sheet', open: modal.open, close: closeModal },
+    { id: 'entry-delete', open: pendingDel !== null, close: () => setDelId(null) },
+    { id: 'lounge-sheet', open: loungeDraft.open, close: closeLounge },
+    { id: 'lounge-delete', open: pendingLoungeDel !== null, close: () => setLoungeDelId(null) },
+    { id: 'entry-lightbox', open: entryLightOpen, close: () => setLight(null) },
+    { id: 'lounge-lightbox', open: loungeLightOpen, close: () => setLoungeLight(null) },
+  ]);
+
+  // 원격 삭제·사진 교체로 렌더 대상이 사라진 확대 뷰/확인창은 다시 나타나지 않게
+  // 식별 상태도 비운다. history 쪽은 위 훅이 같은 렌더에서 marker를 직렬로 소비한다.
+  useEffect(() => {
+    if (light && !entryLightOpen) setLight(null);
+  }, [light, entryLightOpen]);
+  useEffect(() => {
+    if (loungeLight && !loungeLightOpen) setLoungeLight(null);
+  }, [loungeLight, loungeLightOpen]);
+  useEffect(() => {
+    if (delId && !pendingDel) setDelId(null);
+  }, [delId, pendingDel]);
+  useEffect(() => {
+    if (loungeDelId && !pendingLoungeDel) setLoungeDelId(null);
+  }, [loungeDelId, pendingLoungeDel]);
 
   // 태그 액션은 렌더 스냅샷 대신 스토어의 현재 캐시를 기준으로 한다 —
   // 같은 틱에 연속 호출되어도 앞선 추가·삭제를 잃지 않는다.
