@@ -212,7 +212,7 @@ export function EventSheet({
             돌아갈 자리는 useFocusTrap이 기억한다: autoFocus는 커밋 단계라 이미 늦지 않다. */}
         <input className="event-input lead" id={`${titleId}-t`} value={title}
           maxLength={EVENT_LIMITS.title} autoFocus
-          placeholder="정보처리기사 실기 · 프론트엔드 2차 면접…"
+          placeholder="정보처리기사 실기 · 면접…"
           onChange={(ev) => setTitle(ev.target.value)} />
 
         <div className="sheet-label-row">

@@ -1,8 +1,9 @@
+import { useEffect, useRef } from 'react';
 import type { Comment, CrewEvent, Entry, MemberId, ReactionSet } from '../../shared/types';
-import { MEMBERS, W, dayKey, membersOfEntries, pad2, type CopySet } from '../lib/constants';
+import { MEMBERS, W, dayKey, memberOf, membersOfEntries, pad2, type CopySet } from '../lib/constants';
 import {
-  eventDdayLabel, eventMembers, eventParticipants, eventPhase, eventSpanLabel, eventWhenLabel,
-  eventsByDay, eventsDayMembers, participantsLabel, upcomingEvent,
+  eventDdayLabel, eventMembers, eventParticipants, eventPhase, eventSpanLabel,
+  eventsByDay, eventsDayMembers, participantsLabel,
 } from '../lib/events';
 import { useIsDesktop } from '../lib/useMediaQuery';
 import { calOffOf, sameDayInMonth } from '../lib/uiState';
@@ -14,6 +15,10 @@ import { EntryCard, type EntryActions } from './EntryCard';
 /** 격자는 늘 42칸(6주) — 뒤를 빈 칸으로 채워 5주 달과 6주 달 사이에 높이가 튀지 않게 한다.
     선행 공백(최대 6) + 날짜(최대 31)는 37칸이라 항상 이 안에 들어온다. */
 const CELLS = 42;
+
+/** 와이드 셀에 세우는 항목(일정 알약 + 기록 줄)의 최대 수 — 셀 높이가 고정이라 넘치면
+    마지막 한 줄을 "+N"에 내준다. 무엇이 더 있었는지는 그 날을 고르면 옆 패널이 다 말한다. */
+const MAX_CELL_ITEMS = 3;
 
 /** 머리에 붙는 크루 이름 배지 — 좁은 셸에는 상단 바가 없어 여기가 "어디를 보고 있나"의
     유일한 자리이고, 와이드에서는 같은 문법을 캘린더 머리에도 한 번 더 세운다(디자인). */
@@ -39,19 +44,6 @@ export type HeadAction = 'today' | 'event';
 
 export function headActionOrder(desktop: boolean): HeadAction[] {
   return desktop ? ['event', 'today'] : ['today', 'event'];
-}
-
-/** 와이드 오른쪽 열 맨 위에 서는 일정 하나 — 고른 날에 일정이 있으면 그 날의 첫 일정이고,
-    없으면 다가오는 다음 일정이다(라벨이 둘을 가른다). 둘 다 없으면 카드를 세우지 않는다:
-    빈 카드는 선택일 목록을 아래로 밀기만 한다.
-    "이 날"이 "다가오는"보다 먼저인 이유: 사용자가 방금 고른 날이 화면의 주제다. */
-export function topEventOf(
-  selEvents: readonly CrewEvent[],
-  upcoming: CrewEvent | null,
-): { ev: CrewEvent; label: string } | null {
-  const onDay = selEvents[0];
-  if (onDay) return { ev: onDay, label: '이 날의 일정' };
-  return upcoming ? { ev: upcoming, label: '다가오는 일정' } : null;
 }
 
 /** 날짜 버튼이 낭독기에 읽히는 이름 — "8월 16일, 기록 3개, 일정 1개"(없는 쪽은 빼고,
@@ -119,6 +111,16 @@ export function CalendarView({
   const monthCount = entries.filter((e) => e.day.startsWith(monthPrefix)).length;
   const monthEvents = monthEventCount(events, monthPrefix, daysIn);
 
+  /* 달이 넘어갔음을 알리는 도착 모션 — 42칸 격자는 달이 바뀌어도 생김새가 같아 숫자만 조용히
+     바뀌면 넘어간 것을 놓친다. 새 격자를 즉시 그리고 그 위에 짧은 페이드+슬라이드만 얹으므로
+     연타를 막지 않는다. 방향은 이전 렌더의 달과 비교해 얻는다: 화살표만이 아니라 '오늘'로
+     점프해도 옳은 방향으로 움직이고, 같은 달 안의 이동(날짜 클릭)은 움직이지 않는다.
+     ref 갱신은 effect에서 — 첫 렌더와 같은 달의 재렌더는 클래스가 비어 정적 마크업이 그대로다. */
+  const prevMonthRef = useRef(monthPrefix);
+  const slide = prevMonthRef.current === monthPrefix ? ''
+    : prevMonthRef.current < monthPrefix ? ' cal-slide-next' : ' cal-slide-prev';
+  useEffect(() => { prevMonthRef.current = monthPrefix; });
+
   // 달을 넘길 때 선택일도 같은 일(日)로 따라간다 — 격자만 넘어가면 옆 패널이 딴 달을 가리킨다
   const shiftMonth = (step: number) => {
     const base = new Date(calBase.getFullYear(), calBase.getMonth() + step, 1);
@@ -149,6 +151,14 @@ export function CalendarView({
     const dots = membersOfEntries(dayEntries);
     // 일정 점은 참여자에서 뽑는다 — 등록자 하나로 찍으면 셋이 함께 치는 시험이 한 사람 일이 된다
     const eventDayMembers = eventsDayMembers(dayEvents);
+    /* 와이드 셀의 항목 예산 — 일정이 기록보다 먼저다(약속이 먼저 보인다). 다 못 들어가면
+       마지막 줄을 "+N"에 내주고 남는 자리만 채운다: 3개는 그대로 3줄, 4개부터 2줄 + "+2". */
+    const cellTotal = dayEvents.length + dayEntries.length;
+    const cellBudget = cellTotal > MAX_CELL_ITEMS ? MAX_CELL_ITEMS - 1 : MAX_CELL_ITEMS;
+    const cellEvs = dayEvents.slice(0, cellBudget);
+    const cellEns = dayEntries.slice()
+      .sort((a, b) => a.time.localeCompare(b.time))
+      .slice(0, cellBudget - cellEvs.length);
     cells.push(
       <button key={k}
         className={'cal-cell' + (isSel ? ' sel' : '') + (isToday ? ' today' : '') + (isFuture ? ' future' : '')}
@@ -159,18 +169,37 @@ export function CalendarView({
         aria-label={cellLabel(calBase.getMonth() + 1, n, dayEntries.length, dayEvents.length)}
         onClick={() => setSelDay(k)}>
         <span className="cal-num">{n}</span>
-        {/* 일정 네모가 기록 동그라미보다 앞이다 — 줄이 바뀌어도 약속이 먼저 보인다.
-            네모 하나가 일정 하나가 아니라 사람 하나다(기록 동그라미와 같은 문법): 그 날 일정들의
-            참여자를 합쳐 사람별로 한 번씩만 찍는다 — 셋이 함께 치는 시험은 네모 셋이다.
-            두 셸이 같은 문법을 쓴다: 무엇이 있었나는 점이 말하고, 무엇이었나는 옆(아래) 패널이 말한다. */}
-        <span className="cal-day-dots">
-          {eventDayMembers.map((m) => (
-            <span key={m.id} className="cal-day-dot ev" style={{ background: m.color }} />
-          ))}
-          {dots.map((m) => (
-            <span key={m.id} className="cal-day-dot" style={{ background: m.color }} />
-          ))}
-        </span>
+        {/* 와이드 셀은 자리가 있어 내용이 글자로 선다(노션식) — 일정은 제목 알약(임박·지남의
+            색 규칙은 선택일 행과 같다), 기록은 "색 점 + 이름 · 태그" 한 줄이다. 채운 알약은
+            약속, 점 달린 글줄은 기록 — 모양이 종류를 가르고 색은 여전히 사람 몫이다. */}
+        {desktop && cellEvs.map((ev) => (
+          <span key={ev.id} className={'cal-cell-ev ' + eventPhase(ev, todayKey)}>{ev.title}</span>
+        ))}
+        {desktop && cellEns.map((e) => {
+          const m = memberOf(e.m);
+          return (
+            <span key={e.id} className="cal-cell-en">
+              <span className="cal-cell-en-dot" style={{ background: m.color }} />
+              <span className="cal-cell-en-text">{m.name} · {e.tag}</span>
+            </span>
+          );
+        })}
+        {desktop && cellTotal > MAX_CELL_ITEMS && (
+          <span className="cal-cell-more">+{cellTotal - cellBudget}</span>
+        )}
+        {/* 좁은 화면은 글자가 들어갈 자리가 없어 점으로 접는다 — 가로 막대는 일정(하나가
+            사람 하나다: 그 날 일정들의 참여자를 합쳐 사람별로 한 번씩), 동그라미는 기록.
+            와이드는 위의 글줄이 다 말하므로 점 줄 자체를 그리지 않는다. */}
+        {!desktop && (
+          <span className="cal-day-dots">
+            {eventDayMembers.map((m) => (
+              <span key={m.id} className="cal-day-dot ev" style={{ background: m.color }} />
+            ))}
+            {dots.map((m) => (
+              <span key={m.id} className="cal-day-dot" style={{ background: m.color }} />
+            ))}
+          </span>
+        )}
       </button>,
     );
   }
@@ -182,14 +211,6 @@ export function CalendarView({
   const selEvents = evByDay.get(selDay) ?? [];
   const selMembers = membersOfEntries(selList); // 헤더 아바타도 같은 규칙 — 아래 카드와 인원이 맞아야 한다
   const selD = new Date(selDay + 'T12:00:00');
-  // 배너·카드도 필터를 탄다 — '웅'만 켠 화면이 태현의 시험을 D-2로 알리면 필터가 거짓말이 된다
-  const nextEvent = upcomingEvent(shownEvents, todayKey);
-  /* 격자 위 배너에 세울 일정 — 좁은 화면은 늘 "다음 일정"이다(격자 위는 알림 자리).
-     와이드는 열이 넓어 고른 날의 일정을 먼저 세운다(옛 오른쪽 열 카드의 규칙 그대로) —
-     라벨이 무엇을 세웠는지 밝힌다. */
-  const banner = desktop
-    ? topEventOf(selEvents, nextEvent)
-    : nextEvent && { ev: nextEvent, label: '' };
 
   return (
     <div>
@@ -255,40 +276,17 @@ export function CalendarView({
               </button>
             ))}
           </div>
-          {/* 일정 하나가 격자 위에 슬림 배너로 선다 — 홈 배너(CrewPanel)와 같은 말이지만
-              이쪽은 필터를 탄다. 세울 일정이 없으면 접는다: 빈 배너는 격자 위 자리만 먹는다.
-              와이드는 무엇을 세웠는지(이 날 / 다가오는)를 위에 한 줄로 밝힌다 — 고른 날을 따라
-              배너가 바뀌는 자리라 라벨이 없으면 왜 바뀌었는지 알 수 없다. */}
-          {banner && (
-            <>
-              {banner.label && (
-                <div className="cal-top-label">
-                  <span>{banner.label}</span>
-                  <span className="cal-top-rule" aria-hidden="true" />
-                </div>
-              )}
-              <button className={'cal-banner ' + eventPhase(banner.ev, todayKey)}
-                onClick={() => setSelDay(banner.ev.day)}>
-                <span className="cal-banner-bar" aria-hidden="true" />
-                <span className="cal-banner-dday">{eventDdayLabel(banner.ev, todayKey)}</span>
-                <span className="cal-banner-main">
-                  <span className="cal-banner-title">{banner.ev.title}</span>
-                  <span className="cal-banner-sub">
-                    {participantsLabel(eventMembers(banner.ev))} · {eventWhenLabel(banner.ev.day, banner.ev.endDay)}
-                  </span>
-                </span>
-                <Chip tag={banner.ev.tag} variant="sm2" />
-              </button>
-            </>
-          )}
           <div className="cal-week">
             {W.map((d, i) => (
               <span key={d} className={'cal-wd' + (i === 0 ? ' sun' : '')}>{d}</span>
             ))}
           </div>
-          <div className="cal-grid">{cells}</div>
-          {/* 모양이 곧 뜻이다 — 동그라미는 기록, 네모는 일정. 격자에는 글자가 들어갈 자리가 없다.
-              두 셸 모두 늘 선다: 이 줄의 밑선이 격자와 그 아래를 가르는 구분선이라, 일정 없는
+          {/* key가 달이다 — 달이 바뀌면 격자가 새로 서면서 도착 모션이 다시 돈다
+              (같은 방향 연타에도 매번 움직여야 "넘어갔다"가 매번 들린다) */}
+          <div key={monthPrefix} className={'cal-grid' + slide}>{cells}</div>
+          {/* 모양이 곧 뜻이다 — 동그라미는 기록, 가로 막대는 일정(좁은 화면의 점 문법).
+              와이드는 셀이 스스로 말해 열쇠를 CSS로 접고 안내 문구만 남는다. 줄 자체는 두 셸
+              모두 늘 선다: 이 줄의 밑선이 격자와 그 아래를 가르는 구분선이라, 일정 없는
               달에 통째로 접으면 안내와 함께 그 선까지 사라진다. */}
           <div className="cal-legend">
             <span className="cal-legend-key"><span className="cal-legend-dot" />기록</span>

@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import type { CrewEvent, Entry, MemberId } from '../../shared/types';
 import { COPY } from '../lib/constants';
 import {
-  CalendarView, cellLabel, entriesOfMember, eventsOfMember, headActionOrder, topEventOf,
+  CalendarView, cellLabel, entriesOfMember, eventsOfMember, headActionOrder,
 } from './CalendarView';
 import { ComposeMenu } from './ComposeMenu';
 
@@ -45,26 +45,27 @@ function view(opts: {
 
 describe('캘린더의 일정', () => {
   it('기간 일정은 걸친 모든 날의 셀에 선다', () => {
-    const html = view({ events: [event({ id: 'a', day: '2026-08-18', endDay: '2026-08-20' })] });
+    const html = view({
+      events: [event({ id: 'a', day: '2026-08-18', endDay: '2026-08-20' })], selDay: '2026-08-18',
+    });
     // 셀에는 글자가 아니라 점이 선다 — 사흘이면 네모 셋(참여자 하나짜리 일정)
     expect(html.split('class="cal-day-dot ev"').length - 1).toBe(3);
-    // 제목이 서는 자리는 격자 밖이다 — 격자 위 배너 하나뿐(그 날을 고르면 선택일 행이 하나 더)
+    // 제목이 서는 자리는 격자 밖이다 — 그 날을 고르면 선택일 패널 행 하나뿐
     expect(html.split('정보처리기사 실기').length - 1).toBe(1);
   });
 
   it('임박한 일정과 지난 일정이 다른 옷을 입는다', () => {
-    expect(view({ events: [event({ id: 'a', day: '2026-08-19' })] })).toContain('cal-banner near');
-    // 지난 일정은 배너에 서지 않는다(다가오는 것만 세운다) — 그 날을 고르면 패널 행이 말한다
+    const near = view({ events: [event({ id: 'a', day: '2026-08-19' })], selDay: '2026-08-19' });
+    expect(near).toContain('sel-event-dday near');
     const past = view({ events: [event({ id: 'a', day: '2026-08-10' })], selDay: '2026-08-10' });
     expect(past).toContain('sel-event-dday past');
     expect(past).toContain('지남');
   });
 
   /* 시험 6일째가 'D+6'으로 서면 이미 끝난 일처럼 읽힌다 —
-     격자 위 배너와 선택일 패널 행이 함께 "진행 중"이라 말하고 임박과 같은 노란 옷을 입는다. */
-  it('진행 중인 기간 일정은 배너·패널 모두에서 "진행 중"이고 임박 옷을 입는다', () => {
+     선택일 패널 행이 "진행 중"이라 말하고 임박과 같은 노란 옷을 입는다. */
+  it('진행 중인 기간 일정은 패널에서 "진행 중"이고 임박 옷을 입는다', () => {
     const html = view({ events: [event({ id: 'a', day: '2026-08-10', endDay: '2026-08-20' })] });
-    expect(html).toContain('cal-banner near');
     expect(html).toContain('sel-event-dday near');
     expect(html).toContain('진행 중');
     expect(html).not.toContain('D+');
@@ -255,18 +256,9 @@ describe('모바일 캘린더의 머리와 배너', () => {
     expect(html).toContain('일정 1개');
   });
 
-  it('다가오는 일정이 D-day 배너로 서고 참여자·날짜를 말한다', () => {
-    const html = view({
-      events: [event({ id: 'a', day: '2026-08-18', title: '정보처리기사 실기', participants: ['jj'] })],
-    });
-    expect(html).toContain('cal-banner near');
-    expect(html).toContain('D-2');
-    expect(html).toContain('진주 · 8월 18일 (화)');
-  });
-
-  it('남은 일정이 없으면 배너를 접는다', () => {
-    expect(view({ events: [event({ id: 'a', day: '2026-08-10' })] })).not.toContain('cal-banner');
-    expect(view({})).not.toContain('cal-banner');
+  // 배너는 걷어냈다 — 다가오는 일정은 격자의 네모 점과 선택일 패널이 말한다
+  it('격자 위에 D-day 배너를 세우지 않는다', () => {
+    expect(view({ events: [event({ id: 'a', day: '2026-08-18' })] })).not.toContain('cal-banner');
   });
 });
 
@@ -290,23 +282,11 @@ describe('선택일 섹션', () => {
   });
 });
 
-/* 와이드 오른쪽 열 맨 위의 일정 카드 — 무엇을 세울지 고르는 규칙만 순수 함수로 검사한다
-   (정적 마크업은 늘 좁은 화면이라 카드 자체는 여기서 렌더되지 않는다). */
-describe('오른쪽 열의 일정 카드', () => {
-  const onDay = event({ id: 'a', day: TODAY, title: '면접' });
-  const next = event({ id: 'b', day: '2026-08-18' });
-
-  it('고른 날에 일정이 있으면 그 날의 첫 일정이 선다', () => {
-    expect(topEventOf([onDay], next)).toEqual({ ev: onDay, label: '이 날의 일정' });
-  });
-
-  it('고른 날이 비었으면 다가오는 일정이 대신 선다', () => {
-    expect(topEventOf([], next)).toEqual({ ev: next, label: '다가오는 일정' });
-  });
-
-  // 빈 카드는 선택일 목록을 아래로 밀기만 한다
-  it('둘 다 없으면 카드를 세우지 않는다', () => {
-    expect(topEventOf([], null)).toBeNull();
+/* 달 이동의 도착 모션 — 방향 클래스는 "이전 렌더와 달이 다를 때"만 붙는다.
+   정적 마크업은 늘 첫 렌더라 여기서 볼 수 있는 것은 "가만히 선다"까지다. */
+describe('달 이동 모션', () => {
+  it('첫 렌더의 격자는 모션 클래스 없이 선다', () => {
+    expect(view({})).not.toContain('cal-slide');
   });
 });
 

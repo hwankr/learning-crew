@@ -749,42 +749,22 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 .cal-filter-chip:active { transform: scale(0.97); }
 .cal-filter-dot { display: block; width: 5px; height: 5px; border-radius: 50%; flex: none; }
 
-/* 다가오는 일정 배너 — 좁은 화면 전용 노드. 왼쪽 노란 세로 바가 격자 위에서 이 줄만
-   들어 올린다. 임박한 일정만 노란 옷을 입는 것은 셀 알약·홈 배너와 같은 규칙이다. */
-.cal-banner {
-  position: relative; display: flex; align-items: center; gap: 10px; width: 100%;
-  padding: 11px 12px 11px 16px; margin: 0 0 14px; overflow: hidden;
-  border: 1px solid #E4E7EC; border-radius: 14px; background: #FFFFFF;
-  cursor: pointer; text-align: left;
-}
-.cal-banner.near { background: #FFF9E6; border-color: #FFD666; }
-.cal-banner-bar { position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: #FFB800; }
-/* 남은 날 수의 색은 홈 배너·셀 알약과 같은 규칙이다 — 임박하면 노랑, 지났으면 회색,
-   그 밖은 검정(먼 약속을 노랗게 두면 매일 급한 일이 하나 있는 것처럼 읽힌다) */
-.cal-banner-dday {
-  flex: none; font-size: 16px; font-weight: 900; letter-spacing: -0.02em;
-  color: #16181D; white-space: nowrap;
-}
-.cal-banner.near .cal-banner-dday { color: #B37F00; }
-/* 지난 일정이 배너에 서는 일은 없지만(다가오는 것만 고른다) 규칙은 한자리에 다 적어 둔다 */
-.cal-banner.past .cal-banner-dday { color: #9AA1AD; }
-.cal-banner-main { flex: 1; min-width: 0; }
-.cal-banner-title {
-  display: block; font-size: 13.5px; font-weight: 800; letter-spacing: -0.01em; color: #16181D;
-  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
-}
-.cal-banner-sub {
-  display: block; font-size: 11.5px; color: #9AA1AD; margin-top: 3px;
-  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
-}
-.cal-banner .chip { flex: none; }
-
 /* 격자 간격은 디자인이 6px이지만 좁은 화면에서는 3px로 둔다 — 320px에서 6px 간격이면
    셀 트랙이 34.9px까지 좁아져 아래 색 점 5개(33px)가 한 줄에 못 선다 */
 .cal-week { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 3px; margin-bottom: 6px; }
 .cal-wd { text-align: center; font-size: 11.5px; font-weight: 700; color: #9AA1AD; padding: 2px 0; }
 .cal-wd.sun { color: #D3352A; }
 .cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 3px; }
+/* 달 이동의 도착 모션 — 이전 격자가 밀려나가는 전환이 아니라, 새 격자가 즉시 선 위에
+   얹는 짧은 페이드+슬라이드다(연타를 막지 않는다). 방향이 곧 정보다: 다음 달은 오른쪽에서,
+   이전 달은 왼쪽에서 들어온다. */
+@keyframes cal-arrive-next { from { opacity: 0; transform: translateX(10px); } to { opacity: 1; transform: translateX(0); } }
+@keyframes cal-arrive-prev { from { opacity: 0; transform: translateX(-10px); } to { opacity: 1; transform: translateX(0); } }
+.cal-slide-next { animation: cal-arrive-next 140ms ease-out; }
+.cal-slide-prev { animation: cal-arrive-prev 140ms ease-out; }
+@media (prefers-reduced-motion: reduce) {
+  .cal-slide-next, .cal-slide-prev { animation: none; }
+}
 /* 셀은 숫자와 점만 남는다 — 42칸의 카드 테두리가 사라지면 격자가 아니라 날짜가 먼저 보인다.
    두 셸이 같은 문법을 쓰고 폭에 따라 크기만 갈린다(와이드 값은 아래 ≥900px 블록).
    min-width: 0 — 그리드 항목의 기본 최소 크기는 내용 크기라, 점이 늘어난 날이 격자를 밀지 않게. */
@@ -810,13 +790,39 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 /* 디자인 폭(375px)에서는 6px 점을 그대로 쓴다. 그보다 좁으면 현재 다섯 명도 한 줄에
    못 서므로 점·간격을 1px씩 줄이고, 여섯 명부터는 셀 높이 안에서 줄을 바꿔 받는다.
    점이 없는 날도 높이가 같아야 격자가 흔들리지 않으므로 최소 높이는 남긴다. */
-.cal-day-dots { display: flex; flex-wrap: wrap; justify-content: center; gap: 2px; min-height: 6px; max-width: 100%; }
+.cal-day-dots { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 2px; min-height: 6px; max-width: 100%; }
 .cal-day-dot { display: block; width: 6px; height: 6px; border-radius: 50%; }
-/* 동그라미는 기록, 네모는 일정 — 6px 점에서 색만으로는 종류를 못 가른다(색은 사람 몫이다) */
-.cal-day-dot.ev { border-radius: 2px; }
+/* 동그라미는 기록, 가로 막대는 일정 — 같은 6px 네모로는 동그라미와 구분이 안 됐다(모양이
+   종류를 갈라야 색이 사람 몫으로 남는다) */
+.cal-day-dot.ev { width: 10px; height: 4px; border-radius: 2px; }
+
+/* 와이드 셀의 일정 제목 알약(노션식) — 와이드에서만 그리는 노드라(조건 렌더) 미디어 쿼리가
+   없다. 색은 선택일 행의 D-day 규칙 그대로다: 임박은 노랑, 지남은 회색, 그 밖은 무채색
+   (먼 약속까지 노랗게 두면 매일 급한 일이 하나 있는 것처럼 읽힌다). */
+.cal-cell-ev {
+  display: block; width: 100%; padding: 3px 7px; border-radius: 7px;
+  font-size: 11px; font-weight: 700; color: #363B45; background: #F1F3F6;
+  text-align: left; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+.cal-cell-ev.near { background: #FFF9E6; color: #B37F00; }
+.cal-cell-ev.past { background: #F5F6F8; color: #B4BAC4; }
+/* 와이드 셀의 기록 한 줄 — "색 점 + 이름 · 태그". 배경 없는 글줄이라 채운 알약(일정)과
+   모양으로 갈리고, 점의 색이 누구인지를 말한다(격자 점 시절과 같은 문법). */
+.cal-cell-en {
+  display: flex; align-items: center; gap: 5px; width: 100%; min-width: 0;
+  padding: 2px 7px; font-size: 11px; font-weight: 600; color: #363B45; text-align: left;
+}
+.cal-cell-en-dot { display: block; width: 6px; height: 6px; border-radius: 50%; flex: none; }
+.cal-cell-en-text { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+/* 항목 예산(3줄)을 넘친 수 — 무엇인지는 그 날을 고르면 옆 패널이 말한다 */
+.cal-cell-more {
+  display: block; width: 100%; padding: 0 7px; text-align: left;
+  font-size: 10.5px; font-weight: 700; color: #9AA1AD;
+}
 @media (max-width: 374px) {
   .cal-day-dots { gap: 1px; min-height: 5px; }
   .cal-day-dot { width: 5px; height: 5px; }
+  .cal-day-dot.ev { width: 8px; height: 3px; }
 }
 
 /* 격자 아래 범례 — 모양이 무엇을 뜻하는지 한 번은 말해 준다(일정이 있는 달에만 뜬다) */
@@ -825,9 +831,10 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
   margin-top: 12px; padding: 8px 2px; border-bottom: 1px solid #F1F3F6;
 }
 .cal-legend-key { display: flex; align-items: center; gap: 5px; font-size: 10.5px; color: #9AA1AD; }
-/* 범례의 점은 무채색 — 크루 다섯 색 중 하나를 쓰면 그 사람의 표시로 읽힌다 */
+/* 범례의 점은 무채색 — 크루 다섯 색 중 하나를 쓰면 그 사람의 표시로 읽힌다.
+   모양은 셀과 똑같이 — 동그라미는 기록, 가로 막대는 일정 */
 .cal-legend-dot { display: block; width: 6px; height: 6px; border-radius: 50%; background: #CDD2DB; }
-.cal-legend-dot.ev { border-radius: 2px; }
+.cal-legend-dot.ev { width: 10px; height: 4px; border-radius: 2px; }
 .cal-legend-hint { flex: none; font-size: 10.5px; color: #B4BAC4; white-space: nowrap; }
 
 /* 선택한 날 패널 — 좁은 화면에선 격자 아래로 흐르고, 와이드에선 우측 340px 열로 선다.
@@ -836,14 +843,6 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 .cal-grid-col { min-width: 0; }
 .cal-sel { min-width: 0; margin-top: 26px; min-height: 220px; }
 
-/* 배너 위의 한 줄 라벨("이 날의 일정" / "다가오는 일정") — 와이드에서만 그리는 노드라
-   (조건 렌더) 여기에는 미디어 쿼리가 없다. 고른 날을 따라 배너가 바뀌는 자리라,
-   무엇을 세웠는지 이 줄이 밝힌다(좁은 화면 배너는 늘 "다음 일정"이라 라벨이 없다). */
-.cal-top-label { display: flex; align-items: center; gap: 8px; margin: 0 0 9px; }
-.cal-top-label > span:first-child {
-  flex: none; font-size: 11.5px; font-weight: 800; color: #9AA1AD; letter-spacing: 0.04em;
-}
-.cal-top-rule { flex: 1; height: 1px; background: #F1F3F6; }
 /* 아바타는 최대 인원까지 늘어난다 — flex:none인 라벨과 부딪히면 줄을 바꿔 받는다(말줄임 대신) */
 .sel-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; row-gap: 6px; margin: 0 0 2px; }
 .sel-label { font-size: 14px; font-weight: 800; color: #16181D; flex: none; white-space: nowrap; }
@@ -1719,27 +1718,25 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
   .cal-event-btn { width: auto; height: 32px; padding: 0 13px; gap: 6px; font-size: 12px; font-weight: 700; }
   .cal-event-btn > svg { width: 13px; height: 13px; }
   .cal-event-btn-label { display: inline; white-space: nowrap; }
-  /* 문법은 좁은 화면과 같고(테두리 없는 셀 + 숫자 원 + 점) 폭이 넉넉한 만큼 시원하게만 잡는다 */
-  .cal-cell { height: 88px; gap: 10px; }
-  .cal-num { width: 30px; height: 30px; font-size: 15px; transition: background 120ms; }
-  .cal-day-dots { gap: 3px; min-height: 7px; }
-  .cal-day-dot { width: 7px; height: 7px; }
+  /* 와이드 셀은 위에서부터 쌓인다: 숫자 → 일정 제목 알약 → 기록 글줄(노션식).
+     점 줄은 그리지 않는다(글줄이 다 말한다). 높이는 고정이다 — 항목 예산(3줄, 넘치면
+     2줄 + "+N")이 이 안에 늘 들어오고, 행마다 높이가 달라지면 격자가 격자로 안 읽힌다. */
+  .cal-cell { height: 116px; gap: 4px; justify-content: flex-start; padding: 6px 5px; }
+  .cal-num { width: 30px; height: 30px; font-size: 15px; transition: background 120ms; flex: none; }
   /* 마우스가 겨누는 자리에는 표시가 필요하다 — 셀에 배경을 깔면 카드가 되돌아오므로
      숫자 칩만 옅게 든다(오늘·선택은 이미 제 옷이 있어 건드리지 않는다) */
   .cal-cell:not(.sel):not(.today):hover .cal-num { background: #F1F3F6; }
-  /* 배너는 격자 위 같은 자리에 서되 글자만 한 단계 크다 */
-  .cal-banner { padding: 13px 14px 13px 18px; margin-bottom: 16px; }
-  .cal-banner-dday { font-size: 18px; }
-  .cal-banner-title { font-size: 14.5px; }
-  .cal-banner-sub { font-size: 12px; margin-top: 4px; }
   /* 필터 칩은 손가락이 아니라 마우스가 겨눈다 — 좁은 화면에서 375px 한 줄에 맞춰 깎았던
      치수를 여기서는 한 단계 되돌린다(격자 위 한 줄인 것은 같다) */
   .cal-filter { gap: 6px; margin-bottom: 16px; }
   .cal-filter-chip { height: 30px; padding: 0 12px; gap: 5px; font-size: 12px; }
   .cal-filter-dot { width: 6px; height: 6px; }
-  /* 격자 아래 범례도 한 단계 크게 — 옆 열의 잔글씨(12px)와 같은 급으로 읽힌다 */
+  /* 격자 아래 범례도 한 단계 크게 — 옆 열의 잔글씨(12px)와 같은 급으로 읽힌다.
+     점·막대 열쇠는 접는다 — 와이드 셀은 제목 알약과 이름 글줄이라 스스로 말한다(줄 자체는
+     구분선 역할로 남고 안내 문구만 선다). */
   .cal-legend { margin-top: 14px; padding: 9px 2px; }
-  .cal-legend-key, .cal-legend-hint { font-size: 11.5px; }
+  .cal-legend-key { display: none; }
+  .cal-legend-hint { font-size: 11.5px; }
   .cal-layout { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 32px; align-items: start; }
   /* 격자를 훑는 동안 선택일이 따라 붙는다. 상단 바가 sticky라 그 아래(65px)부터 24px 띄운다 —
      디자인의 top:24는 자체 스크롤 프레임 기준이라 그대로 쓰면 바 뒤로 들어간다. */
