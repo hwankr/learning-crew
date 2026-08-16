@@ -1,5 +1,6 @@
 import {
   entryTags,
+  hasTodayStudyStamp,
   isOffTags,
   isStatusActive,
   primaryTag,
@@ -29,12 +30,13 @@ function LiveAvatar({ live, ...av }: { live: boolean } & Parameters<typeof Avata
 }
 
 function CrewRow({
-  m, todays, status, now, meId, wit, photoUploads, onOpenPhoto,
+  m, todays, status, now, todayKey, meId, wit, photoUploads, onOpenPhoto,
 }: {
   m: Member;
   todays: Entry[];
   status: MemberStatus | undefined;
   now: number;
+  todayKey: string;
   meId: MemberId;
   wit: CopySet;
   photoUploads: Map<string, PhotoUploadInfo>;
@@ -44,8 +46,9 @@ function CrewRow({
   const latest = mine[0];
   const isMe = m.id === meId;
   const live = isStatusActive(status, now);
+  const stamped = hasTodayStudyStamp(status, now, todayKey);
   // 오늘 기록도 없고 지금 켜 두지도 않은 사람만 흐리게 — "아직 안 온 자리"가 한눈에 구분된다
-  const active = live || !!latest;
+  const active = live || !!latest || stamped;
   const tags = latest ? entryTags(latest) : [];
   const isOff = isOffTags(tags);
   const hasStars = !!latest && !isOff && (latest.stars ?? 0) > 0;
@@ -56,6 +59,8 @@ function CrewRow({
     : latest
       // 항목 요약은 기록 본문을 먼저 보여 준다 — 할 일은 본문까지 빈 기록의 대체문이다
       ? latest.memo || firstBody || firstTodo || (isOff ? '오늘은 휴식' : '')
+      : stamped
+        ? '오늘 공부함'
       : isMe
         ? wit.emptyMe
         : wit.empty;
@@ -82,7 +87,7 @@ function CrewRow({
           )}
           {extra && <span className="crew-extra">{extra}</span>}
         </div>
-        <div className={'crew-sub' + (live ? ' live' : latest ? ' has' : '')}>{subLine}</div>
+        <div className={'crew-sub' + (live ? ' live' : latest || stamped ? ' has' : '')}>{subLine}</div>
       </div>
       {latest && shown.length > 0 && (
         <button className="crew-photo" aria-label="사진 보기" onClick={() => onOpenPhoto(latest, shown[0]!.id)}>
@@ -97,21 +102,18 @@ function CrewRow({
 }
 
 export function Board({
-  todays, statuses, now, meId, wit, photoUploads, onOpenPhoto,
+  todays, statuses, now, todayKey, meId, wit, photoUploads, onOpenPhoto,
 }: {
   todays: Entry[];
   statuses: Partial<Record<MemberId, MemberStatus>>;
   now: number;
+  todayKey: string;
   meId: MemberId;
   wit: CopySet;
   photoUploads: Map<string, PhotoUploadInfo>;
   onOpenPhoto: (e: Entry, photoId: string) => void;
 }) {
-  // 도장은 기록만이 아니라 "지금 켜 둔 사람"도 찍는다 — 켜 놓고 아직 안 쓴 사람이
-  // 0명 쪽에 세어지면 패널의 라이브 점과 숫자가 서로 다른 말을 한다
-  const done = MEMBERS.filter(
-    (m) => todays.some((e) => e.m === m.id) || isStatusActive(statuses[m.id], now),
-  ).length;
+  const done = MEMBERS.filter((m) => hasTodayStudyStamp(statuses[m.id], now, todayKey)).length;
 
   return (
     <div className="crew">
@@ -120,7 +122,8 @@ export function Board({
         <div className="crew-count">{wit.count(done)}</div>
       </div>
       {MEMBERS.map((m) => (
-        <CrewRow key={m.id} m={m} todays={todays} status={statuses[m.id]} now={now} meId={meId}
+        <CrewRow key={m.id} m={m} todays={todays} status={statuses[m.id]} now={now}
+          todayKey={todayKey} meId={meId}
           wit={wit} photoUploads={photoUploads} onOpenPhoto={onOpenPhoto} />
       ))}
     </div>

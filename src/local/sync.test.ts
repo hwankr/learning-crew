@@ -33,6 +33,10 @@ async function syncTagPrefs(client: SyncClient): Promise<void> {
   await (client as unknown as { syncTagPrefs(): Promise<void> }).syncTagPrefs();
 }
 
+async function syncStatus(client: SyncClient): Promise<void> {
+  await (client as unknown as { pushStatus(): Promise<void> }).pushStatus();
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -64,6 +68,96 @@ describe('SyncClient photo pull rearm', () => {
     row = entry(2);
     await pull(client);
     expect(rearm).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('SyncClient status sync', () => {
+  it('오프라인 ON 뒤 OFF해도 lastStartedAt을 보존해 payload에 싣는다', async () => {
+    vi.useFakeTimers();
+    try {
+      const store = new CrewStore();
+      const client = new SyncClient(store, 'token', 'sh');
+      vi.setSystemTime('2026-08-15T00:00:00.000Z');
+      store.setMyStatus(true, '도서관');
+      vi.setSystemTime('2026-08-15T00:05:00.000Z');
+      store.setMyStatus(false, null);
+      const pending = store.myStatusPending()!;
+      expect(pending).toMatchObject({
+        on: false,
+        since: null,
+        lastStartedAt: '2026-08-15T00:00:00.000Z',
+        updatedAt: '2026-08-15T00:05:00.000Z',
+      });
+
+      const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body));
+        expect(body).toEqual({
+          on: false,
+          lastStartedAt: '2026-08-15T00:00:00.000Z',
+          at: '2026-08-15T00:05:00.000Z',
+        });
+        return new Response(JSON.stringify({
+          ok: true,
+          applied: true,
+          status: { ...pending, m: 'sh' },
+        }), { status: 200 });
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      await syncStatus(client);
+      expect(store.myStatusPending()).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('구버전 ON 상태를 채택한 뒤 OFF해도 since를 lastStartedAt으로 payload에 싣는다', async () => {
+    vi.useFakeTimers();
+    try {
+      const store = new CrewStore();
+      const client = new SyncClient(store, 'token', 'sh');
+      store.applyPull({
+        rows: [],
+        cursor: null,
+        statuses: [{
+          m: 'sh',
+          on: true,
+          place: '도서관',
+          since: '2026-08-15T00:00:00.000Z',
+          updatedAt: '2026-08-15T00:00:00.000Z',
+        } as never],
+      });
+
+      vi.setSystemTime('2026-08-15T00:05:00.000Z');
+      store.setMyStatus(false, null);
+      const pending = store.myStatusPending()!;
+      expect(pending).toMatchObject({
+        on: false,
+        since: null,
+        lastStartedAt: '2026-08-15T00:00:00.000Z',
+        updatedAt: '2026-08-15T00:05:00.000Z',
+      });
+
+      const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+        expect(JSON.parse(String(init?.body))).toEqual({
+          on: false,
+          lastStartedAt: '2026-08-15T00:00:00.000Z',
+          at: '2026-08-15T00:05:00.000Z',
+        });
+        return new Response(JSON.stringify({
+          ok: true,
+          applied: true,
+          status: { ...pending, m: 'sh' },
+        }), { status: 200 });
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      await syncStatus(client);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(store.myStatusPending()).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

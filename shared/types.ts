@@ -355,6 +355,8 @@ export interface MemberStatus {
   on: boolean;
   place: Place | null; // off면 null
   since: string | null; // 켠 시각(ISO), off면 null
+  /** 마지막 공부 시작 시각. 꺼도 지우지 않으며, 오늘 도장 카운트의 기준이다. */
+  lastStartedAt: string | null;
   updatedAt: string; // 액션 시각(토글한 순간) — 도착 순서가 아니라 이 시각으로 LWW 판정한다
 }
 
@@ -362,6 +364,8 @@ export interface StatusSetRequest {
   on: boolean;
   place?: Place;
   since?: string; // 오프라인에서 켠 경우를 위해 클라이언트 시각을 보낸다 (서버가 범위 검증)
+  /** 마지막 공부 시작 시각 — OFF 동기화도 시작 이력을 잃지 않게 함께 보낸다. */
+  lastStartedAt?: string;
   /** 토글한 액션 시각 — 오프라인이었다가 뒤늦게 도착해도 더 새 액션을 덮지 못하게 한다. */
   at?: string;
 }
@@ -502,6 +506,101 @@ export function isFreshSince(ts: string | null, now: number): boolean {
 
 export function isStatusActive(s: MemberStatus | undefined, now: number): s is MemberStatus {
   return !!s && s.on && isFreshSince(s.since, now);
+}
+
+const DAY_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+function pad2(n: number): string {
+  return String(n).padStart(2, '0');
+}
+
+function localDayKeyFromTs(ts: string | null): string | null {
+  if (ts === null) return null;
+  const t = Date.parse(ts);
+  if (!Number.isFinite(t)) return null;
+  const d = new Date(t);
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+
+/** HTTP/IDB 경계의 구버전 status 행을 최신 형태로 맞춘다. */
+export function normalizeMemberStatus(raw: unknown): MemberStatus | null {
+  if (raw === null || typeof raw !== 'object') return null;
+  const value = raw as Partial<MemberStatus>;
+  if (
+    !(MEMBER_IDS as readonly string[]).includes(value.m ?? '') ||
+    typeof value.on !== 'boolean' ||
+    typeof value.updatedAt !== 'string'
+  ) {
+    return null;
+  }
+  const updatedAt = Date.parse(value.updatedAt);
+  if (!Number.isFinite(updatedAt)) return null;
+  const since = typeof value.since === 'string' && Number.isFinite(Date.parse(value.since))
+    ? new Date(Date.parse(value.since)).toISOString()
+    : null;
+  const lastStartedAt =
+    typeof value.lastStartedAt === 'string' && Number.isFinite(Date.parse(value.lastStartedAt))
+      ? new Date(Date.parse(value.lastStartedAt)).toISOString()
+      : value.on && since !== null
+        ? since
+        : null;
+  return {
+    m: value.m as MemberId,
+    on: value.on,
+    place: (PLACES as readonly string[]).includes(value.place ?? '') ? value.place! : null,
+    since,
+    lastStartedAt,
+    updatedAt: new Date(updatedAt).toISOString(),
+  };
+}
+
+function maxValidIso(a: string | null | undefined, b: string | null | undefined): string | null {
+  const am = typeof a === 'string' ? Date.parse(a) : NaN;
+  const bm = typeof b === 'string' ? Date.parse(b) : NaN;
+  const av = Number.isFinite(am) ? am : null;
+  const bv = Number.isFinite(bm) ? bm : null;
+  if (av === null && bv === null) return null;
+  return new Date(Math.max(av ?? -Infinity, bv ?? -Infinity)).toISOString();
+}
+
+/** Status rows are current-state LWW by updatedAt, while lastStartedAt is monotonic history. */
+export function mergeMemberStatus(current: MemberStatus | null | undefined, incoming: MemberStatus): MemberStatus {
+  const base = current && current.updatedAt > incoming.updatedAt ? current : incoming;
+  const lastStartedAt = maxValidIso(current?.lastStartedAt, incoming.lastStartedAt);
+  return base.lastStartedAt === lastStartedAt ? base : { ...base, lastStartedAt };
+}
+
+/** Status action identity excludes lastStartedAt, which is independent monotonic history. */
+export function sameStatusActionIdentity(a: MemberStatus, b: MemberStatus): boolean {
+  return (
+    a.m === b.m &&
+    a.updatedAt === b.updatedAt &&
+    a.on === b.on &&
+    a.place === b.place &&
+    a.since === b.since
+  );
+}
+
+/** 오늘의 크루 도장 판정. 카운트는 기록 작성과 분리해 "오늘 공부 시작" 이력만 본다. */
+export function hasTodayStudyStamp(
+  s: MemberStatus | undefined,
+  now: number,
+  todayKey: string,
+): boolean {
+  if (!s || !DAY_KEY_RE.test(todayKey)) return false;
+  if (localDayKeyFromTs(s.lastStartedAt) === todayKey) return true;
+  if (s.on && isFreshSince(s.since, now)) return true;
+  if (!s.on && s.lastStartedAt !== null && localDayKeyFromTs(s.updatedAt) === todayKey) {
+    const started = Date.parse(s.lastStartedAt);
+    const ended = Date.parse(s.updatedAt);
+    return (
+      Number.isFinite(started) &&
+      Number.isFinite(ended) &&
+      started <= ended &&
+      ended - started < STATUS_TTL_MS
+    );
+  }
+  return false;
 }
 
 export const PUSH_LIMITS = {

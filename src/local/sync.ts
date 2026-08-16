@@ -266,13 +266,14 @@ export class SyncClient {
         on: st.on,
         place: st.place ?? undefined,
         since: st.since ?? undefined,
+        lastStartedAt: st.lastStartedAt ?? undefined,
         at: st.updatedAt,
       } satisfies StatusSetRequest),
       signal: timeoutSignal(),
     });
     ensureOk(res, 'status');
     const data = (await res.json()) as StatusSetResponse;
-    this.store.ackStatus(st.updatedAt, data.status);
+    await this.store.ackStatus(st.updatedAt, data.status);
   }
 
   /** 태그 설정은 별도 범용 큐 대신 캐시 + dirty 플래그 하나만 쓴다.
