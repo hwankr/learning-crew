@@ -14,7 +14,19 @@
 <meta name="apple-mobile-web-app-title" content="러닝 크루">
 </head>
 <body>
-<div id="root"></div>
+<!-- 부팅 스플래시 — 스토어 init(최대 2초)이 도는 동안의 흰 화면 자리. JS·CSS보다 먼저
+     떠야 해서 스타일까지 여기 인라인이고, React 첫 render가 #root를 갈아끼우며 걷어 간다. -->
+<style>
+  .boot { position: fixed; inset: 0; display: flex; flex-direction: column; gap: 14px;
+    align-items: center; justify-content: center; background: #FFFFFF; }
+  .boot-box { width: 34px; height: 34px; border-radius: 9px; background: #FFB800;
+    animation: boot-pulse 1.2s ease-in-out infinite; }
+  @keyframes boot-pulse { 50% { transform: scale(0.84); opacity: 0.65; } }
+  .boot-name { font-family: 'Pretendard', -apple-system, 'Apple SD Gothic Neo', sans-serif;
+    font-size: 13px; font-weight: 700; color: #9AA1AD; letter-spacing: -0.01em; }
+  @media (prefers-reduced-motion: reduce) { .boot-box { animation: none; } }
+</style>
+<div id="root"><div class="boot"><div class="boot-box"></div><div class="boot-name">러닝 크루</div></div></div>
 <script type="module" src="/src/main.tsx"></script>
 </body>
 </html>

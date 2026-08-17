@@ -44,11 +44,12 @@ describe('PhotoImg full preview fallback', () => {
       );
     }
 
+    /* 회복 — 본 사진은 페이드 준비 상태(fade, 아직 on 아님)로 서고, preview는 밑장으로
+       블러인 채 남는다: URL이 생긴 순간 걷으면 디코드되는 동안 자리가 번쩍인다. */
     photo.full = { url: 'blob:full', missing: false, status: 'found' };
     const recovered = renderPhoto();
-    expect(recovered).toContain('class="photo-img"');
-    expect(recovered).toContain('src="blob:full"');
-    expect(recovered).not.toContain('blob:thumb');
-    expect(recovered).not.toContain('class="photo-img blur"');
+    expect(recovered).toContain('<img class="photo-img fade" src="blob:full" alt="크게 보는 기록 사진"/>');
+    expect(recovered).toContain('class="photo-img blur"');
+    expect(recovered).toContain('src="blob:thumb"');
   });
 });

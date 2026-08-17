@@ -46,6 +46,7 @@ import {
 } from './lib/uiState';
 import { useIsDesktop } from './lib/useMediaQuery';
 import { useOverlayHistory } from './lib/useOverlayHistory';
+import { Exit } from './lib/exit';
 import { Wordmark } from './components/icons';
 import { TopBar } from './components/TopBar';
 import { TabBar } from './components/TabBar';
@@ -296,6 +297,9 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
   const [notiOpen, setNotiOpen] = useState(urlView === 'noti' && !cfg.initialNotiSettings);
   // 알림 설정 — 폭과 무관하게 본문 전체를 쓰는 유일한 알림 화면
   const [notiSettings, setNotiSettings] = useState(cfg.initialNotiSettings);
+  /* 내역↔설정 사이를 "오갈 때만" 서브뷰 전환 모션을 튼다 — 탭 진입·딥링크의 첫 등장은
+     body의 screen-in이 이미 맡고 있어서, 겹치면 같은 모션이 조상·자손에서 이중으로 돈다 */
+  const [notiSubAnim, setNotiSubAnim] = useState(false);
   const bellRef = useRef<HTMLButtonElement>(null);
   const closeNoti = useCallback(() => setNotiOpen(false), []);
   const [panelOpen, setPanelOpen] = useState(ui.panelOpen ?? false);
@@ -308,6 +312,38 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
   // 삭제 확인 대기 중인 기록 — 스냅샷에서 다시 찾으므로, 그 사이 다른 기기에서
   // 지워졌다면 물음도 함께 사라진다(이미 없는 걸 두고 물을 이유가 없다)
   const [delId, setDelId] = useState<string | null>(null);
+  /* 지워지는 카드가 목록에서 잠깐 바래며 나가는 자리 — 스토어 삭제를 그만큼 늦춘다.
+     확정된 삭제는 절대 잃지 않는다: 대기 중에 다음 삭제가 오거나 App이 내려가면 즉시 커밋.
+     140ms — 확인 창의 퇴장(EXIT_MS 150ms)보다 먼저 카드가 빠져야, 창이 걷히며 초점을
+     돌려줄 때 "열었던 자리가 사라진" 것을 보고 fallback(기록 버튼)으로 보낸다. */
+  const [leavingId, setLeavingId] = useState<string | null>(null);
+  const leaveTimer = useRef(0);
+  const pendingLeave = useRef<(() => void) | null>(null);
+  const flushLeave = useCallback(() => {
+    const fn = pendingLeave.current;
+    if (!fn) return;
+    pendingLeave.current = null;
+    clearTimeout(leaveTimer.current);
+    fn();
+  }, []);
+  useEffect(() => flushLeave, [flushLeave]);
+  const removeWithExit = (id: string, doRemove: () => void) => {
+    flushLeave();
+    pendingLeave.current = doRemove;
+    setLeavingId(id);
+  };
+  // 타이머는 커밋에서 세운다 — 클릭 시점 기준이면 렌더가 늦을 때 카드가 다 바래기(130ms)
+  // 전에 빠질 수 있다. 커밋 기준 140ms는 같은 출발선의 130ms 모션보다 늘 늦다.
+  useEffect(() => {
+    if (leavingId === null) return;
+    leaveTimer.current = window.setTimeout(() => {
+      const fn = pendingLeave.current;
+      pendingLeave.current = null;
+      fn?.();
+      setLeavingId(null);
+    }, 140);
+    return () => clearTimeout(leaveTimer.current);
+  }, [leavingId]);
   /* 열려 있는 사진 확대 뷰 — 기록 id로 들고 있어 그 사이 기록이나 사진이 사라지면 함께
      닫힌다. 자리는 숫자가 아니라 photoId로 잡는다: 보는 동안 앞쪽 사진의 업로드가 끝나
      목록이 늘어나면 같은 숫자가 다른 사진을 가리킨다. */
@@ -751,6 +787,7 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
     else setMtab('cal');
     setNotiOpen(false);
     setNotiSettings(false);
+    setNotiSubAnim(false); // 알림 자리를 떠난다 — 다음 첫 등장은 screen-in 몫
     setSelDay(ev.day);
   };
   const pendingEventDel = eventDelId ? snap.events.find((e) => e.id === eventDelId) ?? null : null;
@@ -839,7 +876,7 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
         todayKey={todayKey} yKey={yKey} meId={me.id}
         editingId={modal.editingId} comments={snap.comments} reactions={snap.reactions}
         photoUploads={snap.photoUploads} wit={wit} actions={actions}
-        loungeActions={loungeActions}
+        loungeActions={loungeActions} leavingId={leavingId}
         focus={feedFocus} onFocusDone={clearFeedFocus} onFocusMissing={missFeedFocus} />
       {footer}
     </div>
@@ -893,18 +930,24 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
     setNotiOpen(false);
     setMtab('alerts');
     setNotiSettings(true);
+    setNotiSubAnim(true);
   };
   // 설정은 내역의 하위 화면이라 같은 자리에 선다 — 데스크톱은 본문, 모바일은 알림 탭
-  const notiScreen = notiSettings ? (
-    <NotiSettings token={cfg.token} meId={me.id} demo={cfg.demo}
-      // 뒤로 = 데스크톱이면 보던 탭, 좁은 화면이면 이 탭의 내역
-      onBack={() => setNotiSettings(false)} />
-  ) : (
-    <NotiPage notifications={snap.notifications}
-      onRead={(id) => store.markNotificationRead(id)}
-      onReadAll={() => store.markAllNotificationsRead()}
-      onOpenSettings={openNotiSettings}
-      onOpenTarget={openNotiTarget} />
+  // key — 내역↔설정을 오갈 때 새 쪽이 탭 전환과 같은 궤적으로 떠오른다(둘은 한 자리를 나눠 쓴다)
+  const notiScreen = (
+    <div key={notiSettings ? 'nset' : 'nlist'} className={notiSubAnim ? 'subview-in' : undefined}>
+      {notiSettings ? (
+        <NotiSettings token={cfg.token} meId={me.id} demo={cfg.demo}
+          // 뒤로 = 데스크톱이면 보던 탭, 좁은 화면이면 이 탭의 내역
+          onBack={() => { setNotiSettings(false); setNotiSubAnim(true); }} />
+      ) : (
+        <NotiPage notifications={snap.notifications}
+          onRead={(id) => store.markNotificationRead(id)}
+          onReadAll={() => store.markAllNotificationsRead()}
+          onOpenSettings={openNotiSettings}
+          onOpenTarget={openNotiTarget} />
+      )}
+    </div>
   );
 
   // 떠 있는 기록 버튼은 홈·피드에만 선다 — 캘린더·알림은 아래 여백도 그만큼 줄어든다
@@ -916,7 +959,7 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
       {desktop ? (
         <>
           <TopBar me={me} wit={wit} view={view}
-            onView={(v) => { setView(v); setNotiOpen(false); setNotiSettings(false); }}
+            onView={(v) => { setView(v); setNotiOpen(false); setNotiSettings(false); setNotiSubAnim(false); }}
             panelOpen={panelOpen} onTogglePanel={() => setPanelOpen((o) => !o)}
             sync={cfg.token ? snap.sync : null}
             unread={snap.unreadNotifications} notiOn={notiOpen}
@@ -924,13 +967,14 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
             onBell={() => {
               if (notiSettings) {
                 setNotiSettings(false);
+                setNotiSubAnim(false); // 본문 자리를 닫는다 — 남겨 두면 좁아진 셸에서 이중 모션
                 setNotiOpen(true);
               } else {
                 setNotiOpen((o) => !o);
               }
             }}
             bellRef={bellRef}
-            dropdown={notiOpen ? (
+            dropdown={<Exit>{notiOpen ? (
               <NotiDropdown notifications={snap.notifications} unread={snap.unreadNotifications}
                 bellRef={bellRef}
                 onRead={(id) => store.markNotificationRead(id)}
@@ -940,7 +984,7 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
                 // 있으면 그 카드로 스크롤+하이라이트까지 — 계획은 notiNavPlan 한 곳이다
                 onOpenFeed={openNotiTarget}
                 onClose={closeNoti} />
-            ) : null}
+            ) : null}</Exit>}
             onCompose={() => openNew()} composeRef={ctaRef} />
           {/* 패널 열은 접혀 있어도 마운트를 유지한다 — 열 폭만 300ms로 오가고 안쪽 래퍼는
               296px에 고정돼 있어서, 접히는 동안 내용이 찌그러지지 않는다(CSS가 맡는다) */}
@@ -955,7 +999,9 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
         </>
       ) : (
         <>
-          <div className={'body' + (fabTab ? ' with-fab' : '')}>
+          {/* key=mtab — 탭이 바뀌면 통째로 다시 서면서 screen-in이 한 번 돈다.
+              들어오는 화면만 움직이므로 두 화면을 겹쳐 들 상태가 필요 없다 */}
+          <div key={mtab} className={'body screen-in' + (fabTab ? ' with-fab' : '')}>
             {mtab === 'home' ? (
               <>
                 <div className="mhome-head">
@@ -975,21 +1021,23 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
             onTab={(t) => {
               setMtab(t);
               setNotiSettings(false); // 탭을 누르면 그 탭의 첫 화면 — 설정에 갇힌 채 돌아오지 않는다
+              setNotiSubAnim(false); // 첫 등장은 screen-in 몫 — 서브뷰 모션과 겹치지 않는다
             }} />
           {fabOn && (
             <Fab done={todays.some((e) => e.m === me.id)} wit={wit} onClick={() => openNew()} btnRef={ctaRef} />
           )}
         </>
       )}
-      {modal.open && (
+      {/* 오버레이는 전부 <Exit>에 싼다 — 조건이 꺼진 뒤 150ms 동안 붙잡혀 퇴장 모션이 돈다 */}
+      <Exit>{modal.open && (
         <EntryModal modal={modal} patch={patch} close={closeModal} submit={submit} wit={wit}
           demo={cfg.demo} preparing={preparing > 0} saving={reviving}
           durableStorage={snap.durableStorage}
           customTags={snap.customTags}
           onAddCustomTag={onAddCustomTag} onRemoveCustomTag={onRemoveCustomTag}
           fallbackRef={ctaRef} onAddFiles={onAddFiles} onRemovePhoto={onRemovePhoto} />
-      )}
-      {lightEntry && lightPhotos.length > 0 && (
+      )}</Exit>
+      <Exit>{lightEntry && lightPhotos.length > 0 && (
         <PhotoLightbox
           entry={lightEntry}
           photos={lightPhotos}
@@ -1006,29 +1054,31 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
           actions={actions}
           fallbackRef={ctaRef}
         />
-      )}
-      {pendingDel && (
+      )}</Exit>
+      <Exit>{pendingDel && (
         <ConfirmDelete
           entry={pendingDel}
           wit={wit}
           fallbackRef={ctaRef}
           onCancel={() => setDelId(null)}
           onConfirm={() => {
-            store.remove(pendingDel.id);
-            removeDraft(draftKey(pendingDel.id)); // 지운 기록의 수정 초안도 함께
             setDelId(null);
-            showToast(wit.deleted);
+            removeWithExit(pendingDel.id, () => {
+              store.remove(pendingDel.id);
+              removeDraft(draftKey(pendingDel.id)); // 지운 기록의 수정 초안도 함께
+              showToast(wit.deleted);
+            });
           }}
         />
-      )}
-      {loungeDraft.open && (
+      )}</Exit>
+      <Exit>{loungeDraft.open && (
         <LoungeComposer draft={loungeDraft} preparing={preparing > 0}
           demo={cfg.demo} durableStorage={snap.durableStorage} wit={wit} fallbackRef={ctaRef}
           onBody={(body) => setLoungeDraft((d) => ({ ...d, body }))}
           onAddFiles={onAddLoungeFiles} onRemovePhoto={onRemoveLoungePhoto}
           onClose={closeLounge} onSubmit={submitLounge} />
-      )}
-      {loungePost && loungePhotos.length > 0 && (
+      )}</Exit>
+      <Exit>{loungePost && loungePhotos.length > 0 && (
         <LoungeLightbox post={loungePost} photos={loungePhotos} index={loungeIdx}
           onIndex={(i) => {
             const next = loungePhotos[i];
@@ -1036,29 +1086,31 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
           }}
           onClose={() => setLoungeLight(null)}
           todayKey={todayKey} yKey={yKey} fallbackRef={ctaRef} />
-      )}
-      {pendingLoungeDel && (
+      )}</Exit>
+      <Exit>{pendingLoungeDel && (
         <LoungeConfirmDelete wit={wit} fallbackRef={ctaRef}
           onCancel={() => setLoungeDelId(null)}
           onConfirm={() => {
-            store.removePost(pendingLoungeDel.id);
             setLoungeDelId(null);
-            showToast(wit.loungeDeleted);
+            removeWithExit(pendingLoungeDel.id, () => {
+              store.removePost(pendingLoungeDel.id);
+              showToast(wit.loungeDeleted);
+            });
           }} />
-      )}
+      )}</Exit>
       {/* 고른 갈래로 넘어갈 때 메뉴는 함께 닫힌다 — 시트 뒤에 남아 있으면 뒤로가기가 한 번 더 든다 */}
-      {composeDay !== null && (
+      <Exit>{composeDay !== null && (
         <ComposeMenu day={composeDay} fallbackRef={ctaRef}
           onEntry={() => { setComposeDay(null); openNew(composeDay); }}
           onEvent={() => { setComposeDay(null); setEventSheetDay(composeDay); }}
           onClose={closeComposeMenu} />
-      )}
-      {eventSheetDay !== null && (
+      )}</Exit>
+      <Exit>{eventSheetDay !== null && (
         <EventSheet prefillDay={eventSheetDay} meId={me.id} customTags={snap.customEventTags} fallbackRef={ctaRef}
           onAddCustomTag={onAddCustomEventTag} onRemoveCustomTag={onRemoveCustomEventTag}
           onSubmit={submitEvent} onClose={closeEventSheet} />
-      )}
-      {pendingEventDel && (
+      )}</Exit>
+      <Exit>{pendingEventDel && (
         <EventConfirmDelete event={pendingEventDel} wit={wit} fallbackRef={ctaRef}
           onCancel={() => setEventDelId(null)}
           onConfirm={() => {
@@ -1066,8 +1118,9 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
             setEventDelId(null);
             showToast(wit.eventDeleted);
           }} />
-      )}
-      {toast && <Toast key={toast.id} text={toast.text} />}
+      )}</Exit>
+      {/* key 없음 — 연속 알림은 통을 다시 세우지 않고 글만 페이드로 갈린다(Toast 안의 key=nonce) */}
+      <Exit>{toast && <Toast text={toast.text} nonce={toast.id} />}</Exit>
     </div>
   );
 }

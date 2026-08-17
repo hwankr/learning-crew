@@ -5,6 +5,7 @@ import type { ReactNode, RefObject } from 'react';
 import type { SyncInfo } from '../local/store';
 import type { CopySet, Member } from '../lib/constants';
 import type { DesktopView } from '../lib/uiState';
+import { Exit } from '../lib/exit';
 import { Avatar, BELL_D, Icon, PENCIL_D, Wordmark } from './icons';
 import { SyncStatus } from './SyncStatus';
 
@@ -72,7 +73,11 @@ export function TopBar({
             onClick={onBell}>
             <Icon d={BELL_D} size={19} sw={2} />
             {/* 열려 있어도 배지는 남는다 — 안 읽은 수는 드롭다운을 여는 것과 무관하다 */}
-            {unread > 0 && <span className="bell-badge">{unread > 9 ? '9+' : unread}</span>}
+            <Exit>{unread > 0 && (
+              <span key={unread > 9 ? '9+' : unread} className="bell-badge">
+                {unread > 9 ? '9+' : unread}
+              </span>
+            )}</Exit>
           </button>
           {dropdown}
         </div>

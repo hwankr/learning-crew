@@ -66,12 +66,17 @@ export function PhotoImg({
   const previewState = usePhotoUrl(photoId, preview ?? kind, active && preview !== undefined);
   const previewIsFallback =
     status === 'missing' || status === 'auth' || status === 'transient';
+  /* preview를 쓰는 자리의 본 사진은 "다 그려진" 뒤에 페이드로 올라온다 — URL이 생긴 순간
+     preview를 걷으면 디코드되는 동안 자리 아이콘이 번쩍인다. preview는 본 사진이 위를
+     덮은 뒤에도 밑장으로 남는다. preview 없는 평범한 썸네일 자리는 예전 그대로다. */
+  const [readySrc, setReadySrc] = useState<string | null>(null);
+  const fullReady = url !== null && readySrc === url;
   return (
     <>
       <span ref={placeholderRef} className="photo-ph" aria-hidden="true">
         <PhotoIcon size={icon} color={iconColor} sw={iconSw} lens={lens} />
       </span>
-      {previewState.url && !url && (
+      {previewState.url && (
         <img
           className={'photo-img' + (previewIsFallback ? '' : ' blur')}
           src={previewState.url}
@@ -79,7 +84,14 @@ export function PhotoImg({
           aria-hidden={previewIsFallback ? undefined : true}
         />
       )}
-      {url && <img className="photo-img" src={url} alt={alt} />}
+      {url && (preview === undefined ? (
+        <img className="photo-img" src={url} alt={alt} />
+      ) : (
+        <img className={'photo-img fade' + (fullReady ? ' on' : '')} src={url} alt={alt}
+          onLoad={() => setReadySrc(url)}
+          // 깨진 파일도 숨겨 두지 않는다 — 옛 동작(즉시 표시)으로 돌아가 브라우저가 알린다
+          onError={() => setReadySrc(url)} />
+      ))}
     </>
   );
 }

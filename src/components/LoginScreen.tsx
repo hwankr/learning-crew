@@ -40,13 +40,16 @@ export function LoginScreen() {
       <div className="login-sub">누구세요? 이름을 고르면 시작돼요</div>
       <div className="login-grid" style={{ '--cols': loginCols(MEMBERS.length) } as CSSProperties}>
         {MEMBERS.map((m) => (
-          <button key={m.id} className="login-card" disabled={busy !== null} onClick={() => void claim(m.id)}>
+          <button key={m.id} className={'login-card' + (busy === m.id ? ' busy' : '')}
+            disabled={busy !== null} onClick={() => void claim(m.id)}>
             <Avatar m={m} size={52} opacity={busy && busy !== m.id ? 0.4 : undefined} />
             <span className="login-name">{m.name}</span>
           </button>
         ))}
       </div>
-      {error && <div className="login-error">연결에 실패했어요. 잠시 후 다시 눌러주세요.</div>}
+      {/* 연결 중임은 눈에는 카드 펄스로, 낭독기에는 status 문구로 알린다 */}
+      {busy && <span className="sr-only" role="status">연결 중</span>}
+      {error && <div className="login-error" role="alert">연결에 실패했어요. 잠시 후 다시 눌러주세요.</div>}
     </div>
   );
 }

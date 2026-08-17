@@ -63,6 +63,13 @@ export function useFocusTrap(
       const active = document.activeElement;
       const dialog = active instanceof HTMLElement ? active.closest('[role="dialog"]') : null;
       if (dialog?.isConnected && dialog !== box.current) return;
+      /* 퇴장 모션이 unmount를 늦춘 사이(<Exit>의 150ms) 사용자가 이미 뒤 화면 어딘가에
+         초점을 옮겼다면 그대로 둔다 — 늦게 도는 이 정리가 도로 빼앗으면 안 된다.
+         정상 닫힘에서는 inert가 초점을 body로 떨어뜨려 놓으므로 여기 걸리지 않는다. */
+      if (
+        active instanceof HTMLElement && active.isConnected &&
+        active !== document.body && !box.current?.contains(active)
+      ) return;
       /* 열었던 요소가 그새 사라졌으면(삭제 확정, 날짜를 바꿔 저장해 카드가 다른 날로 옮겨간
          경우 등) 정해 둔 자리로 보낸다. 살아 있어도 초점을 못 받는 상태(숨김·disabled)일 수
          있으니 "정말 들어갔는지" 확인하고, 안 들어갔으면 그때도 대체 자리로 보낸다. */

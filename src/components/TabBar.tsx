@@ -2,6 +2,7 @@
    화면 밖으로 스크롤되면 긴 피드 한가운데서 갈 곳이 없어지므로 고정으로 띄운다. */
 import type { RefObject } from 'react';
 import type { MobileTab } from '../lib/uiState';
+import { Exit } from '../lib/exit';
 import { BELL_D, Icon } from './icons';
 
 const TABS: { id: MobileTab; label: string; d: string }[] = [
@@ -34,10 +35,15 @@ export function TabBar({
             <Icon d={t.d} size={20} sw={on ? 2.3 : 1.9} />
             <span className="tab-label-row">
               <span className="tab-label">{t.label}</span>
-              {t.id === 'alerts' && unread > 0 && (
-                <span className="tab-badge" aria-label={`안 읽음 ${unread}개`}>
-                  {unread > 9 ? '9+' : unread}
-                </span>
+              {/* key=unread — 수가 바뀌면 배지가 새로 서며 팝, 다 읽으면 Exit가 줄어들며 걷는다 */}
+              {t.id === 'alerts' && (
+                <Exit>{unread > 0 && (
+                  // key는 보이는 글자 기준 — 10→11처럼 9+ 그대로면 팝도 없다
+                  <span key={unread > 9 ? '9+' : unread} className="tab-badge"
+                    aria-label={`안 읽음 ${unread}개`}>
+                    {unread > 9 ? '9+' : unread}
+                  </span>
+                )}</Exit>
               )}
             </span>
           </button>

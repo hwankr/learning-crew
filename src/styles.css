@@ -114,6 +114,13 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
    with-fab은 좁은 셸에서만 붙는다(넓은 셸은 이 클래스를 아예 받지 않는다). */
 .body { padding: 22px 20px calc(92px + env(safe-area-inset-bottom)); }
 .body.with-fab { padding-bottom: calc(148px + env(safe-area-inset-bottom)); }
+/* 탭 전환 페이드-스루 — 슬라이드는 위계를 암시하니 동급 탭엔 떠오르는 페이드만.
+   opacity/transform뿐이라 컴포지터에서 돈다 */
+@keyframes screen-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.screen-in { animation: screen-in 160ms cubic-bezier(0.16, 1, 0.3, 1); }
+@media (prefers-reduced-motion: reduce) {
+  .screen-in { animation: none; }
+}
 .panel-col { min-width: 0; }
 .panel-inner { min-width: 0; }
 .main-col { min-width: 0; }
@@ -163,7 +170,8 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 .fab.done {
   background: linear-gradient(90deg, #FBBF24 0%, #F472B6 35%, #FDE047 70%, #FBBF24 100%);
   background-size: 200% 100%;
-  animation: rainbow-spin 3.5s linear infinite;
+  /* fab-in을 같이 든다 — animation 축약이 통째로 갈리므로 안 들면 done인 채 설 때 진입이 빠진다 */
+  animation: rainbow-spin 3.5s linear infinite, fab-in 220ms cubic-bezier(0.16, 1, 0.3, 1);
   box-shadow: 0 8px 20px rgba(251, 191, 36, 0.34);
 }
 .fab-btn {
@@ -1770,4 +1778,142 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
   .cal-layout { grid-template-columns: minmax(0, 1fr) 340px; }
   .body.open .cal-layout { display: block; }
   .body.open .cal-sel { position: static; margin-top: 26px; min-height: 220px; }
+}
+
+/* ---------- 모션 공통 — 오버레이 퇴장·피드 출입·눌림 피드백·감소 모션 ---------- */
+/* 퇴장 — src/lib/exit.tsx의 <Exit>가 조건이 꺼진 뒤 150ms(EXIT_MS) 동안 .closing을 흘린다.
+   both — 애니메이션이 150ms보다 먼저 끝나도 끝 상태에 머물러 unmount 직전에 번쩍이지 않는다 */
+.exit-scope { display: contents; }
+@keyframes fade-out { to { opacity: 0; } }
+@keyframes pop-out { to { opacity: 0; transform: translateY(10px) scale(0.98); } }
+.closing .overlay, .closing .light-overlay, .closing .light-full, .closing .toast {
+  animation: fade-out 150ms ease both; pointer-events: none;
+}
+.closing .sheet, .closing .confirm { animation: pop-out 150ms ease both; }
+.closing .noti-drop { animation: pop-out 130ms ease both; pointer-events: none; }
+
+/* 피드 카드 출입 — 내 저장이든 동기화 도착이든 같은 모션. 높이는 애니메이션하지 않는다:
+   자리 잡기는 즉시 끝나고 카드만 떠오르거나 바래서, 읽던 스크롤이 흔들리는 시간을 늘리지 않는다 */
+@keyframes item-in { from { opacity: 0; transform: translateY(8px); } }
+.item-in { animation: item-in 200ms cubic-bezier(0.16, 1, 0.3, 1); }
+/* 130ms — 스토어 삭제(140ms)보다 먼저 다 바래서, 빠지는 순간 보이는 건 없다 */
+@keyframes item-out { to { opacity: 0; transform: scale(0.98); } }
+.item-out { animation: item-out 130ms ease both; pointer-events: none; }
+
+/* 눌림 피드백 — hover가 없는 손끝에는 눌린 순간이 유일한 응답이다 */
+.tab:active { transform: scale(0.92); }
+.icon-btn:active { transform: scale(0.9); background: #E7EAEF; }
+.nset-mode:active { transform: scale(0.98); }
+.nswitch:active { transform: scale(0.94); }
+
+/* 로그인 — 고른 카드가 연결 중임을 말한다. 노란 테두리는 reduce에서도 남는 정적 신호 */
+@keyframes login-busy { 50% { opacity: 0.55; } }
+.login-card.busy { border-color: #FFB800; background: #FFF9E6; animation: login-busy 1.1s ease-in-out infinite; }
+.login-error { animation: rc-pop-sm 180ms cubic-bezier(0.16, 1, 0.3, 1); }
+
+/* 첫 페인트 — 부팅 스플래시(index.html) 자리 위로 페이드인 */
+.screen, .login-screen { animation: rc-fade 200ms ease; }
+
+/* 좁은 셸의 시트는 아래에서 올라온다 — 바닥 정렬인데 스케일 팝이면 시트로 읽히지 않는다.
+   넓은 셸은 가운데 정렬(compose-overlay align-items: center)이라 rc-pop 그대로.
+   이 블록은 감소 모션 블록보다 앞에 있어야 한다 — 뒤에 두면 reduce가 못 이긴다. */
+@keyframes sheet-up { from { opacity: 0; transform: translateY(48px); } }
+@keyframes sheet-down { to { opacity: 0; transform: translateY(40px); } }
+@media not all and (min-width: 900px) {
+  .sheet { animation: sheet-up 260ms cubic-bezier(0.16, 1, 0.3, 1); }
+  .closing .sheet { animation: sheet-down 150ms ease both; }
+}
+
+/* 탭 활성 — 색·획 두께만으로는 바뀐 순간이 약하다: 켜지는 아이콘이 한 번 부풀었다 온다 */
+@keyframes tab-pop { 50% { transform: scale(1.14); } }
+.tab.on > svg { animation: tab-pop 220ms ease; }
+
+/* 할 일 체크 — 체크 표가 눌린 자리에서 자라나고, 글줄 색도 함께 넘어간다 */
+.todo-check svg { transition: opacity 120ms ease, transform 120ms cubic-bezier(0.16, 1, 0.3, 1); transform: scale(0.4); }
+.todo-check.done svg { transform: scale(1); }
+.todo-text { transition: color 150ms ease; }
+
+/* 무대 큰 사진·preview 본 사진 — 다 그려진 뒤 페이드로 올라온다(밑에는 썸네일이 깔려 있다) */
+.light-img.main { opacity: 0; transition: opacity 160ms ease; }
+.light-img.main.on { opacity: 1; }
+.photo-img.fade { opacity: 0; transition: opacity 160ms ease; }
+.photo-img.fade.on { opacity: 1; }
+
+/* 토스트 교체 — 통은 그대로 두고 글만 갈린다(통 전체가 다시 서면 연타가 요란하다) */
+.toast-msg { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; animation: rc-fade 160ms ease; }
+
+/* 동기화 상태 — 국면이 한 프레임에 뚝 바뀌지 않는다: 점·색은 transition, 글줄은 짧은 페이드 */
+.sync-dot { transition: background 200ms ease; }
+.sync-row { transition: color 200ms ease; }
+.sync-label { animation: rc-fade 180ms ease; }
+
+/* 체크인 종료 쪽 등장 — 시작 카드(chk-enter)와 같은 궤적으로 타일이 돌아온다 */
+.chk-off { animation: chk-enter 260ms cubic-bezier(0.4, 0, 0.2, 1) both; }
+
+/* 기기 알림 줄 — 판정 전에는 투명한 같은 높이 줄이 자리를 잡고, 진짜 줄은 페이드로 선다 */
+.notify-row.ph { visibility: hidden; }
+.notify-row:not(.ph) { animation: rc-fade 180ms ease; }
+
+/* 리액션 숫자·댓글 — 바뀐 것만 짧게 응답한다(.pop은 직전 값과 다를 때만 붙는다:
+   피드 진입에서 전체가 일제히 부풀면 응답이 아니라 소음이다) */
+@keyframes num-pop { 45% { transform: scale(1.4); } }
+.react-n { display: inline-block; }
+.react-n.pop { animation: num-pop 220ms cubic-bezier(0.16, 1, 0.3, 1); }
+.comment { animation: rc-fade 180ms ease; }
+
+/* 안 읽음 배지 — 서고 걷히는 것, 수가 바뀌는 것 모두 짧은 팝(key=unread가 새로 세운다) */
+@keyframes badge-in { from { opacity: 0; transform: scale(0.4); } }
+.tab-badge, .bell-badge { animation: badge-in 200ms cubic-bezier(0.16, 1, 0.3, 1); }
+@keyframes badge-out { to { opacity: 0; transform: scale(0.4); } }
+.closing .tab-badge, .closing .bell-badge { animation: badge-out 150ms ease both; }
+
+/* 기록 버튼 — 설 때 떠오르고, 오늘 몫을 끝내면 아이콘이 한 번 크게 부푼다.
+   퇴장은 일부러 없다: ctaRef(초점 귀환 자리)를 탭바와 나눠 쓰는 버튼이라 늦은 unmount가
+   ref를 도로 비워 버린다 — 사라지는 순간은 대개 딤 뒤라 보이지도 않는다. */
+@keyframes fab-in { from { opacity: 0; transform: scale(0.7) translateY(12px); } }
+.fab { animation: fab-in 220ms cubic-bezier(0.16, 1, 0.3, 1); }
+@keyframes fab-done-pop { 45% { transform: scale(1.3) rotate(-8deg); } }
+.fab.done .fab-ico { animation: fab-done-pop 360ms cubic-bezier(0.16, 1, 0.3, 1); }
+
+/* 알림 내역 ↔ 설정 — 탭 전환과 같은 떠오르는 페이드(App의 notiScreen key가 새로 세운다) */
+.subview-in { animation: screen-in 160ms cubic-bezier(0.16, 1, 0.3, 1); }
+
+/* 메뉴→시트 연쇄 — 새 오버레이가 이미 서 있으면 나가는 쪽 딤은 즉시 넘긴다.
+   두 딤이 겹쳐 잠깐 짙어지는 대신 딤 하나가 그대로 이어진 것처럼 보이고, 시트만 바랜다. */
+.screen:has(.exit-scope:not(.closing) .overlay) .exit-scope.closing .overlay {
+  animation: none; background: transparent; backdrop-filter: none;
+}
+/* 들어오는 쪽 딤도 0부터 다시 페이드하지 않는다 — 안 그러면 넘기는 순간 배경이 밝아진다 */
+.screen:has(.exit-scope.closing .overlay) .exit-scope:not(.closing) .overlay {
+  animation: none;
+}
+
+/* 감소 모션 — 움직이는 모션은 끄고 색 전환은 남긴다(feed-flash는 색뿐이라 그대로 둔다).
+   .closing·.item-out은 animation이 꺼져도 지연 unmount라 잠깐 섰다 조용히 사라질 뿐이다 */
+@media (prefers-reduced-motion: reduce) {
+  .overlay, .sheet, .confirm, .noti-drop, .light-overlay, .light-full, .toast,
+  .cal-pop, .tag-add, .chk-card, .react-pick, .live-dot, .fab.done,
+  .item-in, .item-out, .login-card.busy, .login-error, .screen, .login-screen,
+  .tab.on > svg, .chk-off, .subview-in, .react-n, .fab, .fab.done .fab-ico,
+  .tab-badge, .bell-badge, .closing .tab-badge, .closing .bell-badge,
+  .closing .overlay, .closing .sheet, .closing .confirm, .closing .noti-drop,
+  .closing .light-overlay, .closing .light-full, .closing .toast {
+    animation: none;
+  }
+  .nswitch-knob { transition: none; }
+  .todo-check svg, .light-img.main, .photo-img.fade { transition: none; }
+  .toast-msg { animation: none; }
+  /* 닫힘 보류 150ms 동안은 아예 안 보이게 — 모션 없이 또렷이 남은 채
+     클릭만 새는(pointer-events:none) 창이 제일 어리둥절하다 */
+  .exit-scope.closing { visibility: hidden; }
+  /* 데스크톱 패널 접힘의 300ms 폭·이동도 즉시로 — open 상태 규칙이 스펙시피시티로
+     이기지 못하게 그 꼴까지 같이 적는다 */
+  .body, .panel-col, .panel-inner, .main-col,
+  .body.open .panel-col, .body.open .panel-inner, .body.open .main-col { transition: none; }
+}
+
+/* 화면에는 안 보이고 낭독기에만 들리는 글 */
+.sr-only {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
 }

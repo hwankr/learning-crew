@@ -36,15 +36,26 @@ export function lightboxKeyAction(
 export function StagePhoto({ photo, alt, icon }: { photo: EntryPhoto; alt: string; icon: number }) {
   const thumb = usePhotoUrl(photo.id, 'thumb');
   const full = usePhotoUrl(photo.id, 'full');
+  /* 큰 사진은 "URL이 생겼다"가 아니라 "다 그려졌다"부터 보인다 — URL만 보고 썸네일을
+     걷으면 디코드되는 동안 자리 아이콘이 번쩍인다. 썸네일은 큰 사진이 위를 다 덮은 뒤에도
+     그대로 깔려 있다(안 보이는 밑장). 사진을 넘기면 key가 새 장을 세워 페이드가 다시 돈다. */
+  const [readySrc, setReadySrc] = useState<string | null>(null);
+  const ready = full.url !== null && readySrc === full.url;
   return (
     <>
       <span className="photo-ph" aria-hidden="true">
         <PhotoIcon size={icon} color={STAGE_ICON} sw={1.4} lens />
       </span>
-      {thumb.url && !full.url && (
+      {thumb.url && (
         <img className="light-img blur" src={thumb.url} alt="" aria-hidden="true" />
       )}
-      {full.url && <img className="light-img" src={full.url} alt={alt} />}
+      {full.url && (
+        <img key={photo.id} className={'light-img main' + (ready ? ' on' : '')}
+          src={full.url} alt={alt}
+          onLoad={() => setReadySrc(full.url)}
+          // 깨진 파일도 숨겨 두지 않는다 — 옛 동작(즉시 표시)으로 돌아가 브라우저가 알린다
+          onError={() => setReadySrc(full.url)} />
+      )}
     </>
   );
 }
@@ -173,7 +184,9 @@ export function PhotoLightbox({
           <span className="mlight-who">{author.name} · {when}</span>
         </div>
         <div className="light-stage mob">
-          <StagePhoto photo={cur} alt={alt} icon={52} />
+          {/* key — 사진을 넘기면 usePhotoUrl 구독·ready 상태까지 통째로 새로: 안 주면
+              한 커밋 동안 이전 사진의 src에 다음 사진의 alt가 얹힌다 */}
+          <StagePhoto key={cur.id} photo={cur} alt={alt} icon={52} />
           {nav}
         </div>
         {strip}
@@ -190,7 +203,7 @@ export function PhotoLightbox({
       <div className="light-card" ref={boxRef} role="dialog" aria-modal="true"
         aria-label="사진 크게 보기" onClick={(ev) => ev.stopPropagation()}>
         <div className="light-stage">
-          <StagePhoto photo={cur} alt={alt} icon={64} />
+          <StagePhoto key={cur.id} photo={cur} alt={alt} icon={64} />
           <span className="light-counter">{counter}</span>
           {nav}
           {strip}

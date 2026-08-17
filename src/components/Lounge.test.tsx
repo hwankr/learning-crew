@@ -66,7 +66,7 @@ function renderFeed(over: {
     <Feed entries={over.entries ?? []} posts={over.posts ?? []}
       postComments={over.postComments ?? new Map()} statuses={{}} now={Date.now()}
       filter={over.filter ?? 'all'} onFilter={() => undefined}
-      todayKey={TODAY} yKey={YDAY} meId="sh" editingId={null}
+      todayKey={TODAY} yKey={YDAY} meId="sh" editingId={null} leavingId={null}
       comments={new Map()} reactions={new Map()}
       photoUploads={over.photoUploads ?? new Map()}
       wit={COPY} actions={{

@@ -66,6 +66,13 @@ export function ReactionRow({
   const tally = tallyReactions(sets, meId);
   const myEmojis = sets.find((s) => s.m === meId)?.emojis ?? [];
 
+  /* 이모지별 직전 수 — "정말 바뀐" 숫자만 팝한다. 첫 마운트(피드 진입, 라이트박스 열기)에
+     모든 숫자가 일제히 부풀면 응답이 아니라 소음이다. */
+  const prevN = useRef<Map<string, number> | null>(null);
+  useEffect(() => {
+    prevN.current = new Map(tally.map((t) => [t.emoji, t.n]));
+  });
+
   // 열린 직후 한 번 재서 팝오버 위치를 잡는다 — 버튼 위치는 칩 개수에 따라 매 카드 다르니
   // CSS만으로는 못 맞춘다(동적 위치라 인라인 style이 맞다). 그리기 전에 끝내야 팝오버가
   // 왼쪽에서 제자리로 튀지 않으므로 useEffect가 아니라 useLayoutEffect다.
@@ -91,7 +98,9 @@ export function ReactionRow({
           onClick={() => actions.onToggleReaction(entryId, t.emoji)}
         >
           <span className="react-chip-emoji">{t.emoji}</span>
-          {t.n}
+          {/* key=n — 바뀐 순간 새로 서며 한 번 부풀었다 온다(누가 눌렀다는 즉답) */}
+          <ReactN key={t.n} n={t.n}
+            pop={prevN.current !== null && prevN.current.get(t.emoji) !== t.n} />
         </button>
       ))}
       <div className="react-pick-wrap" ref={pickWrap}>
@@ -125,6 +134,13 @@ export function ReactionRow({
       </div>
     </div>
   );
+}
+
+/** 리액션 수 한 자리 — 팝 여부를 마운트 순간에 고정한다. 부모 재렌더(피커 닫힘 등)가
+    220ms 안에 오면 prevN은 이미 갱신된 뒤라, 그때 다시 계산하면 팝이 도중에 끊긴다. */
+function ReactN({ n, pop }: { n: number; pop: boolean }) {
+  const [popped] = useState(pop);
+  return <span className={'react-n' + (popped ? ' pop' : '')}>{n}</span>;
 }
 
 /** 목록·작성 줄이 실제로 쓰는 필드만 — 기록 댓글(Comment)과 라운지 글 댓글(PostComment)이

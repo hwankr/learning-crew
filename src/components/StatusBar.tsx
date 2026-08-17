@@ -15,7 +15,8 @@ export function StatusBar({
   if (isStatusActive(status, now)) {
     const place = status.place ?? '기타';
     return (
-      <div className="chk-card">
+      // key — 켬/끔이 같은 div의 클래스 교체로 이어지면 진입 모션이 다시 돌지 않는다
+      <div key="on" className="chk-card">
         <div className="chk-head">
           <span className="live-dot" />
           <span className="chk-on">{wit.statusOn}</span>
@@ -30,7 +31,8 @@ export function StatusBar({
     );
   }
   return (
-    <div>
+    // 종료 쪽도 같은 등장으로 — 카드가 사라진 자리에 타일이 뚝 서지 않는다
+    <div key="off" className="chk-off">
       <div className="chk-cap">
         <span className="chk-cap-dot" />
         <span className="chk-cap-text">{wit.statusAsk}</span>

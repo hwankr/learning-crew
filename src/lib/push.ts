@@ -9,11 +9,21 @@ export type PushState =
   | 'on';
 
 function supported(): boolean {
-  return 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+  // typeof 가드 — navigator가 없는 순수 Node(구버전)·SSR에서도 "미지원"으로 조용히 귀결
+  return typeof navigator !== 'undefined' && typeof window !== 'undefined'
+    && 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+}
+
+/** getPushState 중 동기로 아는 몫 — 지원 불가·iOS 미설치·차단은 첫 렌더부터 확정이라
+    자리 줄(placeholder)을 세웠다 걷으며 레이아웃을 흔들 이유가 없다. */
+export function initialPushState(): PushState | 'loading' {
+  if (!supported()) return isIOS() ? 'ios-install' : 'unsupported';
+  if (Notification.permission === 'denied') return 'denied';
+  return 'loading';
 }
 
 function isIOS(): boolean {
-  return /iPad|iPhone|iPod/.test(navigator.userAgent);
+  return typeof navigator !== 'undefined' && /iPad|iPhone|iPod/.test(navigator.userAgent);
 }
 
 /** 앱 부팅 시 호출 — SW를 최신으로 유지한다(푸시 수신 자체는 구독만 있으면 된다). */

@@ -129,7 +129,7 @@ export function feedDayGroups(
 export function Feed({
   entries, posts, postComments, statuses, now, filter, onFilter, todayKey, yKey, meId,
   editingId, comments, reactions, photoUploads, wit, actions, loungeActions,
-  focus, onFocusDone, onFocusMissing,
+  leavingId, focus, onFocusDone, onFocusMissing,
 }: {
   entries: Entry[];
   posts: Post[];
@@ -149,6 +149,8 @@ export function Feed({
   wit: CopySet;
   actions: EntryActions;
   loungeActions: LoungeActions;
+  /** 삭제 확인 직후의 카드 — 스토어에서 빠지기 전 잠깐 바래며 나간다(App이 삭제를 그만큼 늦춘다) */
+  leavingId: string | null;
   /** 알림 딥링크의 대상 — 렌더된 뒤 스크롤+하이라이트하고 onFocusDone으로 돌려준다 */
   focus: FeedFocus | null;
   onFocusDone: () => void;
@@ -166,6 +168,34 @@ export function Feed({
     () => feedDayGroups(entries, posts, filter),
     [entries, posts, filter],
   );
+
+  /* 이번 데이터 변화로 처음 나타난 id — 내 저장이든 동기화 도착이든 똑같이 잠깐 떠오르며
+     들어온다. 필터 전환은 데이터가 아니라 보기만 바뀐 것이라 여기 걸리지 않고, 첫 렌더
+     (hydration)는 전부 새 글이지만 조용히 선다. ref 캐시라 같은 데이터의 재렌더에 안전하다. */
+  const idDiff = useRef<{ entries: Entry[] | null; posts: Post[] | null; all: Set<string>; fresh: Set<string> }>(
+    { entries: null, posts: null, all: new Set(), fresh: new Set() },
+  );
+  if (idDiff.current.entries !== entries || idDiff.current.posts !== posts) {
+    const cur = new Set<string>();
+    for (const e of entries) cur.add(e.id);
+    for (const p of posts) cur.add(p.id);
+    const first = idDiff.current.entries === null;
+    const prev = idDiff.current.all;
+    const fresh = new Set<string>();
+    if (!first) for (const id of cur) if (!prev.has(id)) fresh.add(id);
+    idDiff.current = { entries, posts, all: cur, fresh };
+  }
+  const freshIds = idDiff.current.fresh;
+  // 모션(200ms)이 끝난 뒤에 소진 — 그 전의 재렌더(오버레이 퇴장, 업로드 진행률)가 클래스를
+  // 도중에 걷으면 안 되고, 커밋 즉시 비우면 정확히 그렇게 된다. 250ms 뒤에는 탭 복귀·필터
+  // 전환의 리마운트가 지난 새 글을 또 띄우지 않도록 비워 둔다.
+  useEffect(() => {
+    if (freshIds.size === 0) return;
+    const t = setTimeout(() => {
+      idDiff.current.fresh = new Set();
+    }, 250);
+    return () => clearTimeout(t);
+  }, [freshIds]);
 
   /* 알림 딥링크 도착 — 대상 카드가 이 커밋에 실제로 섰을 때만 스크롤+하이라이트.
      하이라이트 클래스는 상태가 아니라 DOM에 직접 얹는다: 순수 표시용이고, StrictMode의
@@ -226,8 +256,10 @@ export function Feed({
             {g.items.map((item) => {
               const id = item.kind === 'entry' ? item.e.id : item.p.id;
               const focused = focus !== null && focus.kind === item.kind && focus.id === id;
+              const anim = id === leavingId ? 'item-out' : freshIds.has(id) ? 'item-in' : undefined;
               return (
                 <div key={(item.kind === 'entry' ? 'e:' : 'p:') + id}
+                  className={anim}
                   ref={focused ? focusRef : undefined}>
                   {item.kind === 'entry' ? (
                     <EntryCard e={item.e} compact={false} mine={item.e.m === meId}

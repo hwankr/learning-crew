@@ -38,7 +38,9 @@ export function SyncStatus({ sync, variant }: { sync: SyncInfo; variant: 'top' |
   return (
     <div className={base + cls}>
       <span className={'sync-dot ' + cls} />
-      <span className="sync-label">{text}</span>
+      {/* key=국면 — 국면이 바뀔 때만 글줄이 짧게 페이드로 갈린다. 대기 수만 줄어드는 건
+          같은 국면의 숫자 갱신이라 조용히 지나간다(매번 깜빡이면 소음이다) */}
+      <span key={sync.phase + '/' + cls} className="sync-label">{text}</span>
     </div>
   );
 }
