@@ -822,6 +822,8 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
   display: flex; align-items: center; justify-content: center; flex: none;
   width: 24px; height: 24px; border-radius: 50%;
   font-size: 13px; font-weight: 600; color: #363B45; background: transparent;
+  /* 선택 링이 옮겨 갈 때 색이 뚝 바뀌지 않는다 — 좁은 셸도 와이드와 같은 감각 */
+  transition: background 120ms, color 120ms;
 }
 .cal-cell.future .cal-num { color: #CDD2DB; }
 /* 오늘은 노란 원, 고른 날은 검은 원 — 옷은 셀이 아니라 숫자가 입는다 */
@@ -1739,7 +1741,8 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
      점 줄은 그리지 않는다(글줄이 다 말한다). 높이는 고정이다 — 항목 예산(3줄, 넘치면
      2줄 + "+N")이 이 안에 늘 들어오고, 행마다 높이가 달라지면 격자가 격자로 안 읽힌다. */
   .cal-cell { height: 116px; gap: 4px; justify-content: flex-start; padding: 6px 5px; }
-  .cal-num { width: 30px; height: 30px; font-size: 15px; transition: background 120ms; flex: none; }
+  /* transition은 기본 규칙 몫 — 여기서 다시 적으면 color 보간을 덮어쓴다 */
+  .cal-num { width: 30px; height: 30px; font-size: 15px; flex: none; }
   /* 마우스가 겨누는 자리에는 표시가 필요하다 — 셀에 배경을 깔면 카드가 되돌아오므로
      숫자 칩만 옅게 든다(오늘·선택은 이미 제 옷이 있어 건드리지 않는다) */
   .cal-cell:not(.sel):not(.today):hover .cal-num { background: #F1F3F6; }
@@ -1833,6 +1836,11 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 .todo-check.done svg { transform: scale(1); }
 .todo-text { transition: color 150ms ease; }
 
+/* 날짜 선택 — 상세 패널 본문이 뚝 갈리지 않고 새 날이 살짝 떠오른다. 높이는 그대로라
+   스크롤이 흔들리지 않고, 달 이동·첫 마운트에는 붙지 않는다(CalendarView의 SelBody가 판단) */
+@keyframes sel-in { from { opacity: 0; transform: translateY(5px); } }
+.sel-in { animation: sel-in 140ms ease-out; }
+
 /* 무대 큰 사진·preview 본 사진 — 다 그려진 뒤 페이드로 올라온다(밑에는 썸네일이 깔려 있다) */
 .light-img.main { opacity: 0; transition: opacity 160ms ease; }
 .light-img.main.on { opacity: 1; }
@@ -1894,7 +1902,7 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
   .overlay, .sheet, .confirm, .noti-drop, .light-overlay, .light-full, .toast,
   .cal-pop, .tag-add, .chk-card, .react-pick, .live-dot, .fab.done,
   .item-in, .item-out, .login-card.busy, .login-error, .screen, .login-screen,
-  .tab.on > svg, .chk-off, .subview-in, .react-n, .fab, .fab.done .fab-ico,
+  .tab.on > svg, .chk-off, .subview-in, .react-n.pop, .fab, .fab.done .fab-ico, .sel-in,
   .tab-badge, .bell-badge, .closing .tab-badge, .closing .bell-badge,
   .closing .overlay, .closing .sheet, .closing .confirm, .closing .noti-drop,
   .closing .light-overlay, .closing .light-full, .closing .toast {

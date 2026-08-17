@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { Comment, CrewEvent, Entry, MemberId, ReactionSet } from '../../shared/types';
 import { MEMBERS, W, dayKey, memberOf, membersOfEntries, pad2, type CopySet } from '../lib/constants';
 import {
@@ -120,6 +120,20 @@ export function CalendarView({
   const slide = prevMonthRef.current === monthPrefix ? ''
     : prevMonthRef.current < monthPrefix ? ' cal-slide-next' : ' cal-slide-prev';
   useEffect(() => { prevMonthRef.current = monthPrefix; });
+
+  /* 날짜 선택의 상세 패널 모션은 "고른 순간"에만 돈다 — 첫 마운트는 화면 진입 모션이
+     이미 맡고 있고, 달 이동은 격자 도착 모션(cal-slide)이 말하고 있으므로 둘 다 조용히.
+     자정 롤오버도 조용히: 명시 선택이 없으면 App이 오늘을 넣어 주는데, 날이 바뀌었다고
+     아무도 안 누른 패널이 떠오르면 안 된다(어제의 오늘→오늘의 오늘로 같이 미끄러진 경우). */
+  const prevSelRef = useRef(selDay);
+  const prevTodayRef = useRef(todayKey);
+  const rolledOver = prevTodayRef.current !== todayKey
+    && selDay === todayKey && prevSelRef.current === prevTodayRef.current;
+  const selChanged = prevSelRef.current !== selDay && !rolledOver;
+  useEffect(() => {
+    prevSelRef.current = selDay;
+    prevTodayRef.current = todayKey;
+  });
 
   // 달을 넘길 때 선택일도 같은 일(日)로 따라간다 — 격자만 넘어가면 옆 패널이 딴 달을 가리킨다
   const shiftMonth = (step: number) => {
@@ -298,6 +312,8 @@ export function CalendarView({
           </div>
         </div>
         <div className="cal-sel">
+          {/* key=selDay — 새 날의 본문이 통째로 새로 서면서 살짝 떠오른다 */}
+          <SelBody key={selDay} anim={selChanged && slide === ''}>
           <div className="sel-head">
             <span className="sel-label">{selD.getMonth() + 1}월 {selD.getDate()}일 ({W[selD.getDay()]})</span>
             <span className="sel-count">
@@ -365,8 +381,16 @@ export function CalendarView({
               ))}
             </div>
           )}
+          </SelBody>
         </div>
       </div>
     </div>
   );
+}
+
+/** 선택일 패널 본문 — 모션 여부를 마운트 순간에 고정한다: 직후의 재렌더(분 틱·스토어 갱신)가
+    140ms 모션을 도중에 걷어가면 안 된다. key=selDay가 날마다 새로 세워 준다. */
+function SelBody({ anim, children }: { anim: boolean; children: ReactNode }) {
+  const [on] = useState(anim);
+  return <div className={on ? 'sel-body sel-in' : 'sel-body'}>{children}</div>;
 }
