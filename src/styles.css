@@ -1310,20 +1310,33 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
   padding: 10px 2px; font-size: 12.5px; font-weight: 700; color: #1B72D8;
 }
 .noti-readall:hover { color: #14579F; }
+/* 필터는 알약이 아니라 밑줄 탭 — 상단 세그먼트(.seg-btn)와 같은 문법이다. 스크롤 줄의
+   양 끝은 mask로 바래게 해서 "옆으로 더 있다"가 보이게 한다(잘린 탭이 살짝 비친다). */
 .noti-filters {
-  display: flex; gap: 7px; overflow-x: auto; scrollbar-width: none;
-  padding: 12px 0 4px; margin: 0 -20px; padding-left: 20px; padding-right: 20px;
+  display: flex; gap: 20px; overflow-x: auto; scrollbar-width: none;
+  /* 오른쪽 패딩 = 페이드 폭(28px) — 끝까지 밀었을 때 마지막 탭이 바랜 채 남지 않는다 */
+  padding: 10px 0 2px; margin: 0 -20px; padding-left: 20px; padding-right: 28px;
+  scroll-behavior: smooth;
+  -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 16px, #000 calc(100% - 28px), transparent);
+  mask-image: linear-gradient(90deg, transparent 0, #000 16px, #000 calc(100% - 28px), transparent);
 }
 .noti-page .noti-filters { margin-left: -14px; margin-right: -14px; }
 .noti-filters::-webkit-scrollbar { display: none; }
 .noti-chip {
-  display: flex; align-items: center; flex: none; height: 40px; cursor: pointer;
-  border-radius: 999px; padding: 0 15px; font-size: 13px; font-weight: 600; white-space: nowrap;
-  border: 1px solid #E4E7EC; background: #FFFFFF; color: #4E555F;
-  transition: background 140ms, color 140ms, border-color 140ms;
+  display: grid; flex: none; cursor: pointer; border: none; background: none; padding: 0;
+  font-size: 13.5px; font-weight: 600; white-space: nowrap; color: #9AA1AD;
+  transition: color 140ms;
 }
-.noti-chip.on { border-color: #16181D; background: #16181D; color: #FFFFFF; font-weight: 800; }
-.noti-chip:active { transform: scale(0.97); }
+/* 고스트 볼드로 폭 예약 — 활성의 800이 라벨을 밀어 옆 탭들이 들썩이지 않는다(.seg-btn과 동일) */
+/* 세로 패딩이 곧 터치 타깃 — 글자만큼으로 줄이면 40px대 권장 높이에 못 미친다 */
+.noti-chip > span, .noti-chip::after { grid-area: 1 / 1; padding: 12px 1px 12px; }
+.noti-chip::after {
+  content: attr(data-label); font-weight: 800; visibility: hidden; pointer-events: none;
+}
+.noti-chip > span { border-bottom: 2.5px solid transparent; transition: border-color 140ms; }
+.noti-chip.on { color: #16181D; font-weight: 800; }
+.noti-chip.on > span { border-bottom-color: #FFB800; }
+.noti-chip:active { transform: scale(0.96); }
 .noti-empty { text-align: center; font-size: 13.5px; color: #9AA1AD; padding: 70px 0; }
 
 .noti-group { margin-top: 14px; }
@@ -1910,6 +1923,7 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
   }
   .nswitch-knob { transition: none; }
   .todo-check svg, .light-img.main, .photo-img.fade { transition: none; }
+  .noti-filters { scroll-behavior: auto; }
   .toast-msg { animation: none; }
   /* 닫힘 보류 150ms 동안은 아예 안 보이게 — 모션 없이 또렷이 남은 채
      클릭만 새는(pointer-events:none) 창이 제일 어리둥절하다 */

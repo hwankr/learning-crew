@@ -339,12 +339,33 @@ export function NotiPage({ notifications, onRead, onReadAll, onOpenSettings, onO
         )}
       </div>
       <div className="noti-filters">
-        {FILTERS.map((f) => (
-          <button key={f.id} className={'noti-chip' + (filter === f.id ? ' on' : '')}
-            aria-pressed={filter === f.id} onClick={() => setFilter(f.id)}>
-            {f.id === 'unread' && unread > 0 ? `안 읽음 ${unread}` : f.label}
-          </button>
-        ))}
+        {FILTERS.map((f) => {
+          const label = f.id === 'unread' && unread > 0 ? `안 읽음 ${unread}` : f.label;
+          return (
+            /* data-label — CSS가 고스트 볼드(::after)로 폭을 예약하는 데 쓴다(라벨과 같아야 함).
+               탭을 고르면 페이드 폭만큼 안쪽까지 가로로만 스크롤을 보정한다 — scrollIntoView는
+               mask를 모르고(페이드 안에 "보이는" 탭을 안 옮긴다) 세로로 페이지까지 끈다.
+               부드러움은 CSS scroll-behavior 몫 — 감소 모션이면 거기서 즉시로 바뀐다. */
+            <button key={f.id} className={'noti-chip' + (filter === f.id ? ' on' : '')}
+              aria-pressed={filter === f.id} data-label={label}
+              onClick={(ev) => {
+                setFilter(f.id);
+                const el = ev.currentTarget;
+                const row = el.parentElement;
+                if (row) {
+                  const pad = 28; // styles.css의 mask 페이드 폭과 같이 움직인다
+                  const left = el.offsetLeft - pad;
+                  const right = el.offsetLeft + el.offsetWidth + pad;
+                  if (left < row.scrollLeft) row.scrollTo({ left });
+                  else if (right > row.scrollLeft + row.clientWidth) {
+                    row.scrollTo({ left: right - row.clientWidth });
+                  }
+                }
+              }}>
+              <span>{label}</span>
+            </button>
+          );
+        })}
       </div>
       {groups.length === 0 && <div className="noti-empty">해당하는 알림이 없어요.</div>}
       {groups.map((g) => (
