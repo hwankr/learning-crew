@@ -28,6 +28,8 @@ import type {
   ReactionCursor,
   ReactionEmoji,
   ReactionSet,
+  StudyDay,
+  StudyDayCursor,
   TagPrefs,
 } from '../../shared/types';
 import {
@@ -43,6 +45,7 @@ import {
   normalizeEmojis,
   normalizeMemberStatus,
   normalizePhotos,
+  normalizeStudyDay,
   primaryTag,
   PUSH_LIMITS,
   sameStatusActionIdentity,
@@ -61,6 +64,7 @@ import {
   type PhotoUploadState,
   type QueueMeta,
 } from './idb';
+import { studyStampDays } from '../../shared/notify';
 import { prepareUpload, type PreparedUpload } from '../lib/image';
 import {
   PhotoUploadQueue,
@@ -94,6 +98,8 @@ type StoreName =
   | 'postCommentQueue'
   | 'photoBlobs'
   | 'photoCache'
+  | 'studyDays'
+  | 'studyDayQueue'
   | 'meta';
 type CrewTx = IDBPTransaction<CrewDB, StoreName[], 'readwrite'>;
 
@@ -127,6 +133,10 @@ export interface StoreSnapshot {
   posts: Post[];
   /** postId → 살아있는 글 댓글, (createdAt, id) 오름차순 */
   postComments: Map<string, PostComment[]>;
+  /** 멤버별 공부 시작 도장 날짜(YYYY-MM-DD) — 서버 이력의 로컬 복제본.
+      "이번 달"이 기록(Entry) 날짜와 합쳐 센다. 오늘 도장은 statuses에서도 파생되므로
+      여기 없는 오늘이 있을 수 있다 — 세는 쪽이 stats.allStudyDaysOf로 합친다. */
+  studyDays: Partial<Record<MemberId, ReadonlySet<string>>>;
   /** 내 알림 내역 — (createdAt, id) 내림차순(최신 먼저). 읽은 행도 담긴다(내역 화면용) */
   notifications: Notification[];
   /** 안 읽은 알림 수 — 벨 배지가 이 값 하나만 본다 */
@@ -182,6 +192,10 @@ const COMMENT_CURSOR_KEY = 'commentCursor';
 const REACTION_CURSOR_KEY = 'reactionCursor';
 const POST_CURSOR_KEY = 'postCursor';
 const POST_COMMENT_CURSOR_KEY = 'postCommentCursor';
+const STUDY_DAY_CURSOR_KEY = 'studyDayCursor';
+
+/** 도장 이력의 로컬 키 — (멤버, 날짜) 쌍이 곧 행이다(reactionKey와 같은 합성 규칙). */
+const studyDayKey = (m: MemberId, day: string): string => `${m}|${day}`;
 /** 알림 커서만 멤버별 키다 — 이 스트림은 토큰 주인 것만 오므로, 같은 기기에서 멤버를
     바꿔 로그인했을 때 공용 커서를 물려받으면 그 멤버의 기존 알림을 영구히 건너뛴다. */
 const notifCursorKey = (m: MemberId): string => `notifCursor:${m}`;
@@ -455,6 +469,15 @@ export function groupPostComments(list: Iterable<PostComment>): Map<string, Post
 
 /** 스냅샷용 리액션 맵 — 빈 집합("다 뗐다"를 서버에 전하려고 남겨 둔 행)은 뺀다.
     멤버 순서를 고정해야 칩의 이름 목록이 흔들리지 않는다. */
+/** 스냅샷용 멤버별 도장 날짜 집합 — "이번 달"이 기록 날짜와 합쳐 세는 재료다. */
+export function groupStudyDays(
+  list: Iterable<StudyDay>,
+): Partial<Record<MemberId, ReadonlySet<string>>> {
+  const out: Partial<Record<MemberId, Set<string>>> = {};
+  for (const row of list) (out[row.m] ??= new Set()).add(row.day);
+  return out;
+}
+
 export function groupReactions(list: Iterable<ReactionSet>): Map<string, ReactionSet[]> {
   const out = new Map<string, ReactionSet[]>();
   for (const r of list) {
@@ -610,6 +633,11 @@ function asReactionCursor(v: unknown): ReactionCursor | null {
     ? (v as ReactionCursor)
     : null;
 }
+function asStudyDayCursor(v: unknown): StudyDayCursor | null {
+  return v !== null && typeof v === 'object' && 'ts' in v && 'day' in v
+    ? (v as StudyDayCursor)
+    : null;
+}
 /** meta의 지금 상태 — 리액션 커서도 m을 가지므로 on으로 가려야 한다. */
 function asMemberStatus(v: unknown): MemberStatus | null {
   return normalizeMemberStatus(v);
@@ -694,6 +722,14 @@ export class CrewStore implements PhotoUploadStorage {
   // 리액션: reactionKey(entryId, m) → 행. dirty는 entryId만으로 충분하다 — 내 행만 dirty가 된다
   private reactions = new Map<string, ReactionSet>();
   private reactionDirty = new Set<string>();
+  // 도장 이력: studyDayKey(m, day) → 행(삽입-전용). 큐는 내 체크인이 만든 행 중 아직
+  // push 안 된 것의 날짜(bare day) — status가 현재값 1행으로 병합돼 잃는 오프라인
+  // 여러 날 이력을 이 큐가 대신 나른다. IDB 키는 멤버 접두사(`m|day`)를 유지한다.
+  private studyDays = new Map<string, StudyDay>();
+  private studyDayQueue = new Set<string>();
+  /** 도장 파생 스냅샷 캐시 — 멤버별 Set 재구성을 실제 변경 다음 bump로 미룬다(entriesCache와 같은 이유).
+      this.studyDays를 바꾸는 모든 자리가 무효화한다. */
+  private studyDaysCache: Partial<Record<MemberId, ReadonlySet<string>>> | null = null;
   // 알림: id → 행(전부 내 것 — pull이 토큰 주인 것만 준다). 큐가 담는 건 읽음 처리뿐이고,
   // 값은 읽은 시점에 관측한 그 행의 updatedAt(세대 판별값)이다
   private notifications = new Map<string, Notification>();
@@ -737,6 +773,7 @@ export class CrewStore implements PhotoUploadStorage {
     reactions: new Map(),
     posts: [],
     postComments: new Map(),
+    studyDays: {},
     notifications: [],
     unreadNotifications: 0,
     photoUploads: new Map(),
@@ -757,6 +794,7 @@ export class CrewStore implements PhotoUploadStorage {
   private lastNotifCursor: PullCursor | null = null;
   private lastPostCursor: PullCursor | null = null;
   private lastPostCommentCursor: PullCursor | null = null;
+  private lastStudyDayCursor: StudyDayCursor | null = null;
 
   /** SyncClient가 등록 — 로컬 쓰기 직후 push를 예약한다. */
   onLocalWrite: (() => void) | null = null;
@@ -796,6 +834,8 @@ export class CrewStore implements PhotoUploadStorage {
         'postComments',
         'postCommentQueue',
         'photoBlobs',
+        'studyDays',
+        'studyDayQueue',
         'meta',
       ]);
       const [
@@ -818,6 +858,8 @@ export class CrewStore implements PhotoUploadStorage {
         pcQueue,
         photoKeys,
         photoRows,
+        sdRows,
+        sdQueueKeys,
         st,
         dirty,
         cachedTagPrefs,
@@ -843,6 +885,8 @@ export class CrewStore implements PhotoUploadStorage {
           tx.objectStore('postCommentQueue').getAllKeys(),
           tx.objectStore('photoBlobs').getAllKeys(),
           tx.objectStore('photoBlobs').getAll(),
+          tx.objectStore('studyDays').getAll(),
+          tx.objectStore('studyDayQueue').getAllKeys(),
           tx.objectStore('meta').get(MY_STATUS_KEY),
           tx.objectStore('meta').get(STATUS_DIRTY_KEY),
           tx.objectStore('meta').get(tagPrefsKey(opts.memberId)),
@@ -868,6 +912,16 @@ export class CrewStore implements PhotoUploadStorage {
       for (const k of pcQueue) this.postCommentQueue.add(String(k));
       for (const r of rRows) this.reactions.set(reactionKey(r.entryId, r.m), r);
       for (const k of rQueue) this.reactionDirty.add(String(k));
+      for (const raw of sdRows) {
+        const row = normalizeStudyDay(raw);
+        if (row) this.studyDays.set(studyDayKey(row.m, row.day), row);
+      }
+      // 도장 큐는 내 접두사(`m|`)만 — 남의 미전송 도장을 내 토큰으로 보내면 서버가 배치를 거부한다
+      const sdPrefix = `${opts.memberId}|`;
+      for (const k of sdQueueKeys) {
+        const key = String(k);
+        if (key.startsWith(sdPrefix)) this.studyDayQueue.add(key.slice(sdPrefix.length));
+      }
       // 알림 — 남의 행(멤버 전환 잔재)과 보관 기간 지난 행은 걸러 싣고, 후자는 IDB에서도 지운다
       const now = Date.now();
       const expired: string[] = [];
@@ -1725,16 +1779,80 @@ export class CrewStore implements PhotoUploadStorage {
       updatedAt: actionIso, // 액션 시각 — 서버가 이 시각 기준 LWW로 판정한다
     };
     this.statuses.set(this.me, st);
+    // 도장 이력 — 액션 즉시 행으로 남긴다. status는 현재값 1행이라 오프라인에서 여러 날
+    // 체크인하면 마지막 액션만 서버에 가는데, 날짜별 행은 여기서 큐에 쌓여 전부 도착한다.
+    // 이미 있는 날(서버 이력이 먼저 온 날 포함)은 건너뛴다 — 중복 전송도 서버 멱등이 삼킨다.
+    const stamps = this.adoptMyStudyDays(studyStampDays(st.on, st.lastStartedAt, st.updatedAt));
     if (!this.demo) {
       // 데모는 메모리 전용 — 지속하면 나중에 실계정 로그인에 새어 들어간다
       this.statusDirty = true;
-      this.txWrite(['meta'], (tx) => {
-        void tx.objectStore('meta').put(st, MY_STATUS_KEY);
-        void tx.objectStore('meta').put(true, STATUS_DIRTY_KEY);
-        void tx.objectStore('meta').delete(STATUS_ACK_SENT_UPDATED_AT_KEY);
-      });
+      for (const row of stamps) this.studyDayQueue.add(row.day);
+      // 상태 메타와 도장 행·큐를 한 트랜잭션으로 — 상태만 커밋되고 도장이 유실된 채
+      // 다음 오프라인 액션이 myStatus를 덮으면 그 날의 유일한 이력이 사라진다
+      this.txWrite(
+        stamps.length > 0 ? ['meta', 'studyDays', 'studyDayQueue'] : ['meta'],
+        (tx) => {
+          void tx.objectStore('meta').put(st, MY_STATUS_KEY);
+          void tx.objectStore('meta').put(true, STATUS_DIRTY_KEY);
+          void tx.objectStore('meta').delete(STATUS_ACK_SENT_UPDATED_AT_KEY);
+          for (const row of stamps) {
+            const key = studyDayKey(row.m, row.day);
+            void tx.objectStore('studyDays').put(row, key);
+            void tx.objectStore('studyDayQueue').put(true, key);
+          }
+        },
+      );
       this.onLocalWrite?.();
     }
+    this.bump();
+  }
+
+  /** 내 도장 날짜를 메모리에만 채택하고 새 행을 돌려준다 — 지속은 호출부가 상태 메타와
+      한 트랜잭션으로 묶는다(반쪽 상태 방지). 데모는 이 메모리 행이 전부다. */
+  private adoptMyStudyDays(days: string[]): StudyDay[] {
+    const fresh: StudyDay[] = [];
+    for (const day of days) {
+      const key = studyDayKey(this.me, day);
+      if (this.studyDays.has(key)) continue;
+      const row: StudyDay = { m: this.me, day };
+      this.studyDays.set(key, row);
+      this.studyDaysCache = null;
+      fresh.push(row);
+    }
+    return fresh;
+  }
+
+  /** 큐에 있는 내 도장 행. 행이 없는 고아 키(반쪽 상태의 잔재)는 여기서 정리한다. */
+  pendingStudyDays(): StudyDay[] {
+    const out: StudyDay[] = [];
+    for (const day of [...this.studyDayQueue]) {
+      const row = this.studyDays.get(studyDayKey(this.me, day));
+      if (!row) {
+        this.dropStudyDayFromQueue(day);
+        continue;
+      }
+      out.push(row);
+    }
+    return out;
+  }
+
+  dropStudyDayFromQueue(day: string): void {
+    this.studyDayQueue.delete(day);
+    this.txWrite(['studyDayQueue'], (tx) => {
+      void tx.objectStore('studyDayQueue').delete(studyDayKey(this.me, day));
+    });
+    this.bump();
+  }
+
+  /** 도장 push 정산 — 서버가 에코한 날짜의 큐 표시만 지운다(행은 불변이라 그대로 둔다). */
+  ackStudyDays(days: string[]): void {
+    const settled = days.filter((day) => this.studyDayQueue.delete(day));
+    if (settled.length === 0) return;
+    this.txWrite(['studyDayQueue'], (tx) => {
+      for (const day of settled) {
+        void tx.objectStore('studyDayQueue').delete(studyDayKey(this.me, day));
+      }
+    });
     this.bump();
   }
 
@@ -1980,6 +2098,8 @@ export class CrewStore implements PhotoUploadStorage {
     postCursor?: PullCursor | null;
     postComments?: PostComment[];
     postCommentCursor?: PullCursor | null;
+    studyDays?: StudyDay[];
+    studyDayCursor?: StudyDayCursor | null;
   }): boolean {
     const { rows, statuses, cursor } = p;
     let changed = false;
@@ -2151,6 +2271,19 @@ export class CrewStore implements PhotoUploadStorage {
       changed = true;
     }
 
+    // 도장 이력 — 삽입-전용이라 병합이 "없으면 넣는다"가 전부다. 로컬 쓰기가 없어 큐 충돌도 없다.
+    const sdPuts: StudyDay[] = [];
+    for (const raw of p.studyDays ?? []) {
+      const row = normalizeStudyDay(raw);
+      if (!row) continue;
+      const key = studyDayKey(row.m, row.day);
+      if (this.studyDays.has(key)) continue; // 커서 안전 윈도우의 중복 전달
+      this.studyDays.set(key, row);
+      this.studyDaysCache = null;
+      sdPuts.push(row);
+      changed = true;
+    }
+
     // 알림 — 서버만 만드는 스트림. 같은 세대의 안 읽음 행에는 아직 못 보낸 로컬 "읽음"이 이긴다.
     const nowIso = new Date().toISOString();
     const nPuts: Notification[] = [];
@@ -2193,6 +2326,12 @@ export class CrewStore implements PhotoUploadStorage {
     const pcc = p.postCommentCursor;
     const postCommentCursorChanged =
       !!pcc && (this.lastPostCommentCursor?.ts !== pcc.ts || this.lastPostCommentCursor?.id !== pcc.id);
+    const sdc = p.studyDayCursor;
+    const studyDayCursorChanged =
+      !!sdc &&
+      (this.lastStudyDayCursor?.ts !== sdc.ts ||
+        this.lastStudyDayCursor?.m !== sdc.m ||
+        this.lastStudyDayCursor?.day !== sdc.day);
     const notify =
       puts.length > 0 ||
       dels.length > 0 ||
@@ -2206,7 +2345,8 @@ export class CrewStore implements PhotoUploadStorage {
       pPuts.length > 0 ||
       pDels.length > 0 ||
       pcPuts.length > 0 ||
-      pcDels.length > 0;
+      pcDels.length > 0 ||
+      sdPuts.length > 0;
     if (
       !notify &&
       !cursorChanged &&
@@ -2215,7 +2355,8 @@ export class CrewStore implements PhotoUploadStorage {
       !reactionCursorChanged &&
       !notifCursorChanged &&
       !postCursorChanged &&
-      !postCommentCursorChanged
+      !postCommentCursorChanged &&
+      !studyDayCursorChanged
     ) {
       if (changed) this.bump();
       return entryMetadataChanged;
@@ -2227,6 +2368,7 @@ export class CrewStore implements PhotoUploadStorage {
     if (notifCursorChanged) this.lastNotifCursor = nc;
     if (postCursorChanged) this.lastPostCursor = pc;
     if (postCommentCursorChanged) this.lastPostCommentCursor = pcc;
+    if (studyDayCursorChanged) this.lastStudyDayCursor = sdc;
     // 손댈 스토어만 트랜잭션에 넣는다 — 안 쓰는 스토어까지 잠그면 다른 탭의 쓰기를 괜히 막는다.
     // 큐 스토어까지 넣는 이유: 다른 탭의 미전송 쓰기를 같은 트랜잭션 안에서 읽어 피해 가야 한다
     const stores: StoreName[] = ['meta'];
@@ -2237,6 +2379,7 @@ export class CrewStore implements PhotoUploadStorage {
     if (nPuts.length > 0) stores.push('notifications', 'notifReadQueue');
     if (pPuts.length > 0 || pDels.length > 0) stores.push('posts', 'postQueue');
     if (pcPuts.length > 0 || pcDels.length > 0) stores.push('postComments', 'postCommentQueue');
+    if (sdPuts.length > 0) stores.push('studyDays');
     this.txWrite(
       stores,
       async (tx) => {
@@ -2324,6 +2467,11 @@ export class CrewStore implements PhotoUploadStorage {
             else void store.delete(id);
           }
           if (skipped) this.scheduleRefresh();
+        }
+        if (sdPuts.length > 0) {
+          // 삽입-전용이라 큐 확인이 없다 — 같은 키를 다른 탭이 먼저 썼어도 값이 같다(멱등)
+          const store = tx.objectStore('studyDays');
+          for (const row of sdPuts) void store.put(row, studyDayKey(row.m, row.day));
         }
         if (nPuts.length > 0) {
           // 다른 탭이 남긴 미전송 읽음(IDB 큐)이 이 세대의 행을 읽은 것이면 읽음을 보존한 채
@@ -2420,6 +2568,7 @@ export class CrewStore implements PhotoUploadStorage {
         if (nc) void meta.put(nc, notifCursorKey(this.me));
         if (pc) void meta.put(pc, POST_CURSOR_KEY);
         if (pcc) void meta.put(pcc, POST_COMMENT_CURSOR_KEY);
+        if (sdc) void meta.put(sdc, STUDY_DAY_CURSOR_KEY);
       },
       notify,
     );
@@ -3012,6 +3161,7 @@ export class CrewStore implements PhotoUploadStorage {
     notifications: PullCursor | null;
     posts: PullCursor | null;
     postComments: PullCursor | null;
+    studyDays: StudyDayCursor | null;
   }> {
     const none = {
       entries: null,
@@ -3021,12 +3171,13 @@ export class CrewStore implements PhotoUploadStorage {
       notifications: null,
       posts: null,
       postComments: null,
+      studyDays: null,
     };
     const db = this.db;
     if (!db) return none;
     try {
       const tx = db.transaction('meta');
-      const [e, event, c, r, n, p, pc] = await Promise.all([
+      const [e, event, c, r, n, p, pc, sd] = await Promise.all([
         tx.objectStore('meta').get(ENTRY_CURSOR_KEY),
         tx.objectStore('meta').get(EVENT_CURSOR_KEY),
         tx.objectStore('meta').get(COMMENT_CURSOR_KEY),
@@ -3034,6 +3185,7 @@ export class CrewStore implements PhotoUploadStorage {
         tx.objectStore('meta').get(notifCursorKey(this.me)),
         tx.objectStore('meta').get(POST_CURSOR_KEY),
         tx.objectStore('meta').get(POST_COMMENT_CURSOR_KEY),
+        tx.objectStore('meta').get(STUDY_DAY_CURSOR_KEY),
       ]);
       await tx.done;
       return {
@@ -3044,6 +3196,7 @@ export class CrewStore implements PhotoUploadStorage {
         notifications: asPullCursor(n),
         posts: asPullCursor(p),
         postComments: asPullCursor(pc),
+        studyDays: asStudyDayCursor(sd),
       };
     } catch {
       return none; // 닫힌 DB(다른 탭 업그레이드에 양보) — 처음부터 pull해도 안전하다
@@ -3180,6 +3333,8 @@ export class CrewStore implements PhotoUploadStorage {
         'postComments',
         'postCommentQueue',
         'photoBlobs',
+        'studyDays',
+        'studyDayQueue',
         'meta',
       ]);
       const [
@@ -3202,6 +3357,8 @@ export class CrewStore implements PhotoUploadStorage {
         dbPCQueue,
         dbPhotoKeys,
         dbPhotoRows,
+        dbStudyDays,
+        dbSDQueue,
         dbSt,
         dbDirty,
         dbStatusAckSentUpdatedAt,
@@ -3227,6 +3384,8 @@ export class CrewStore implements PhotoUploadStorage {
         tx.objectStore('postCommentQueue').getAllKeys(),
         tx.objectStore('photoBlobs').getAllKeys(),
         tx.objectStore('photoBlobs').getAll(),
+        tx.objectStore('studyDays').getAll(),
+        tx.objectStore('studyDayQueue').getAllKeys(),
         tx.objectStore('meta').get(MY_STATUS_KEY),
         tx.objectStore('meta').get(STATUS_DIRTY_KEY),
         tx.objectStore('meta').get(STATUS_ACK_SENT_UPDATED_AT_KEY),
@@ -3495,9 +3654,35 @@ export class CrewStore implements PhotoUploadStorage {
         }
       }
 
+      // 도장 이력 — 삽입-전용이라 다른 탭이 pull·체크인으로 늘려 놓은 키만 채택하면 된다
+      for (const raw of dbStudyDays) {
+        const row = normalizeStudyDay(raw);
+        if (!row) continue;
+        const key = studyDayKey(row.m, row.day);
+        if (!this.studyDays.has(key)) {
+          this.studyDays.set(key, row);
+          this.studyDaysCache = null;
+          changed = true;
+        }
+      }
+
       // 리액션 — 내 행은 액션 시각(actedAt)으로, 남의 행은 서버 시계(updatedAt)로 판정한다
       const dbRDirty = new Set([...dbRQueue].map(String));
       let tookDirty = false; // 다른 탭이 남긴 미전송 토글을 이 탭이 떠맡았는가
+
+      // 도장 큐 — 다른 탭(닫혔거나 뒤처진)이 남긴 미전송 도장을 이 탭이 대신 push한다.
+      // 정산된 키를 메모리에 다시 살리는 경우는 중복 전송으로 끝난다 — 서버 멱등이 삼킨다.
+      const sdPrefix = `${this.me}|`;
+      for (const k of dbSDQueue) {
+        const key = String(k);
+        if (!key.startsWith(sdPrefix)) continue;
+        const day = key.slice(sdPrefix.length);
+        if (!this.studyDayQueue.has(day)) {
+          this.studyDayQueue.add(day);
+          tookDirty = true;
+          changed = true;
+        }
+      }
       for (const row of dbReactions) {
         const key = reactionKey(row.entryId, row.m);
         const cur = this.reactions.get(key);
@@ -3649,6 +3834,7 @@ export class CrewStore implements PhotoUploadStorage {
       posts: sortPosts(this.posts.values()),
       postComments: groupPostComments(this.postComments.values()),
     });
+    const studyDays = (this.studyDaysCache ??= groupStudyDays(this.studyDays.values()));
     this.snapshot = {
       rev: this.snapshot.rev + 1,
       entries: (this.entriesCache ??= [...this.map.values()].filter((e) => !e.deletedAt)),
@@ -3660,6 +3846,7 @@ export class CrewStore implements PhotoUploadStorage {
       reactions: groupReactions(this.reactions.values()),
       posts: lounge.posts,
       postComments: lounge.postComments,
+      studyDays,
       notifications,
       unreadNotifications: notifications.filter((n) => n.readAt === null).length,
       photoUploads: new Map(
@@ -3680,7 +3867,8 @@ export class CrewStore implements PhotoUploadStorage {
           this.reactionDirty.size +
           this.notifReadQueue.size +
           this.postQueue.size +
-          this.postCommentQueue.size,
+          this.postCommentQueue.size +
+          this.studyDayQueue.size,
       },
     };
     for (const fn of this.listeners) fn();

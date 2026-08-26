@@ -13,6 +13,7 @@ import {
   pushSubs,
   reactions,
   status,
+  studyDays,
   tagPrefs,
 } from './schema';
 import {
@@ -20,6 +21,7 @@ import {
   MEMBER_IDS,
   NOTIF_MODES,
   entryTags,
+  isCalendarDay,
   isOffTags,
   normalizeCustomEventTagList,
   normalizeCustomTagList,
@@ -47,6 +49,8 @@ import type {
   ReactionCursor,
   ReactionEmoji,
   ReactionSet,
+  StudyDay,
+  StudyDayCursor,
   Tag,
   TagPrefs,
   Todo,
@@ -1005,6 +1009,60 @@ export async function setStatus(
 
 export async function allStatuses(db: Db): Promise<MemberStatus[]> {
   return (await db.select().from(status)).map(toMemberStatus);
+}
+
+/* ---------- 공부 시작 도장 이력 ---------- */
+
+/** 지평선 커서의 날짜 자리 하한 — ::date 캐스트가 사는 최솟값(빈 문자열은 캐스트에서 죽는다). */
+export const MIN_DAY = '0001-01-01';
+
+/** 체크인이 남긴 도장 날짜를 삽입-전용으로 기록한다 — (member_id, day) PK라 멱등이고,
+    LWW에서 진 액션이라도 "그 날 시작했다"는 이력 자체는 참이므로 호출부가 applied를 보지 않는다.
+    달력에 없는 날짜는 date 삽입이 배치를 죽이므로 형식이 아니라 존재로 거른다. */
+export async function recordStudyDays(db: Db, me: MemberId, days: string[]): Promise<void> {
+  const valid = [...new Set(days.filter(isCalendarDay))];
+  if (valid.length === 0) return;
+  await db
+    .insert(studyDays)
+    .values(valid.map((day) => ({ memberId: me, day })))
+    .onConflictDoNothing();
+}
+
+export interface StudyDayPullResult {
+  rows: StudyDay[];
+  cursor: StudyDayCursor | null;
+}
+
+/** 도장 이력 변경분 — (created_at, member_id, day) 키셋. 행이 불변·삽입-전용이라
+    갱신을 다시 실을 일이 없고, 뒤늦게 도착한 과거 날짜도 created_at(도착 시각)으로 잡힌다. */
+export async function pullStudyDays(
+  db: Db,
+  cursor: StudyDayCursor | null,
+): Promise<StudyDayPullResult> {
+  const horizonMs = Date.now() - HORIZON_MS;
+  const rows = await db
+    .select()
+    .from(studyDays)
+    .where(
+      cursor
+        ? sql`(${studyDays.createdAt}, ${studyDays.memberId}, ${studyDays.day}) > (${cursor.ts}::timestamptz, ${cursor.m}::text, ${cursor.day}::date)`
+        : undefined,
+    )
+    .orderBy(studyDays.createdAt, studyDays.memberId, studyDays.day)
+    .limit(PAGE);
+  const last = rows[rows.length - 1];
+  const move = holdOrAdvance(horizonMs, cursor?.ts ?? null, rows.length, last?.createdAt);
+  return {
+    rows: rows.map((r) => ({ m: r.memberId as MemberId, day: r.day })),
+    cursor:
+      move === 'horizon'
+        ? { ts: new Date(horizonMs).toISOString(), m: MIN_MEMBER, day: MIN_DAY }
+        : move === 'keep'
+          ? cursor
+          // 행의 created_at 원문 그대로 — ISO(ms)로 자르면 마이크로초 차이로 키셋이
+          // 마지막 행을 넘어서지 못해 같은 행을 영원히 다시 싣는다(리액션 커서와 같은 이유)
+          : { ts: last!.createdAt, m: last!.memberId as MemberId, day: last!.day },
+  };
 }
 
 /** 알림 판단에 필요한 이전 상태 (없으면 null). */

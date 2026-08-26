@@ -11,6 +11,8 @@ import type {
   PullCursor,
   ReactionCursor,
   ReactionSet,
+  StudyDay,
+  StudyDayCursor,
   TagPrefs,
 } from '../../shared/types';
 
@@ -88,7 +90,17 @@ export interface CrewDB extends DBSchema {
   photoBlobs: { key: string; value: PhotoBlobRecord };
   /** key = `${photoId}:${kind}` — 인증 fetch로 받은 다른 멤버 사진의 로컬 캐시. */
   photoCache: { key: string; value: PhotoCacheRecord };
-  meta: { key: string; value: PullCursor | ReactionCursor | boolean | string | MemberStatus | TagPrefs };
+  /** key = `${m}|${day}` — 공부 시작 도장의 날짜별 이력(삽입-전용, 서버 이력의 로컬 복제본).
+      내 체크인은 쓰는 즉시 행이 되고 아래 큐로 서버에 전해진다 — status는 현재값 1행으로
+      병합되므로 오프라인에서 여러 날 체크인한 이력은 이 스트림만이 나른다. */
+  studyDays: { key: string; value: StudyDay };
+  /** 존재 자체가 "아직 push 안 됨" 표시 (값은 항상 true) — 행이 불변이라 commentQueue와
+      같은 규약이고, key는 행과 같은 `${m}|${day}`다(멤버 전환 시 남의 큐를 안 보낸다). */
+  studyDayQueue: { key: string; value: boolean };
+  meta: {
+    key: string;
+    value: PullCursor | ReactionCursor | StudyDayCursor | boolean | string | MemberStatus | TagPrefs;
+  };
 }
 
 /** 리액션 로컬 키 — (기록, 멤버) 쌍이 곧 행이다. */
@@ -109,7 +121,7 @@ export function upgradePhotoCacheStore(
 
 export function openCrewDB(): Promise<CrewDatabase> {
   let handle: CrewDatabase | null = null;
-  const opened = openDB<CrewDB>('learning-crew', 8, {
+  const opened = openDB<CrewDB>('learning-crew', 9, {
     async upgrade(db, oldVersion, _newVersion, tx) {
       if (oldVersion < 1) {
         db.createObjectStore('entries', { keyPath: 'id' });
@@ -157,6 +169,11 @@ export function openCrewDB(): Promise<CrewDatabase> {
         // 크루 일정도 기록과 같은 CAS 행 + rev/base 큐를 한 트랜잭션으로 다룬다.
         db.createObjectStore('events', { keyPath: 'id' });
         db.createObjectStore('eventQueue');
+      }
+      if (oldVersion < 9) {
+        // 도장 날짜 이력 — 키가 (m, day) 합성이라 keyPath로 표현할 수 없다(리액션과 같다)
+        db.createObjectStore('studyDays');
+        db.createObjectStore('studyDayQueue');
       }
     },
     // 다른 탭이 더 높은 버전으로 업그레이드하려 할 때 이 연결이 막고 있으면 양보한다 —

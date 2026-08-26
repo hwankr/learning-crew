@@ -29,6 +29,9 @@ import {
   pullPostComments,
   pushReactions,
   pullReactions,
+  recordStudyDays,
+  pullStudyDays,
+  MIN_DAY,
   NIL_UUID,
   hasPhotoTombstone,
   pendingPhotoTombstones,
@@ -261,6 +264,102 @@ describe('status lastStartedAt DB 마이그레이션', () => {
     } finally {
       await pg.close();
     }
+  });
+});
+
+describe('study_days DB 마이그레이션', () => {
+  it('0017이 현재 status의 last_started_at을 KST 날짜 도장으로 백필한다', async () => {
+    const pg = new PGlite();
+    try {
+      const migrations = readdirSync('migrations').filter((f) => f.endsWith('.sql')).sort();
+      const studyDayMigration = migrations.find((f) => f.startsWith('0017_'));
+      expect(studyDayMigration).toBeDefined();
+
+      for (const migration of migrations.filter((f) => f < studyDayMigration!)) {
+        const ddl = readFileSync(`migrations/${migration}`, 'utf8');
+        for (const stmt of ddl.split('--> statement-breakpoint')) await pg.exec(stmt);
+      }
+      // sh: 시작 UTC 8/14 16:00 = KST 8/15 01:00 — 시작일이 KST 기준으로 넘어가야 한다.
+      //     세션 2시간·OFF라 종료일도 후보지만 같은 KST 날(8/15)이라 행은 하나다.
+      // th: KST 8/14 23:30 시작 → 8/15 00:30 종료(OFF·1시간) — 자정을 넘긴 세션은
+      //     배포 전 라이브 판정이 이미 종료일을 오늘로 세던 도장이라 이틀 다 백필한다.
+      // jj: 세션 20시간(TTL 14h 초과) — 끄는 걸 잊은 상태라 종료일은 백필하지 않는다.
+      await pg.exec(`
+        insert into status (member_id, is_on, place, since, last_started_at, updated_at)
+        values
+          ('sh', false, null, null, '2026-08-14T16:00:00.000Z', '2026-08-14T18:00:00.000Z'),
+          ('th', false, null, null, '2026-08-14T14:30:00.000Z', '2026-08-14T15:30:00.000Z'),
+          ('jj', false, null, null, '2026-08-13T00:00:00.000Z', '2026-08-13T20:00:00.000Z'),
+          ('wg', false, null, null, null, '2026-08-15T02:00:00.000Z')
+      `);
+
+      const ddl = readFileSync(`migrations/${studyDayMigration!}`, 'utf8');
+      for (const stmt of ddl.split('--> statement-breakpoint')) await pg.exec(stmt);
+      const migrated = await pg.query<{ member_id: string; day: string }>(`
+        select member_id, day::text as day from study_days order by member_id, day
+      `);
+      expect(migrated.rows).toEqual([
+        { member_id: 'jj', day: '2026-08-13' },
+        { member_id: 'sh', day: '2026-08-15' },
+        { member_id: 'th', day: '2026-08-14' },
+        { member_id: 'th', day: '2026-08-15' },
+      ]);
+    } finally {
+      await pg.close();
+    }
+  });
+});
+
+describe('study day queries', () => {
+  it('기록은 멱등하고 입력의 중복·깨진 날짜를 걸러낸다', async () => {
+    await recordStudyDays(db, 'sh', ['2026-08-10', '2026-08-11', '2026-08-10']);
+    await recordStudyDays(db, 'sh', ['2026-08-10']); // 재전송 — ON CONFLICT DO NOTHING
+    await recordStudyDays(db, 'wg', ['2026-08-10']);
+    await recordStudyDays(db, 'th', ['bad-day', '', '2026-02-30']); // 형식·달력 밖 — 통째로 무시
+    const rows = await db.execute(
+      sql`select member_id, day::text as day from study_days order by member_id, day`,
+    );
+    expect(rows.rows).toEqual([
+      { member_id: 'sh', day: '2026-08-10' },
+      { member_id: 'sh', day: '2026-08-11' },
+      { member_id: 'wg', day: '2026-08-10' },
+    ]);
+  });
+
+  it('키셋 커서로 전량 pull하고, 커서 뒤 재-pull은 비어 있다', async () => {
+    // 지평선(90초) 밖으로 늙혀야 커서가 키셋으로 전진한다
+    await db.execute(sql`update study_days set created_at = created_at - interval '10 minutes'`);
+    const p1 = await pullStudyDays(db, null);
+    expect(p1.rows).toEqual([
+      { m: 'sh', day: '2026-08-10' },
+      { m: 'sh', day: '2026-08-11' },
+      { m: 'wg', day: '2026-08-10' },
+    ]);
+    expect(p1.cursor).toMatchObject({ m: 'wg', day: '2026-08-10' });
+
+    const p2 = await pullStudyDays(db, p1.cursor);
+    expect(p2.rows).toEqual([]);
+    expect(p2.cursor).toEqual(p1.cursor); // 빈 페이지 + 지평선 안쪽 커서 아님 → keep
+
+    // 지평선 하한 커서(m='', day=MIN_DAY)로도 처음부터 다시 잡힌다
+    const p3 = await pullStudyDays(db, {
+      ts: '2026-01-01T00:00:00.000Z',
+      m: '',
+      day: MIN_DAY,
+    });
+    expect(p3.rows).toHaveLength(3);
+  });
+
+  it('지평선 안쪽의 새 행은 커서를 지평선에 세우고 다음 pull에 다시 실린다', async () => {
+    await recordStudyDays(db, 'jj', ['2026-08-12']);
+    const p1 = await pullStudyDays(db, null);
+    expect(p1.rows).toContainEqual({ m: 'jj', day: '2026-08-12' });
+    expect(p1.cursor).toMatchObject({ m: '', day: MIN_DAY }); // 지평선 커서
+
+    const p2 = await pullStudyDays(db, p1.cursor);
+    expect(p2.rows).toContainEqual({ m: 'jj', day: '2026-08-12' }); // 클라이언트가 중복 무시
+    // 다른 스트림 테스트가 이어 쓰는 공용 db — 방금 넣은 행은 지우고 나간다
+    await db.execute(sql`delete from study_days where member_id = 'jj'`);
   });
 });
 

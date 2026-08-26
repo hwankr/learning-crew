@@ -17,6 +17,9 @@ import {
   pushReactions,
   pullReactions,
   pullNotifications,
+  pullStudyDays,
+  recordStudyDays,
+  MIN_DAY,
   markNotificationsRead,
   getNotifPrefs,
   putNotifPrefs,
@@ -41,6 +44,7 @@ import {
   PUSH_LIMITS,
   UUID_RE,
   canonicalUuid,
+  isCalendarDay,
   isFreshSince,
   normalizeCrewEvent,
   normalizeCustomEventTagList,
@@ -63,6 +67,8 @@ import {
   type PushResponse,
   type ReactionCursor,
   type ReactionSet,
+  type StudyDay,
+  type StudyDayCursor,
   type PushSubscribeRequest,
   type PushUnsubscribeRequest,
   type StatusSetRequest,
@@ -72,6 +78,7 @@ import {
   type TagPrefsResponse,
   type VapidKeyResponse,
 } from '../shared/types';
+import { STUDY_DAY_FLOOR_MS, kstDayStr, studyStampDays } from '../shared/notify';
 import { invalidCrewEventReason, invalidReason, normalizePushedEntry } from './validation';
 import {
   PHOTO_MAX_BYTES,
@@ -322,7 +329,10 @@ app.post('/api/sync/push', async (c) => {
   const reqReads = req.notificationReads ?? [];
   const reqPosts = req.posts ?? [];
   const reqPostComments = req.postComments ?? [];
+  const reqStudyDays = req.studyDays ?? [];
   if (
+    !Array.isArray(reqStudyDays) ||
+    reqStudyDays.length > PUSH_LIMITS.batch ||
     !Array.isArray(req.entries) ||
     req.entries.length > PUSH_LIMITS.batch ||
     !Array.isArray(reqEvents) ||
@@ -451,6 +461,30 @@ app.post('/api/sync/push', async (c) => {
       actedAt: normalizeAt(x.actedAt, now),
     });
   }
+  // 도장 날짜 — 본인 행·실제 달력 날짜만(깨진 날짜는 date 삽입에서 배치 전체를 죽인다).
+  // 과거는 오프라인 큐가 늦게 도착하는 정상 경로라 그대로 받고(기록의 지난 날짜 작성과
+  // 같은 신뢰 수준), 범위 밖은 400 대신 화해시킨다 — 큐가 영영 정산되지 못하면 이 클라이언트의
+  // push 전체(기록·댓글까지)가 막힌다:
+  // · 미래(빠른 시계)는 서버 KST 오늘로 눌러 기록한다 — 그대로 받으면 status 경로가 같은
+  //   액션을 오늘로 또 기록해 체크인 하나가 이틀로 세진다. 스큐 기기의 로컬 행은 제 날짜로
+  //   남는다(삭제 없는 스트림이라 그 기기 화면만 하루 더 셀 수 있다) — 크루가 공유하는
+  //   이력은 하루가 맞고, 시계가 맞는 크루(전원 KST·NTP 폰)에선 생기지 않는 경로라
+  //   응답에 날짜 이동 맵까지 실어 로컬을 되돌리는 화해는 하지 않는다.
+  // · 2020년 이전(고장 난 시계)은 기록 없이 에코만 한다.
+  const sdToday = kstDayStr(now);
+  const sdFloor = kstDayStr(STUDY_DAY_FLOOR_MS);
+  const sdDays: string[] = [];
+  const sdEcho: string[] = []; // 큐 정산용 — 화해와 무관하게 요청 날짜 그대로 돌려준다
+  for (const x of reqStudyDays) {
+    const row = x as Partial<StudyDay> | null;
+    if (!row || typeof row !== 'object' || typeof row.day !== 'string' || !isCalendarDay(row.day)) {
+      return c.json({ error: 'bad study day' }, 400);
+    }
+    if (row.m !== me) return c.json({ error: 'not your study day' }, 400);
+    sdEcho.push(row.day);
+    if (row.day < sdFloor) continue;
+    sdDays.push(row.day > sdToday ? sdToday : row.day);
+  }
   // v가 있는 행은 CAS, 없는 행은 구버전 프로토콜(LWW) — 배포 이행기의 옛 번들도 계속 동기화된다
   const withV: Entry[] = [];
   const legacy: Omit<Entry, 'v'>[] = [];
@@ -468,6 +502,7 @@ app.post('/api/sync/push', async (c) => {
     markNotificationsRead(db, me, reads),
     pushPosts(db, pRows, me),
     pushPostComments(db, pcRows, me),
+    recordStudyDays(db, me, sdDays),
   ]);
   // entry/post 문장의 DB 트리거가 빠진 photo id를 같은 트랜잭션에서 톰스톤으로
   // 남겼다. 응답은 막지 않고 빠른 삭제를 시도하되, 실패한 행은 cron이 재시도한다.
@@ -523,6 +558,8 @@ app.post('/api/sync/push', async (c) => {
       ...rOut.current.map((row) => ({ entryId: row.entryId, m: row.m, applied: false, row })),
     ],
     notificationReadResults: readResults,
+    // 검증을 통과한 요청 날짜의 에코(화해로 날짜가 옮겨졌어도) — 클라이언트가 이걸로 큐를 비운다
+    studyDayResults: sdEcho,
     postResults: [
       ...pOut.applied.map((row) => ({ id: row.id, applied: true, row })),
       ...pOut.current.map((row) => ({ id: row.id, applied: false, row })),
@@ -577,8 +614,20 @@ app.get('/api/sync/pull', async (c) => {
     pcsince && Number.isFinite(Date.parse(pcsince)) && pcsinceId && UUID_RE.test(pcsinceId)
       ? { ts: pcsince, id: pcsinceId }
       : null;
+  const sdsince = c.req.query('sdsince');
+  const sdsinceM = c.req.query('sdsinceM');
+  const sdsinceDay = c.req.query('sdsinceDay');
+  // 날짜 자리는 ::date 캐스트라 달력 존재까지 본다('2026-02-30'은 형식을 통과해도 캐스트에서
+  // pull 전체를 500으로 죽인다). 지평선 커서의 하한(MIN_DAY)은 실사용 날짜가 아닌 센티널이라
+  // 따로 인정한다. ts는 서버가 준 pg 원문(마이크로초)일 수 있어 Date.parse(V8은 읽는다)로만
+  // 거른다. 멤버 자리는 리액션처럼 ''(지평선 하한)도 커서다.
+  const sdCursor: StudyDayCursor | null =
+    sdsince && Number.isFinite(Date.parse(sdsince)) && sdsinceM !== undefined &&
+    sdsinceDay && (sdsinceDay === MIN_DAY || isCalendarDay(sdsinceDay))
+      ? { ts: sdsince, m: sdsinceM as MemberId | '', day: sdsinceDay }
+      : null;
   const db = drizzle(neon(c.env.DATABASE_URL));
-  const [result, eventRes, statuses, cRes, rRes, nRes, pRes, pcRes] = await Promise.all([
+  const [result, eventRes, statuses, cRes, rRes, nRes, pRes, pcRes, sdRes] = await Promise.all([
     pullSince(db, cursor),
     pullEvents(db, eventCursor),
     allStatuses(db),
@@ -587,6 +636,7 @@ app.get('/api/sync/pull', async (c) => {
     pullNotifications(db, c.get('memberId'), nCursor),
     pullPosts(db, pCursor),
     pullPostComments(db, pcCursor),
+    pullStudyDays(db, sdCursor),
   ]);
   return c.json({
     ...result,
@@ -603,6 +653,8 @@ app.get('/api/sync/pull', async (c) => {
     postCursor: pRes.cursor,
     postComments: pcRes.rows,
     postCommentCursor: pcRes.cursor,
+    studyDays: sdRes.rows,
+    studyDayCursor: sdRes.cursor,
   } satisfies PullResponse);
 });
 
@@ -688,6 +740,15 @@ app.post('/api/sync/status', async (c) => {
   const db = drizzle(neon(c.env.DATABASE_URL));
   const prev = await getStatusRow(db, me);
   const { status: saved, applied } = await setStatus(db, me, s);
+
+  // 도장 이력 — status는 현재값 1행뿐이라 지난날 도장이 사라진다. 이 액션이 증언하는
+  // 날짜를 삽입-전용 study_days에 남긴다(멱등·LWW 결과와 무관 — 시작 이력은 단조다).
+  // 오프라인에서 여러 날 체크인한 경우는 상태가 마지막 액션으로 병합돼 여기로는 최근
+  // 날짜만 온다 — 새 클라이언트는 그 이력을 push의 studyDays 스트림으로 따로 나른다.
+  // 구버전(캐시된 번들)의 OFF는 lastStartedAt 필드가 없다 — setStatus가 단조 병합으로
+  // 보존한 서버 이력(saved)으로 되살려야 자정을 넘긴 세션의 종료일이 빠지지 않는다.
+  // (saved가 더 새 시작이면 시작≤종료 가드가 종료일을 알아서 거른다 — 과잉 기록은 없다)
+  await recordStudyDays(db, me, studyStampDays(s.on, s.lastStartedAt ?? saved.lastStartedAt, at));
 
   // off→on 전환이면 크루에게 알림 팬아웃 — 응답을 막지 않게 백그라운드로.
   // 발송 슬롯은 조건부 UPDATE로 선점한다: 두 기기가 동시에 켜도 한쪽만 팬아웃한다.

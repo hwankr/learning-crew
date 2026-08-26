@@ -120,6 +120,13 @@
       "when": 1786894903883,
       "tag": "0016_lame_talkback",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1787755474479,
+      "tag": "0017_smart_valeria_richards",
+      "breakpoints": true
     }
   ]
 }

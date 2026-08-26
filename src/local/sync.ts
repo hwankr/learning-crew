@@ -14,6 +14,7 @@ import type {
   PushRequest,
   PushResponse,
   ReactionSet,
+  StudyDay,
   StatusSetRequest,
   StatusSetResponse,
   TagPrefsPutRequest,
@@ -163,6 +164,11 @@ export class SyncClient {
       if (c.m !== this.memberId) this.store.dropPostCommentFromQueue(c.id);
       else postComments.push(c);
     }
+    const studyDays: StudyDay[] = [];
+    for (const s of this.store.pendingStudyDays()) {
+      if (s.m !== this.memberId) this.store.dropStudyDayFromQueue(s.day);
+      else studyDays.push(s);
+    }
     const B = PUSH_LIMITS.batch;
     // 스트림을 각자 배치로 쪼개 한 요청에 함께 싣는다 — 라운드 수는 가장 긴 스트림 기준
     const rounds = Math.max(
@@ -173,6 +179,7 @@ export class SyncClient {
       Math.ceil(reads.length / B),
       Math.ceil(posts.length / B),
       Math.ceil(postComments.length / B),
+      Math.ceil(studyDays.length / B),
     );
     for (let i = 0; i < rounds; i++) {
       const batch = rows.slice(i * B, i * B + B);
@@ -182,6 +189,7 @@ export class SyncClient {
       const nBatch = reads.slice(i * B, i * B + B);
       const pBatch = posts.slice(i * B, i * B + B);
       const pcBatch = postComments.slice(i * B, i * B + B);
+      const sdBatch = studyDays.slice(i * B, i * B + B);
       const revById = new Map(batch.map((p) => [p.entry.id, p.rev]));
       const eventRevById = new Map(eventBatch.map((p) => [p.event.id, p.rev]));
       const res = await fetch('/api/sync/push', {
@@ -195,6 +203,7 @@ export class SyncClient {
           notificationReads: nBatch,
           posts: pBatch,
           postComments: pcBatch,
+          studyDays: sdBatch,
         } satisfies PushRequest),
         signal: timeoutSignal(),
       });
@@ -271,6 +280,14 @@ export class SyncClient {
           const mine = sent.get(r.id);
           if (mine) this.store.ackPostComment(mine, r.row);
         }
+      }
+      if (sdBatch.length > 0) {
+        // 같은 규약 — 보냈는데 결과 필드가 없으면 구버전 Worker의 무시다. 큐를 지키고 재시도.
+        if (!Array.isArray(data.studyDayResults)) {
+          throw new Error('push study day results missing');
+        }
+        const settled = new Set(data.studyDayResults);
+        this.store.ackStudyDays(sdBatch.filter((s) => settled.has(s.day)).map((s) => s.day));
       }
     }
   }
@@ -349,6 +366,7 @@ export class SyncClient {
     let nCursor = start.notifications;
     let pCursor = start.posts;
     let pcCursor = start.postComments;
+    let sdCursor = start.studyDays;
     let adoptedEntryMetadata = false;
     // 500행 한도에 걸렸을 수 있으니 여섯 스트림이 다 비워질 때까지 반복
     for (;;) {
@@ -384,6 +402,12 @@ export class SyncClient {
         qs.set('pcsince', pcCursor.ts);
         qs.set('pcsinceId', pcCursor.id);
       }
+      if (sdCursor) {
+        // 리액션과 같은 합성 키 커서 — 지평선 커서의 m은 빈 문자열이어도 파라미터를 붙인다
+        qs.set('sdsince', sdCursor.ts);
+        qs.set('sdsinceM', sdCursor.m);
+        qs.set('sdsinceDay', sdCursor.day);
+      }
       const q = qs.toString();
       const res = await fetch(`/api/sync/pull${q ? `?${q}` : ''}`, {
         headers: authHeaders(this.token),
@@ -408,6 +432,9 @@ export class SyncClient {
           : undefined;
       const eventRows =
         Array.isArray(data.events) && 'eventCursor' in data ? data.events : undefined;
+      // 도장 이력도 행과 커서가 함께 있어야 산 스트림이다 — 반쪽 응답으로 커서를 전진시키지 않는다
+      const sdRows =
+        Array.isArray(data.studyDays) && 'studyDayCursor' in data ? data.studyDays : undefined;
       const eFull = data.rows.length >= PAGE;
       const eventFull = (eventRows?.length ?? 0) >= PAGE;
       const cFull = (cRows?.length ?? 0) >= PAGE;
@@ -415,6 +442,7 @@ export class SyncClient {
       const nFull = (nRows?.length ?? 0) >= PAGE;
       const pFull = (pRows?.length ?? 0) >= PAGE;
       const pcFull = (pcRows?.length ?? 0) >= PAGE;
+      const sdFull = (sdRows?.length ?? 0) >= PAGE;
       // 행 반영과 커서 전진을 스토어가 한 트랜잭션으로 처리한다.
       // 중간 페이지(=500행)인 스트림은 이전 커서를 영속화한다 — 페이지 사이에서 탭이 죽으면
       // 다시 받으면 그만이지만(중복은 updatedAt으로 무시), 전진한 커서가 지평선 너머로
@@ -436,6 +464,8 @@ export class SyncClient {
         postCursor: pRows && (pFull ? pCursor : (data.postCursor ?? null)),
         postComments: pcRows,
         postCommentCursor: pcRows && (pcFull ? pcCursor : (data.postCommentCursor ?? null)),
+        studyDays: sdRows,
+        studyDayCursor: sdRows && (sdFull ? sdCursor : (data.studyDayCursor ?? null)),
       });
       adoptedEntryMetadata ||= pageAdoptedEntryMetadata;
       if (data.cursor) cursor = data.cursor;
@@ -447,7 +477,8 @@ export class SyncClient {
       // 다음 페이지가 적용하지 않은 구간을 건너뛴 커서를 영속화할 수 있다
       if (pRows && data.postCursor) pCursor = data.postCursor;
       if (pcRows && data.postCommentCursor) pcCursor = data.postCommentCursor;
-      if (!eFull && !eventFull && !cFull && !rFull && !nFull && !pFull && !pcFull) break;
+      if (sdRows && data.studyDayCursor) sdCursor = data.studyDayCursor;
+      if (!eFull && !eventFull && !cFull && !rFull && !nFull && !pFull && !pcFull && !sdFull) break;
     }
     // 서버 안전 지평선이 같은 행을 되돌려도 store가 실제 새 메타를 채택하지 않았으면
     // 같은 404 예산을 다시 열지 않는다.

@@ -1,12 +1,35 @@
 /* 멤버별 기록 집계 — 캘린더가 갖고 있던 계산을 크루 패널의 월 요약이 이어받는다.
    두 화면이 같은 숫자를 서로 다르게 세는 일이 없도록 한 곳에 둔다. */
-import type { Entry, MemberId } from '../../shared/types';
+import type { Entry, MemberId, MemberStatus } from '../../shared/types';
+import { isStatusActive } from '../../shared/types';
+import { kstDayStr } from '../../shared/notify';
 import { dayKey } from './constants';
 
 /** 이 멤버가 기록을 남긴 날짜 집합 — 월 일수도 연속일도 여기서 나온다. */
 export function daysOf(entries: readonly Entry[], m: MemberId): Set<string> {
   const days = new Set<string>();
   for (const e of entries) if (e.m === m) days.add(e.day);
+  return days;
+}
+
+/** 기록과 도장을 합친 "공부한 날" 집합 — 기록을 안 남겨도 체크인(오늘 공부함)이면 세진다.
+    도장 유래의 날짜는 전부 KST 하나로 파생한다(studyStampDays와 같은 규약) — 서버 이력은
+    KST인데 여기만 기기 시간대로 세면 KST 자정 부근의 체크인 하나가 이틀로 불어난다.
+    · stamped: 서버 이력(study_days)의 로컬 복제본 — 내 체크인은 쓰는 즉시 여기 들어간다
+    · status.lastStartedAt의 KST 날짜: 아직 pull로 안 돌아온 다른 멤버의 최근 시작
+    · 지금 켜져 있는 세션(isStatusActive)의 KST 오늘: 자정을 넘겨도 오늘이 이어서 세진다 */
+export function studyDaysOf(
+  entries: readonly Entry[],
+  m: MemberId,
+  stamped: ReadonlySet<string> | undefined,
+  status: MemberStatus | undefined,
+  now: number,
+): Set<string> {
+  const days = daysOf(entries, m);
+  if (stamped) for (const d of stamped) days.add(d);
+  const startMs = Date.parse(status?.lastStartedAt ?? '');
+  if (Number.isFinite(startMs)) days.add(kstDayStr(startMs));
+  if (isStatusActive(status, now)) days.add(kstDayStr(now));
   return days;
 }
 

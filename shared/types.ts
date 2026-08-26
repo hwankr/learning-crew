@@ -216,8 +216,12 @@ export const EVENT_LIMITS = {
 
 const EVENT_DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
-/** 형식뿐 아니라 실제 달력에 존재하는 날짜인지 확인한다. */
-function isEventDay(day: string): boolean {
+/** 형식뿐 아니라 실제 달력에 존재하는 날짜인지 확인한다 — '2026-02-30'은 정규식을 통과해
+    Postgres ::date 캐스트·date 컬럼 삽입에서 배치 전체를 죽이므로, SQL에 닿는 날짜 문자열
+    (일정·도장 이력·커서)은 전부 이 판정을 지나야 한다.
+    0~99년은 Date.UTC의 1900년대 보정 탓에 거부된다 — 실사용 날짜가 아니라 그대로 두고,
+    도장 지평선 커서의 하한(MIN_DAY '0001-01-01')만 호출부가 센티널로 따로 인정한다. */
+export function isCalendarDay(day: string): boolean {
   if (!EVENT_DAY_RE.test(day)) return false;
   const [year, month, date] = day.split('-').map(Number);
   const parsed = new Date(Date.UTC(year!, month! - 1, date!));
@@ -257,7 +261,7 @@ export function normalizeCrewEvent(raw: unknown): CrewEvent | null {
     !isWellFormedText(value.memo) ||
     value.memo.includes('\u0000') ||
     typeof value.day !== 'string' ||
-    !isEventDay(value.day) ||
+    !isCalendarDay(value.day) ||
     !Number.isInteger(value.v) ||
     value.v! < 0 ||
     value.v! > 2_000_000_000 ||
@@ -288,7 +292,7 @@ export function normalizeCrewEvent(raw: unknown): CrewEvent | null {
   }
 
   let endDay: string | null = null;
-  if (typeof value.endDay === 'string' && isEventDay(value.endDay)) {
+  if (typeof value.endDay === 'string' && isCalendarDay(value.endDay)) {
     const startMs = Date.parse(`${value.day}T00:00:00.000Z`);
     const endMs = Date.parse(`${value.endDay}T00:00:00.000Z`);
     const span = (endMs - startMs) / 86_400_000;
@@ -401,6 +405,9 @@ export interface PushRequest {
   /** 라운지 글·댓글 — 위와 같은 구버전 호환 규약 */
   posts?: Post[];
   postComments?: PostComment[];
+  /** 내 공부 시작 도장(멤버×KST날짜) — 오프라인에서 여러 날 체크인해도 status는 현재값
+      1행으로 병합되므로, 날짜 이력은 이 삽입-전용 스트림이 따로 나른다. 본인 행만 허용. */
+  studyDays?: StudyDay[];
   /** 읽음 처리할 알림. "모두 읽음"도 클라이언트가 아는 안읽음 id를 열거해 보낸다 —
       서버에 별도 상태가 없어 멱등하고, 그 사이 도착한 새 알림을 실수로 읽음 처리하지 않는다.
       at은 읽은 시점에 관측한 그 행의 updatedAt(서버 시계) — 서버는 행이 그 뒤로 갱신되지
@@ -465,6 +472,9 @@ export interface PushResponse {
   /** 정산된 읽음 처리 id — 이미 읽음이던 행도 포함해 요청한 id를 그대로 돌려준다(멱등).
       comment/reaction 결과와 같은 구버전 규약: 보냈는데 이 필드가 없으면 큐를 지킨다. */
   notificationReadResults?: string[];
+  /** 정산된 도장 날짜 — 이미 있던 날도 포함해 요청한 날짜를 그대로 돌려준다(멱등).
+      같은 구버전 규약: 보냈는데 이 필드가 없으면(구버전 Worker) 큐를 지킨다. */
+  studyDayResults?: string[];
 }
 
 /** (updated_at, id) 키셋 커서 — 같은 타임스탬프 행도 놓치지 않는다. */
@@ -490,6 +500,9 @@ export interface PullResponse {
   /** 내(토큰 주인) 알림만 — 다른 스트림과 같은 (updated_at, id) 키셋. */
   notifications?: Notification[];
   notificationCursor?: PullCursor | null;
+  /** 전 멤버의 공부 시작 도장 이력 — 삽입-전용이라 커서만 있고 CAS·tombstone이 없다. */
+  studyDays?: StudyDay[];
+  studyDayCursor?: StudyDayCursor | null;
 }
 
 /* ---------- 지금 상태 (라이브 체크인) ---------- */
@@ -760,6 +773,39 @@ export function hasTodayStudyStamp(
     );
   }
   return false;
+}
+
+/* ---------- 공부 시작 도장 이력 ---------- */
+
+/** (멤버, 날짜) 한 쌍 — 그 날 공부를 시작했다는 사실만 담는 삽입-전용 행.
+    status는 멤버당 현재값 1행뿐이라 지난날 도장이 사라진다: 체크인이 도착할 때 서버가
+    KST 날짜로 남기고, 크루 패널의 "이번 달"이 기록(Entry) 날짜와 합쳐 센다. */
+export interface StudyDay {
+  m: MemberId;
+  day: string; // YYYY-MM-DD (KST)
+}
+
+/** (created_at, member_id, day) 키셋 커서 — 지평선 커서의 멤버 자리는 ReactionCursor와
+    같은 하한('')이고, 날짜 자리는 ::date 캐스트가 사는 최솟값 문자열이다. */
+export interface StudyDayCursor {
+  ts: string;
+  m: MemberId | '';
+  day: string;
+}
+
+/** HTTP/IDB 경계의 도장 행 정규화 — 형식이 어긋난 행은 버린다(복구할 내용이 없다).
+    날짜는 달력 존재까지 본다: '2026-02-30'이 date 컬럼 삽입에 닿으면 배치 전체가 죽는다. */
+export function normalizeStudyDay(raw: unknown): StudyDay | null {
+  if (raw === null || typeof raw !== 'object') return null;
+  const value = raw as Partial<StudyDay>;
+  if (
+    !(MEMBER_IDS as readonly string[]).includes(value.m ?? '') ||
+    typeof value.day !== 'string' ||
+    !isCalendarDay(value.day)
+  ) {
+    return null;
+  }
+  return { m: value.m as MemberId, day: value.day };
 }
 
 export const PUSH_LIMITS = {

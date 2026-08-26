@@ -894,7 +894,7 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
   );
   const crewScreen = (
     <CrewPanel entries={entries} events={snap.events} todays={todays} statuses={snap.statuses}
-      meId={me.id}
+      studyDays={snap.studyDays} meId={me.id}
       now={nowTick} today={now} wit={wit} sync={cfg.token ? snap.sync : null}
       photoUploads={snap.photoUploads}
       onOpenPhoto={(e, photoId) => setLight({ entryId: e.id, photoId })}

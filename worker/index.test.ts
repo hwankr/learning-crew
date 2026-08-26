@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeToken } from './auth';
+import { kstDayStr } from '../shared/notify';
 
 const mocks = vi.hoisted(() => ({
   hasPhotoTombstone: vi.fn(async (_db: unknown, _photoId: string, _owner: string) => true),
@@ -30,6 +31,8 @@ const mocks = vi.hoisted(() => ({
   pullNotifications: vi.fn(async () => ({ rows: [], cursor: null })),
   pullPosts: vi.fn(async () => ({ rows: [], cursor: null })),
   pullPostComments: vi.fn(async () => ({ rows: [], cursor: null })),
+  pullStudyDays: vi.fn(async () => ({ rows: [], cursor: null })),
+  recordStudyDays: vi.fn(async (_db: unknown, _m: string, _days: string[]) => undefined),
   putTagPrefs: vi.fn(async (
     _db: unknown,
     m: string,
@@ -75,6 +78,8 @@ vi.mock('./queries', async (importOriginal) => ({
   pullNotifications: mocks.pullNotifications,
   pullPosts: mocks.pullPosts,
   pullPostComments: mocks.pullPostComments,
+  pullStudyDays: mocks.pullStudyDays,
+  recordStudyDays: mocks.recordStudyDays,
 }));
 
 import worker from './index';
@@ -93,6 +98,7 @@ describe('POST /api/sync/status', () => {
       status: { m, ...s, updatedAt: s.at },
     }));
     mocks.claimNotifySlot.mockResolvedValue(false);
+    mocks.recordStudyDays.mockClear();
   });
 
   it('오래된 since만 있는 legacy ON은 TTL OFF로 강등하되 오늘 lastStartedAt을 만들지 않는다', async () => {
@@ -237,6 +243,92 @@ describe('POST /api/sync/status', () => {
         lastStartedAt: null,
         at: '2026-08-15T10:00:00.000Z',
       });
+      // 이력이 없는 액션은 도장을 남기지 않는다 — 빈 배열은 recordStudyDays가 no-op으로 삼킨다
+      expect(mocks.recordStudyDays).toHaveBeenCalledWith({}, 'sh', []);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  async function setStatusReq(body: Record<string, unknown>): Promise<Response> {
+    const token = await makeToken('sh', secret);
+    return worker.fetch(
+      new Request('https://example.test/api/sync/status', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+      env as never,
+      { waitUntil: vi.fn() } as unknown as ExecutionContext,
+    );
+  }
+
+  it('ON 체크인은 시작 시각의 KST 날짜를 도장 이력으로 남긴다', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime('2026-08-15T12:00:00.000Z');
+    try {
+      const response = await setStatusReq({
+        on: true,
+        place: '도서관',
+        since: '2026-08-15T11:50:00.000Z', // KST 8/15 20:50
+        at: '2026-08-15T11:50:00.000Z',
+      });
+      expect(response.status).toBe(200);
+      expect(mocks.recordStudyDays).toHaveBeenCalledWith({}, 'sh', ['2026-08-15']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('자정(KST)을 넘긴 OFF는 시작일과 종료일 두 날짜를 남긴다', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime('2026-08-14T15:30:00.000Z');
+    try {
+      const response = await setStatusReq({
+        on: false,
+        lastStartedAt: '2026-08-14T14:30:00.000Z', // KST 8/14 23:30
+        at: '2026-08-14T15:30:00.000Z', // KST 8/15 00:30
+      });
+      expect(response.status).toBe(200);
+      expect(mocks.recordStudyDays).toHaveBeenCalledWith({}, 'sh', ['2026-08-14', '2026-08-15']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('lastStartedAt 필드가 없는 구버전 OFF는 서버가 보존한 이력으로 도장을 되살린다', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime('2026-08-14T15:30:00.000Z'); // KST 8/15 00:30 — 자정을 막 넘긴 종료
+    try {
+      // setStatus의 단조 병합이 서버 행의 시작 이력을 보존해 돌려주는 상황
+      mocks.setStatus.mockImplementation(async (_db, m, s) => ({
+        applied: true,
+        status: {
+          m,
+          ...s,
+          lastStartedAt: s.lastStartedAt ?? '2026-08-14T14:30:00.000Z', // KST 8/14 23:30 시작
+          updatedAt: s.at,
+        },
+      }));
+      const response = await setStatusReq({ on: false }); // 구버전 — lastStartedAt·at 없음
+      expect(response.status).toBe(200);
+      expect(mocks.recordStudyDays).toHaveBeenCalledWith({}, 'sh', ['2026-08-14', '2026-08-15']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('TTL을 넘긴 OFF(끄는 걸 잊음)는 종료일 도장을 만들지 않는다', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime('2026-08-14T04:00:00.000Z');
+    try {
+      const response = await setStatusReq({
+        on: false,
+        lastStartedAt: '2026-08-13T12:00:00.000Z', // KST 8/13 21:00 — 16시간 전
+        at: '2026-08-14T04:00:00.000Z',
+      });
+      expect(response.status).toBe(200);
+      expect(mocks.recordStudyDays).toHaveBeenCalledWith({}, 'sh', ['2026-08-13']);
     } finally {
       vi.useRealTimers();
     }
@@ -657,6 +749,72 @@ describe('POST /api/sync/push 크루 일정', () => {
   });
 });
 
+describe('POST /api/sync/push 도장 이력', () => {
+  const secret = 'test-secret';
+  const env = { DATABASE_URL: 'postgres://unused', AUTH_SECRET: secret };
+
+  beforeEach(() => {
+    mocks.recordStudyDays.mockClear();
+  });
+
+  async function push(body: unknown): Promise<Response> {
+    const token = await makeToken('sh', secret);
+    return worker.fetch(
+      new Request('https://example.test/api/sync/push', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+      env as never,
+      { waitUntil: vi.fn() } as unknown as ExecutionContext,
+    );
+  }
+
+  it('내 도장 날짜를 기록하고 에코로 정산한다 — 지난 날짜(오프라인 큐 지연 도착)도 허용', async () => {
+    const response = await push({ entries: [], studyDays: [{ m: 'sh', day: '2026-08-15' }] });
+    expect(response.status).toBe(200);
+    expect(mocks.recordStudyDays).toHaveBeenCalledWith({}, 'sh', ['2026-08-15']);
+    await expect(response.json()).resolves.toMatchObject({ studyDayResults: ['2026-08-15'] });
+  });
+
+  it('다른 멤버의 도장은 400으로 거부한다', async () => {
+    const response = await push({ entries: [], studyDays: [{ m: 'wg', day: '2026-08-15' }] });
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ error: 'not your study day' });
+    expect(mocks.recordStudyDays).not.toHaveBeenCalled();
+  });
+
+  it('달력에 없는 날짜는 date 삽입에 닿기 전에 400으로 거른다', async () => {
+    const invalid = await push({ entries: [], studyDays: [{ m: 'sh', day: '2026-02-30' }] });
+    expect(invalid.status).toBe(400);
+    await expect(invalid.json()).resolves.toMatchObject({ error: 'bad study day' });
+    expect(mocks.recordStudyDays).not.toHaveBeenCalled();
+  });
+
+  it('범위 밖 날짜는 400 대신 화해한다 — 큐가 못 비면 push 전체가 막히므로 에코는 요청 그대로', async () => {
+    // 빠른 시계의 미래 날짜는 서버 KST 오늘로 눌러 기록한다 — status 경로의 오늘 기록과
+    // 같은 행이 되어 체크인 하나가 이틀로 불어나지 않는다
+    const future = await push({ entries: [], studyDays: [{ m: 'sh', day: '2030-01-01' }] });
+    expect(future.status).toBe(200);
+    expect(mocks.recordStudyDays).toHaveBeenCalledWith({}, 'sh', [kstDayStr(Date.now())]);
+    await expect(future.json()).resolves.toMatchObject({ studyDayResults: ['2030-01-01'] });
+
+    // 2020년 이전(고장 난 시계)은 기록 없이 에코만 — 큐만 정산된다
+    mocks.recordStudyDays.mockClear();
+    const ancient = await push({ entries: [], studyDays: [{ m: 'sh', day: '2019-12-31' }] });
+    expect(ancient.status).toBe(200);
+    expect(mocks.recordStudyDays).toHaveBeenCalledWith({}, 'sh', []);
+    await expect(ancient.json()).resolves.toMatchObject({ studyDayResults: ['2019-12-31'] });
+  });
+
+  it('studyDays가 없는 구버전 요청도 성공하고 빈 결과 필드를 항상 싣는다', async () => {
+    const response = await push({ entries: [] });
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ studyDayResults: [] });
+    expect(mocks.recordStudyDays).toHaveBeenCalledWith({}, 'sh', []);
+  });
+});
+
 describe('GET /api/sync/pull 라운지 커서 검증 (핸들러 경계)', () => {
   const secret = 'test-secret';
   const env = { DATABASE_URL: 'postgres://unused', AUTH_SECRET: secret };
@@ -666,6 +824,7 @@ describe('GET /api/sync/pull 라운지 커서 검증 (핸들러 경계)', () => 
     mocks.pullEvents.mockClear();
     mocks.pullPosts.mockClear();
     mocks.pullPostComments.mockClear();
+    mocks.pullStudyDays.mockClear();
   });
 
   async function pull(qs: string): Promise<Response> {
@@ -706,5 +865,24 @@ describe('GET /api/sync/pull 라운지 커서 검증 (핸들러 경계)', () => 
 
     await pull(`esince=bad&esinceId=${PO}`);
     expect(mocks.pullEvents).toHaveBeenLastCalledWith({}, null);
+  });
+
+  it('도장 커서는 지평선 하한(m="")도 인정하고, 날짜 형식이 어긋나면 버린다 — ::date 캐스트 500 방지', async () => {
+    const ts = '2026-08-15T00:00:00.000Z';
+    const res = await pull(
+      `sdsince=${encodeURIComponent(ts)}&sdsinceM=&sdsinceDay=0001-01-01`,
+    );
+    expect(res.status).toBe(200);
+    expect(mocks.pullStudyDays).toHaveBeenCalledWith({}, { ts, m: '', day: '0001-01-01' });
+
+    await pull(`sdsince=${encodeURIComponent(ts)}&sdsinceM=sh&sdsinceDay=not-a-day`);
+    expect(mocks.pullStudyDays).toHaveBeenLastCalledWith({}, null);
+
+    // 형식은 맞지만 달력에 없는 날 — 손상된 커서가 pull 전체를 500 루프로 몰지 못하게 버린다
+    await pull(`sdsince=${encodeURIComponent(ts)}&sdsinceM=sh&sdsinceDay=2026-02-30`);
+    expect(mocks.pullStudyDays).toHaveBeenLastCalledWith({}, null);
+
+    await pull(`sdsince=bad&sdsinceM=sh&sdsinceDay=2026-08-15`);
+    expect(mocks.pullStudyDays).toHaveBeenLastCalledWith({}, null);
   });
 });

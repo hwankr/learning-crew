@@ -3,6 +3,7 @@
 import {
   MEMBER_IDS,
   MEMBER_NAMES,
+  STATUS_TTL_MS,
   type MemberId,
   type NotifKind,
   type NotifMode,
@@ -75,7 +76,8 @@ export function resolvedStartMode(p: NotifPrefs): NotifMode {
 
 /* ---------- KST 시각 ----------
    크루가 전원 한국이라 서버의 "그 날"·"그 시각" 판정은 KST 고정이다.
-   (클라이언트 표시는 기기 로컬 시간대를 그대로 쓴다 — 여기 함수는 서버 판정 전용) */
+   (클라이언트 표시는 기기 로컬 시간대를 그대로 쓰되, 도장 날짜처럼 크루가 공유하는
+    산출물은 클라이언트도 아래 KST 정의를 그대로 쓴다 — studyStampDays 참고) */
 
 export const KST_OFFSET_MS = 9 * 3600_000;
 
@@ -87,6 +89,34 @@ function kstDate(ms: number): Date {
 /** KST 기준 YYYY-MM-DD — 알림의 날짜 키(집계·하루 1회 중복 방지)가 이걸 쓴다. */
 export function kstDayStr(ms: number): string {
   return kstDate(ms).toISOString().slice(0, 10);
+}
+
+/* ---------- 공부 시작 도장 날짜 ---------- */
+
+/** 앱이 있기 전의 날짜는 도장 이력으로 남기지 않는다 — 시계가 고장 난 기기의 방어선. */
+export const STUDY_DAY_FLOOR_MS = Date.parse('2020-01-01T00:00:00Z');
+
+/** 이 상태 액션이 증언하는 도장 날짜들 — 시작일 + (OFF라면 TTL 안쪽 세션의 종료일).
+    도장 날짜는 크루가 공유하는 산출물이라 KST 하나로 고정한다: Worker의 status 경로 기록,
+    클라이언트의 체크인 즉시 기록, 월 집계 합성이 전부 이 정의를 지나야 같은 날이 나온다.
+    (서로 다른 규약이 섞이면 KST 자정 부근의 체크인 하나가 이틀로 세진다.) */
+export function studyStampDays(
+  on: boolean,
+  lastStartedAt: string | null,
+  at: string,
+): string[] {
+  if (lastStartedAt === null) return [];
+  const startMs = Date.parse(lastStartedAt);
+  if (!Number.isFinite(startMs) || startMs < STUDY_DAY_FLOOR_MS) return [];
+  const days = [kstDayStr(startMs)];
+  const atMs = Date.parse(at);
+  // 자정을 넘긴 세션의 종료일 — hasTodayStudyStamp의 OFF 판정과 같은 규칙
+  // (TTL을 넘긴 건 "끄는 걸 잊은 상태"라 그 날 도장이 아니다)
+  if (!on && Number.isFinite(atMs) && startMs <= atMs && atMs - startMs < STATUS_TTL_MS) {
+    const endDay = kstDayStr(atMs);
+    if (endDay !== days[0]) days.push(endDay);
+  }
+  return days;
 }
 
 /** KST 기준 하루 안의 분(0..1439). */

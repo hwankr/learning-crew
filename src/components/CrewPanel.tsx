@@ -5,7 +5,7 @@ import { MEMBERS, dayKey, pad2, type CopySet } from '../lib/constants';
 import {
   eventDdayLabel, eventMembers, eventPhase, eventWhenLabel, participantsLabel, upcomingEvent,
 } from '../lib/events';
-import { daysOf, monthDaysOf, streakOf } from '../lib/stats';
+import { monthDaysOf, streakOf, studyDaysOf } from '../lib/stats';
 import type { PhotoUploadInfo, SyncInfo } from '../local/store';
 import { Avatar, Icon, RIGHT_D } from './icons';
 import { Board, MeBadge } from './Board';
@@ -61,14 +61,27 @@ function EventLead({
 
 /** 이번 달 요약 — 캘린더 머리에 있던 카드를 여기로 옮겨 왔다.
     보고 있는 달과 무관하게 늘 이번 달이다: 연속일이 오늘 기준이라 다른 달 옆에 두면
-    "3월 요약인데 연속 12일"처럼 읽힌다. */
-function MonthSummary({ entries, meId, today }: { entries: Entry[]; meId: MemberId; today: Date }) {
+    "3월 요약인데 연속 12일"처럼 읽힌다.
+    기록을 안 남긴 날도 체크인 도장("오늘 공부함")이면 센다 — 바로 위 오늘의 크루가
+    도장으로 세는데 이 줄만 기록을 요구하면 체크인한 날의 숫자가 서로 어긋난다.
+    도장 날짜는 KST 규약이고 월 접두사·연속일 기준은 기기 로컬이다 — 크루 전원이 KST라
+    두 경계가 같다는 전제 위에 있다(기록의 day도 원래 기기 로컬 규약이라 여기만 못 바꾼다). */
+function MonthSummary({
+  entries, studyDays, statuses, meId, now, today,
+}: {
+  entries: Entry[];
+  studyDays: Partial<Record<MemberId, ReadonlySet<string>>>;
+  statuses: Partial<Record<MemberId, MemberStatus>>;
+  meId: MemberId;
+  now: number;
+  today: Date;
+}) {
   const prefix = `${today.getFullYear()}-${pad2(today.getMonth() + 1)}-`;
   return (
     <div className="mon">
       <div className="mon-title">이번 달</div>
       {MEMBERS.map((m) => {
-        const days = daysOf(entries, m.id);
+        const days = studyDaysOf(entries, m.id, studyDays[m.id], statuses[m.id], now);
         return (
           <div key={m.id} className="mon-row">
             <Avatar m={m} size={24} />
@@ -85,13 +98,15 @@ function MonthSummary({ entries, meId, today }: { entries: Entry[]; meId: Member
 }
 
 export function CrewPanel({
-  entries, events, todays, statuses, meId, now, today, wit, sync, photoUploads,
+  entries, events, todays, statuses, studyDays, meId, now, today, wit, sync, photoUploads,
   onSetStatus, onOpenPhoto, onOpenEventSheet, onGoToEvent,
 }: {
   entries: Entry[];
   events: CrewEvent[];
   todays: Entry[];
   statuses: Partial<Record<MemberId, MemberStatus>>;
+  /** 멤버별 공부 시작 도장 날짜 이력 — 월 요약이 기록 날짜와 합쳐 센다 */
+  studyDays: Partial<Record<MemberId, ReadonlySet<string>>>;
   meId: MemberId;
   /** 분 단위로 갱신되는 지금 시각 — 경과 표시가 멈추지 않게 App이 흘려 준다 */
   now: number;
@@ -113,7 +128,8 @@ export function CrewPanel({
       <Board todays={todays} statuses={statuses} now={now} todayKey={dayKey(today)}
         meId={meId} wit={wit}
         photoUploads={photoUploads} onOpenPhoto={onOpenPhoto} />
-      <MonthSummary entries={entries} meId={meId} today={today} />
+      <MonthSummary entries={entries} studyDays={studyDays} statuses={statuses}
+        meId={meId} now={now} today={today} />
       {sync && <SyncStatus sync={sync} variant="panel" />}
     </>
   );

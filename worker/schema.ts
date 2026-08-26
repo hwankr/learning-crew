@@ -78,6 +78,24 @@ export const photoTombstones = pgTable(
   ],
 );
 
+/** 공부 시작 도장의 날짜별 이력 — status가 멤버당 현재값 1행뿐이라 지난날 도장이 사라진다.
+    체크인 액션이 도착할 때 서버가 (멤버, KST 날짜)를 삽입-전용으로 남기고, 크루 패널의
+    "이번 달" 집계가 기록(entries) 날짜와 합쳐 센다. 갱신·삭제가 없어 CAS도 tombstone도 없다. */
+export const studyDays = pgTable(
+  'study_days',
+  {
+    memberId: text('member_id').notNull(),
+    day: date('day').notNull(),
+    // 삽입 시각 — (created_at, member_id, day) 키셋 pull 커서의 기준. 오프라인 체크인이
+    // 뒤늦게 과거 날짜를 만들어도 커서는 도착 시각으로 전진하므로 놓치지 않는다.
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.memberId, t.day] }),
+    index('study_days_created_at_idx').on(t.createdAt, t.memberId, t.day),
+  ],
+);
+
 /** 지금 상태 — 멤버당 1행을 덮어쓴다. 컬럼명 is_on은 SQL 예약어(on) 회피. */
 export const status = pgTable('status', {
   memberId: text('member_id').primaryKey(),
