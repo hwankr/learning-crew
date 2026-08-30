@@ -112,6 +112,18 @@ describe('통계 태그 필터', () => {
     expect(html).toContain('영어 공부한 날 1일');
   });
 
+  it('태그를 눌러도 크루 줄은 다시 서지 않는다 — 자리는 공부한 날 순 그대로', () => {
+    const html = view({
+      scope: 'crew', rawSel: '자격증',
+      entries: [
+        entry('a', '2026-08-10', ['영어']), entry('b', '2026-08-11', ['영어']), // 승환 2일 — 자격증 0
+        { ...entry('c', '2026-08-12', ['자격증']), m: 'wg' }, // 웅 1일 — 자격증 1
+      ],
+    });
+    expect(html.indexOf('승환')).toBeLessThan(html.indexOf('웅')); // 눈이 따라가던 자리는 그대로
+    expect(html).toContain('st-top-m-nm">웅'); // 1위 카드는 지금 보이는 숫자(필터)의 최다
+  });
+
   it('범위·기간을 옮겨 고른 태그가 목록에 없으면 필터는 파생적으로 풀린다', () => {
     const html = view({ rawSel: '자격증', entries: [entry('a', '2026-08-10', ['영어'])] });
     // 자격증 기록이 없는데 필터가 살아 있으면 잔디가 온통 회색으로 죽는다

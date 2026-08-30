@@ -130,14 +130,16 @@ export function StatsView({
   const toggleTag = (t: Tag) => onSel(sel === t ? null : t);
   const dimOf = (t: Tag): number => (sel && sel !== t ? 0.35 : 1);
 
-  /* ---------- 일수 세기 — sel이 있으면 그 태그를 공부한 날만 ---------- */
-  const countIn = (s: MemberStat, pred: (day: string) => boolean): number => {
+  /* ---------- 일수 세기 — countIn은 sel이 있으면 그 태그를 공부한 날만 ---------- */
+  const daysIn = (s: MemberStat, pred: (day: string) => boolean): number => {
     let n = 0;
-    if (sel) {
-      for (const [day, tags] of s.tags) if (pred(day) && tags.includes(sel)) n++;
-    } else {
-      for (const day of s.days) if (pred(day)) n++;
-    }
+    for (const day of s.days) if (pred(day)) n++;
+    return n;
+  };
+  const countIn = (s: MemberStat, pred: (day: string) => boolean): number => {
+    if (!sel) return daysIn(s, pred);
+    let n = 0;
+    for (const [day, tags] of s.tags) if (pred(day) && tags.includes(sel)) n++;
     return n;
   };
   const dayBg = (s: MemberStat, day: string): string => {
@@ -166,18 +168,22 @@ export function StatsView({
     `${name} ${suffix} ${nums.length}일`
     + (nums.length > 0 ? ` — ${nums.map((d) => `${d}일`).join(', ')}` : '');
 
-  /* ---------- 크루 줄 세우기 ---------- */
+  /* ---------- 크루 줄 세우기 — 자리는 무필터 "공부한 날" 순으로 고정 ----------
+     태그를 누를 때 행이 그 태그 순으로 다시 서면 눈이 따라가던 사람을 잃는다.
+     자리는 그대로 두고 숫자와 칸 색만 필터를 따른다; 동률은 크루 고정 순서(sort는 안정적). */
   const crewMonth = stats
-    .map((s) => ({ s, n: countIn(s, monthPred) }))
-    .sort((a, b) => b.n - a.n); // 동률은 크루 고정 순서(sort는 안정적)
+    .map((s) => ({ s, n: countIn(s, monthPred), base: daysIn(s, monthPred) }))
+    .sort((a, b) => b.base - a.base);
   const crewAll = stats
-    .map((s) => ({ s, n: countIn(s, () => true) }))
-    .sort((a, b) => b.n - a.n);
+    .map((s) => ({ s, n: countIn(s, () => true), base: s.days.size }))
+    .sort((a, b) => b.base - a.base);
   const ranked = period === 'all' ? crewAll : crewMonth;
-  const top = ranked[0]!;
+  // 1위는 자리가 아니라 지금 보이는 숫자의 최다 — 필터 중엔 그 태그의 1위다.
+  // 동률은 앞 행(무필터 공부한 날이 많은 쪽)이 이긴다.
+  const top = ranked.reduce((a, r) => (r.n > a.n ? r : a), ranked[0]!);
   const crewTotal = ranked.reduce((a, r) => a + r.n, 0);
   const crewAvg = Math.round(crewTotal / MEMBERS.length);
-  const crewAllMax = Math.max(1, crewAll[0]?.n ?? 0);
+  const crewAllMax = Math.max(1, ...crewAll.map((r) => r.n));
 
   /* ---------- 나 × 전체 — 월별 요약 ---------- */
   const myMonths = monthKeysOf(mine.days, today).map((mk) => {
