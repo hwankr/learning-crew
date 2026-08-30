@@ -4,7 +4,7 @@ import { MEMBERS } from './constants';
 export interface AppConfig {
   token: string | null;
   memberId: MemberId;
-  initialView: 'feed' | 'cal' | 'noti';
+  initialView: 'feed' | 'cal' | 'stats' | 'noti';
   /** ?view=로 화면을 지정받았는지 — 지정이 있으면 저장된(마지막으로 보던) 탭을 덮는다 */
   viewFromUrl: boolean;
   /** 옛 ?view=lounge 링크 — 피드로 접는 것만으로는 부족하다: 저장된 필터가 '기록'이면
@@ -48,6 +48,7 @@ export function parseViewParam(
   // 라운지는 피드 안의 갈래다 — 옛 딥링크는 피드로 보내되 라운지 갈래를 연다는 뜻을 남긴다
   if (v === 'lounge' || v === '라운지') return { view: 'feed', lounge: true };
   if (v === 'cal' || v === '캘린더') return { view: 'cal', lounge: false };
+  if (v === 'stats' || v === '통계') return { view: 'stats', lounge: false };
   if (v === 'noti' || v === '알림' || v === 'notiset') return { view: 'noti', lounge: false };
   return { view: null, lounge: false };
 }

@@ -9,6 +9,7 @@ const TABS: { id: MobileTab; label: string; d: string }[] = [
   { id: 'home', label: '홈', d: 'M3 10.5 12 3.5l9 7M5.5 9.2V20h13V9.2' },
   { id: 'feed', label: '피드', d: 'M4 6h16M4 12h16M4 18h10' },
   { id: 'cal', label: '캘린더', d: 'M4.5 5.5h15v15h-15zM4.5 10h15M9 3.5v4M15 3.5v4' },
+  { id: 'stats', label: '통계', d: 'M4 20v-7M9.3 20V6M14.6 20v-4M20 20V10' },
   { id: 'alerts', label: '알림', d: BELL_D },
 ];
 

@@ -57,6 +57,10 @@ export function TopBar({
             aria-pressed={view === 'cal'} onClick={() => onView('cal')}>
             <span>캘린더</span>
           </button>
+          <button className={'seg-btn' + (view === 'stats' ? ' on' : '')} data-label="통계"
+            aria-pressed={view === 'stats'} onClick={() => onView('stats')}>
+            <span>통계</span>
+          </button>
         </div>
         <div className="top-gap" />
         {sync && <SyncStatus sync={sync} variant="top" />}

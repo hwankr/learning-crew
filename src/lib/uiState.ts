@@ -27,10 +27,10 @@ export function isDayKey(value: unknown): value is string {
 
 /** 좁은 화면 하단 탭 — 데스크톱 view(피드·캘린더)와 따로 산다. 하나로 합치면
     폭이 바뀔 때마다 홈이 캘린더로, 알림이 피드로 번역되며 보던 자리가 뒤바뀐다. */
-export type MobileTab = 'home' | 'feed' | 'cal' | 'alerts';
-const MTABS: readonly string[] = ['home', 'feed', 'cal', 'alerts'];
+export type MobileTab = 'home' | 'feed' | 'cal' | 'stats' | 'alerts';
+const MTABS: readonly string[] = ['home', 'feed', 'cal', 'stats', 'alerts'];
 
-export type DesktopView = 'feed' | 'cal';
+export type DesktopView = 'feed' | 'cal' | 'stats';
 
 /** 피드 필터 — 라운지 글은 전용 탭이 아니라 피드 안의 한 갈래다(텅 빈 탭 방지). */
 export type FeedFilter = 'all' | 'entries' | 'posts';
@@ -65,7 +65,7 @@ export function loadUi(): Partial<UiState> {
     const d = JSON.parse(raw) as Record<string, unknown>;
     if (!d || typeof d !== 'object') return {};
     const out: Partial<UiState> = {};
-    if (d.view === 'feed' || d.view === 'cal') out.view = d.view;
+    if (d.view === 'feed' || d.view === 'cal' || d.view === 'stats') out.view = d.view;
     if (typeof d.mtab === 'string' && MTABS.includes(d.mtab)) out.mtab = d.mtab as MobileTab;
     if (typeof d.panelOpen === 'boolean') out.panelOpen = d.panelOpen;
     if (typeof d.feedFilter === 'string' && FEED_FILTERS.includes(d.feedFilter)) {

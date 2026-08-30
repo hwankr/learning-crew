@@ -1702,6 +1702,109 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 }
 .event-submit:disabled { cursor: default; }
 
+/* ---------- 통계 (나/크루 × 기간 — 잔디·스트립·막대) ---------- */
+/* 기준 치수는 모바일 시안(통계 페이지 모바일.dc.html) — 데스크톱은 와이드 블록에서 한 단계 키운다 */
+.stats-wrap { max-width: 960px; margin: 0 auto; }
+.st-head { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+.st-title { margin: 0; font-size: 21px; font-weight: 800; letter-spacing: -0.02em; }
+.st-scope { display: flex; gap: 3px; flex: none; border: 1.5px solid #E4E7EC; border-radius: 999px; padding: 3px; }
+.st-scope-btn {
+  padding: 4px 13px; border: none; border-radius: 999px; background: transparent;
+  color: #6B7280; font-size: 11.5px; font-weight: 800; white-space: nowrap; cursor: pointer;
+  transition: background 160ms, color 160ms;
+}
+.st-scope-btn.on { background: #16181D; color: #FFFFFF; }
+.st-tabs { display: flex; gap: 16px; margin-top: 12px; border-bottom: 1px solid #F1F3F6; }
+.st-tab {
+  padding: 0 0 8px; border: none; background: none; color: #9AA1AD;
+  font-size: 12.5px; font-weight: 700; cursor: pointer;
+  border-bottom: 2.5px solid transparent;
+  transition: color 140ms, border-color 160ms;
+}
+.st-tab.on { color: #16181D; border-bottom-color: #FFB800; }
+.st-grid { display: flex; flex-direction: column; gap: 10px; margin-top: 16px; }
+.st-main { min-width: 0; }
+.st-side { display: flex; flex-direction: column; gap: 10px; }
+.st-card { border: 1.5px solid #E4E7EC; border-radius: 16px; padding: 16px; background: #FFFFFF; }
+.st-card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.st-card-title { font-size: 14px; font-weight: 800; letter-spacing: -0.01em; white-space: nowrap; }
+.st-card-cap { font-size: 11px; color: #9AA1AD; font-weight: 600; white-space: nowrap; }
+
+/* 잔디 — 요일 머리(일요일만 빨강) + 한 칸 = 하루 격자. 색은 데이터라 인라인으로 든다. */
+.st-week { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; margin-top: 12px; }
+.st-wd { text-align: center; font-size: 10.5px; font-weight: 700; color: #9AA1AD; }
+.st-wd.sun { color: #D3352A; }
+.st-heat { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; margin-top: 6px; }
+.st-cell { aspect-ratio: 1 / 1; border-radius: 6px; border: 1.5px solid transparent; transition: background 200ms; }
+.st-cell.pad { background: transparent; }
+/* 아직 오지 않은 날 — 빈 날(회색 칸)과 달리 테두리만 있는 흰 칸 */
+.st-cell.future { background: #FFFFFF; border-color: #F1F3F6; }
+
+/* 크루 잔디 — 멤버별 한 줄 스트립. 칸은 폭에 맞춰 고르게 줄어든다(31칸이 넘치지 않게). */
+.st-crew { margin-top: 4px; }
+.st-crew-row { padding: 12px 0; border-top: 1px solid #F5F6F8; }
+.st-crew-head { display: flex; align-items: center; gap: 7px; }
+.st-crew-nm { font-size: 12.5px; font-weight: 700; }
+.st-crew-n { margin-left: auto; font-size: 12px; font-weight: 800; }
+.st-strip { display: flex; gap: 2px; margin-top: 7px; }
+.st-strip-cell {
+  flex: 1 1 0; min-width: 0; max-width: 9px; height: 12px; border-radius: 3px;
+  border: 1px solid transparent; transition: background 200ms;
+}
+.st-strip-cell.future { background: #FFFFFF; border-color: #F1F3F6; }
+
+/* 막대 — 나×전체(월별)와 크루×전체(멤버별)가 같은 트랙을 쓴다 */
+.st-mon-list { display: flex; flex-direction: column; gap: 12px; margin-top: 14px; }
+.st-mon-row { display: flex; align-items: center; gap: 10px; }
+.st-mon-label { flex: none; min-width: 28px; font-size: 12px; font-weight: 700; }
+.st-bar { flex: 1; height: 10px; border-radius: 999px; background: #F5F6F8; overflow: hidden; }
+.st-bar-fill { height: 100%; border-radius: 999px; transition: width 240ms; }
+.st-mon-val { flex: none; width: 66px; text-align: right; font-size: 11.5px; font-weight: 800; }
+.st-mon-dim { font-weight: 600; color: #9AA1AD; }
+.st-foot { font-size: 11px; color: #9AA1AD; margin-top: 14px; }
+.st-bar-row { display: flex; align-items: center; gap: 8px; padding: 10px 0; border-top: 1px solid #F5F6F8; }
+.st-bar-row .st-bar { height: 9px; }
+.st-bar-nm { flex: none; min-width: 36px; font-size: 12.5px; font-weight: 700; }
+.st-bar-n { flex: none; width: 32px; text-align: right; font-size: 12px; font-weight: 800; }
+
+/* 태그 비중 — 누른 태그만 남기고 나머지는 바래는 필터. 색은 데이터라 인라인. */
+.st-segs { display: flex; height: 12px; border-radius: 999px; overflow: hidden; margin-top: 12px; }
+.st-seg { min-width: 0; flex-basis: 0; border: none; padding: 0; cursor: pointer; transition: opacity 160ms; }
+.st-legend-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.st-chip {
+  display: inline-flex; align-items: center; gap: 5px; padding: 5px 10px;
+  border: 1.5px solid #E4E7EC; border-radius: 999px; background: none; color: inherit;
+  font-size: 11.5px; cursor: pointer; transition: opacity 160ms, border-color 160ms;
+}
+.st-chip-nm { font-weight: 700; }
+.st-chip-n { color: #9AA1AD; }
+.st-dot { flex: none; width: 8px; height: 8px; border-radius: 2.5px; }
+.st-hint { font-size: 10.5px; color: #9AA1AD; margin-top: 11px; }
+.st-tag-empty { font-size: 12px; color: #9AA1AD; margin-top: 12px; }
+.st-legend { display: flex; flex-direction: column; gap: 6px; margin-top: 14px; }
+.st-legend-row {
+  display: flex; align-items: center; gap: 7px; padding: 7px 11px;
+  border: 1.5px solid #E4E7EC; border-radius: 11px; background: none; color: inherit;
+  font-size: 12px; cursor: pointer; transition: opacity 160ms, border-color 160ms;
+}
+.st-legend-nm { font-weight: 700; }
+.st-legend-sp { flex: 1; }
+.st-legend-n { font-weight: 800; }
+.st-legend-pct { color: #9AA1AD; width: 32px; text-align: right; }
+
+/* 연속(나) · 1위(크루) — 좁은 화면은 카드 둘 나란히 + 바깥 캡션, 데스크톱은 한 카드 */
+.st-stat-label { font-size: 11.5px; font-weight: 700; color: #6B7280; }
+.st-stat-val { font-size: 22px; font-weight: 800; letter-spacing: -0.02em; margin-top: 2px; }
+.st-duo { display: flex; gap: 10px; }
+.st-duo-card { flex: 1; padding: 13px 16px; }
+.st-duo-note { font-size: 10.5px; color: #9AA1AD; margin-top: 8px; padding: 0 4px; }
+.st-top-empty { font-size: 12.5px; color: #9AA1AD; margin-top: 8px; }
+.st-top-m { display: flex; align-items: center; gap: 9px; padding: 14px 16px; }
+.st-top-m-main { flex: 1; min-width: 0; }
+.st-top-m-nm { font-size: 14px; font-weight: 800; margin-top: 1px; }
+.st-top-m-nm span { font-weight: 600; color: #9AA1AD; font-size: 11.5px; }
+.st-top-m-agg { text-align: right; font-size: 11px; color: #9AA1AD; }
+
 /* ---------- 와이드(≥900px) 레이아웃 ---------- */
 @media (min-width: 900px) {
   /* 라운지 — 넓은 셸의 카드 사진은 디자인 원본 폭(268px) */
@@ -1784,6 +1887,48 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
   }
   /* 마우스로 겨누는 자리라 빼기 버튼이 조금 작다 (디자인: 데스크톱 20px / 모바일 22px) */
   .photo-drop { width: 20px; height: 20px; }
+  /* 통계 — 본문 + 340px 사이드 두 열, 치수는 데스크톱 시안(통계 페이지.dc.html)대로 한 단계 크게 */
+  .st-scope-btn { padding: 5px 16px; font-size: 12px; }
+  .st-tabs { gap: 18px; margin-top: 14px; }
+  .st-grid { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 14px; margin-top: 20px; align-items: start; }
+  .st-side { gap: 14px; }
+  .st-card { padding: 20px 22px; }
+  .st-tag-card { padding: 18px 20px; }
+  .st-card-cap { font-size: 11.5px; }
+  .st-week { gap: 5px; margin-top: 16px; }
+  .st-wd { font-size: 11.5px; }
+  .st-heat { gap: 5px; margin-top: 8px; }
+  .st-cell { border-radius: 7px; }
+  .st-crew { margin-top: 8px; }
+  .st-crew-row { padding: 13px 0; }
+  .st-crew-head { gap: 8px; }
+  .st-crew-nm { font-size: 13px; }
+  .st-crew-n { font-size: 12.5px; }
+  .st-strip { gap: 2.5px; margin-top: 8px; }
+  .st-strip-cell { max-width: 13px; height: 13px; border-radius: 4px; }
+  .st-mon-list { gap: 14px; margin-top: 18px; }
+  .st-mon-row { gap: 12px; }
+  .st-mon-label { min-width: 32px; font-size: 12.5px; }
+  .st-mon-row .st-bar { height: 12px; }
+  .st-mon-val { width: 76px; font-size: 12px; }
+  .st-foot { font-size: 11.5px; margin-top: 18px; }
+  .st-bar-row { gap: 10px; padding: 11px 0; }
+  .st-bar-row .st-bar { height: 10px; }
+  .st-bar-nm { min-width: 40px; font-size: 13px; }
+  .st-bar-n { width: 36px; font-size: 12.5px; }
+  .st-segs { height: 14px; margin-top: 14px; }
+  .st-dot { width: 9px; height: 9px; border-radius: 3px; }
+  .st-hint { font-size: 11px; margin-top: 13px; }
+  .st-stat-label { font-size: 12.5px; }
+  .st-stat-val { font-size: 26px; margin-top: 3px; }
+  /* 연속 카드 — 두 숫자가 실선 하나를 사이에 두고 나란히 */
+  .st-streak-cols { display: flex; gap: 24px; }
+  .st-streak-col { flex: 1; }
+  .st-streak-div { width: 1px; background: #F1F3F6; }
+  .st-top-row { display: flex; align-items: center; gap: 9px; margin-top: 10px; }
+  .st-top-nm { font-size: 15px; font-weight: 800; }
+  .st-top-days { font-size: 11.5px; color: #9AA1AD; margin-top: 1px; }
+  .st-top-foot { font-size: 11px; color: #9AA1AD; margin-top: 12px; border-top: 1px solid #F5F6F8; padding-top: 11px; }
 }
 
 /* 900px 셸에서 크루 패널까지 열면 고정 선택일 열이 격자를 100px 남짓까지 누른다.
@@ -1794,6 +1939,9 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
   .cal-layout { grid-template-columns: minmax(0, 1fr) 340px; }
   .body.open .cal-layout { display: block; }
   .body.open .cal-sel { position: static; margin-top: 26px; min-height: 220px; }
+  /* 통계도 같은 사정 — 패널까지 열리면 340px 사이드가 본문을 짓누르니 한 열로 쌓는다 */
+  .body.open .st-grid { display: block; }
+  .body.open .st-side { margin-top: 14px; }
 }
 
 /* ---------- 모션 공통 — 오버레이 퇴장·피드 출입·눌림 피드백·감소 모션 ---------- */

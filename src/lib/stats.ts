@@ -1,9 +1,9 @@
 /* 멤버별 기록 집계 — 캘린더가 갖고 있던 계산을 크루 패널의 월 요약이 이어받는다.
    두 화면이 같은 숫자를 서로 다르게 세는 일이 없도록 한 곳에 둔다. */
-import type { Entry, MemberId, MemberStatus } from '../../shared/types';
-import { isStatusActive } from '../../shared/types';
+import type { Entry, MemberId, MemberStatus, Tag } from '../../shared/types';
+import { entryTags, isStatusActive } from '../../shared/types';
 import { kstDayStr } from '../../shared/notify';
-import { dayKey } from './constants';
+import { dayKey, pad2 } from './constants';
 
 /** 이 멤버가 기록을 남긴 날짜 집합 — 월 일수도 연속일도 여기서 나온다. */
 export function daysOf(entries: readonly Entry[], m: MemberId): Set<string> {
@@ -52,4 +52,69 @@ export function monthDaysOf(days: ReadonlySet<string>, prefix: string): number {
   let n = 0;
   for (const d of days) if (d.startsWith(prefix)) n++;
   return n;
+}
+
+/** 이 멤버가 그 날 공부한 태그들 — 날짜 → 태그 목록(중복 없음, 기록 순서).
+    도장만 있는 날은 여기 없다(체크인에는 태그가 없다) — 태그 필터에서 "공부는 했지만
+    무엇인지는 모르는 날"로 남는 것이 맞다. OFF도 그대로 담는다: 뺄지는 보는 쪽 사정이다. */
+export function dayTagsOf(entries: readonly Entry[], m: MemberId): Map<string, Tag[]> {
+  const map = new Map<string, Tag[]>();
+  for (const e of entries) {
+    if (e.m !== m) continue;
+    const cur = map.get(e.day);
+    if (cur) {
+      for (const t of entryTags(e)) if (!cur.includes(t)) cur.push(t);
+    } else {
+      map.set(e.day, [...entryTags(e)]);
+    }
+  }
+  return map;
+}
+
+/** 날짜 키 → 에포크 일수. 달력 상 연속(어제→오늘)이 정확히 +1이 되는 눈금이다 —
+    문자열 비교나 로컬 Date 산술은 월 경계·DST 가정에서 흔들린다(KST엔 DST가 없지만
+    UTC 눈금이면 애초에 가정이 필요 없다). */
+function dayNum(key: string): number {
+  return Date.UTC(+key.slice(0, 4), +key.slice(5, 7) - 1, +key.slice(8, 10)) / 86_400_000;
+}
+
+/** 전 기간 최장 연속 공부일 — streakOf(오늘 기준 현재 연속)와 짝을 이루는 기록 보드용. */
+export function maxStreakOf(days: ReadonlySet<string>): number {
+  const nums = [...days].map(dayNum).filter(Number.isFinite).sort((a, b) => a - b);
+  let max = 0;
+  let run = 0;
+  let prev = Number.NaN;
+  for (const n of nums) {
+    run = n === prev + 1 ? run + 1 : 1;
+    prev = n;
+    if (run > max) max = run;
+  }
+  return max;
+}
+
+/** 가장 이른 기록 달부터 "이번 달과 가장 늦은 기록 달 중 나중" 까지의 'YYYY-MM' 목록 —
+    통계의 "전체" 화면이 월 단위로 편다. 미래 날짜에 남긴 기록도 누적·태그·순위에는
+    세므로, 그 달이 목록에 없으면 월별 행의 합과 누적이 어긋난다. 기록이 없으면 이번 달 하나.
+    상한은 "이번 달을 반드시 품는 120개월 창" — 깨진 날짜 하나가 수백 행을 만들지 않되,
+    창을 접더라도 이번 달이 빠지면 안 된다(이번 달이 빠진 통계는 통계가 아니다).
+    과거를 먼저 지키고 창 밖의 먼 미래 달을 접는다: 십 년 전 기록은 실데이터일 수 있지만
+    십 년 뒤 기록은 깨진 날짜에 가깝다.
+    창이 접은 달의 기록은 월별 행에 안 보여도 누적·태그·연속에는 그대로 세진다 —
+    이 불일치는 안다. 창은 120개월 밖 기록이라는 병적 데이터에 대한 표시 방어일 뿐이고,
+    집계까지 창으로 자르면 정상 경로의 모든 계산에 이 경계가 끼어든다. */
+export function monthKeysOf(days: ReadonlySet<string>, today: Date): string[] {
+  const cur = today.getFullYear() * 12 + today.getMonth();
+  let lo = cur;
+  let hi = cur;
+  for (const d of days) {
+    const n = +d.slice(0, 4) * 12 + (+d.slice(5, 7) - 1);
+    if (!Number.isFinite(n)) continue;
+    if (n < lo) lo = n;
+    if (n > hi) hi = n;
+  }
+  lo = Math.max(lo, cur - 119);
+  hi = Math.min(hi, lo + 119); // lo ≤ cur ≤ lo + 119 — 이번 달은 늘 창 안이다
+  const out: string[] = [];
+  for (let n = lo; n <= hi; n++) out.push(`${Math.floor(n / 12)}-${pad2((n % 12) + 1)}`);
+  return out;
 }

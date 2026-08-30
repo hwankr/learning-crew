@@ -56,6 +56,7 @@ import { Feed, type FeedFocus } from './components/Feed';
 import { CalendarView } from './components/CalendarView';
 import { ComposeMenu } from './components/ComposeMenu';
 import { NotiPage, type NotiNavTarget } from './components/NotiPage';
+import { StatsView, type StatPeriod, type StatScope } from './components/StatsView';
 import { NotiDropdown } from './components/NotiDropdown';
 import { NotiSettings } from './components/NotiSettings';
 import { EMPTY_MODAL, EntryModal, saveGate, type ModalState } from './components/EntryModal';
@@ -269,12 +270,12 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
   const [ui] = useState(loadUi);
   const urlView = cfg.viewFromUrl ? cfg.initialView : null;
   const [view, setView] = useState<DesktopView>(
-    urlView === 'feed' || urlView === 'cal' ? urlView : ui.view ?? 'cal',
+    urlView === 'feed' || urlView === 'cal' || urlView === 'stats' ? urlView : ui.view ?? 'cal',
   );
   // 좁은 화면의 탭 — 데스크톱 view와 한 상태로 묶지 않는다(홈·알림은 저쪽에 없는 자리다).
   // ?view=는 두 셸에 각자의 말로 옮긴다: noti/notiset은 여기서 알림 탭이다.
   const [mtab, setMtab] = useState<MobileTab>(
-    urlView === 'feed' || urlView === 'cal' ? urlView
+    urlView === 'feed' || urlView === 'cal' || urlView === 'stats' ? urlView
       : urlView === 'noti' ? 'alerts'
         : ui.mtab ?? 'home',
   );
@@ -308,6 +309,13 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
      고른 사람이 폭 하나 바뀌었다고 '전체'로 돌아가지 않게 여기서 든다(선택일과 같은 자리).
      보던 탭·날짜와 달리 저장(saveUi)은 하지 않는다 — 새로고침이면 전체로 시작하는 게 자연스럽다. */
   const [calFilter, setCalFilter] = useState<MemberId | null>(null);
+  /* 통계의 스코프·기간·태그 필터 — 캘린더 멤버 필터와 같은 규칙으로 여기서 든다:
+     셸이 갈리거나 탭을 오가면 StatsView가 통째로 다시 마운트되는데, 그때마다
+     나×이번 달·무필터로 돌아가면 보던 조합이 매번 풀린다. 저장(saveUi)은 하지 않는다 —
+     새로고침이면 기본 조합으로 시작하는 게 자연스럽다. */
+  const [statScope, setStatScope] = useState<StatScope>('me');
+  const [statPeriod, setStatPeriod] = useState<StatPeriod>('cur');
+  const [statSel, setStatSel] = useState<Tag | null>(null);
   const [modal, setModal] = useState<ModalState>(EMPTY_MODAL);
   // 삭제 확인 대기 중인 기록 — 스냅샷에서 다시 찾으므로, 그 사이 다른 기기에서
   // 지워졌다면 물음도 함께 사라진다(이미 없는 걸 두고 물을 이유가 없다)
@@ -892,6 +900,15 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
       {footer}
     </>
   );
+  const statsScreen = (
+    <>
+      <StatsView entries={entries} studyDays={snap.studyDays} statuses={snap.statuses}
+        meId={me.id} now={nowTick} today={now}
+        scope={statScope} period={statPeriod} rawSel={statSel}
+        onScope={setStatScope} onPeriod={setStatPeriod} onSel={setStatSel} />
+      {footer}
+    </>
+  );
   const crewScreen = (
     <CrewPanel entries={entries} events={snap.events} todays={todays} statuses={snap.statuses}
       studyDays={snap.studyDays} meId={me.id}
@@ -993,7 +1010,9 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
               <div className="panel-inner">{crewScreen}</div>
             </div>
             <div className="main-col">
-              {notiSettings ? notiScreen : view === 'feed' ? feedScreen : calScreen}
+              {notiSettings ? notiScreen
+                : view === 'feed' ? feedScreen
+                  : view === 'stats' ? statsScreen : calScreen}
             </div>
           </div>
         </>
@@ -1012,7 +1031,9 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
                 </div>
                 {crewScreen}
               </>
-            ) : mtab === 'feed' ? feedScreen : mtab === 'cal' ? calScreen : notiScreen}
+            ) : mtab === 'feed' ? feedScreen
+              : mtab === 'cal' ? calScreen
+                : mtab === 'stats' ? statsScreen : notiScreen}
           </div>
           {/* 기록 버튼이 서지 않는 탭에서는 탭바가 초점의 귀환 지점을 대신 맡는다 —
               두 자리가 같은 ref를 두고 다투지 않게 있는 쪽 하나만 잡는다 */}

@@ -9,6 +9,8 @@ describe('parseViewParam', () => {
     expect(parseViewParam('feed')).toEqual({ view: 'feed', lounge: false });
     expect(parseViewParam('피드')).toEqual({ view: 'feed', lounge: false });
     expect(parseViewParam('cal')).toEqual({ view: 'cal', lounge: false });
+    expect(parseViewParam('stats')).toEqual({ view: 'stats', lounge: false });
+    expect(parseViewParam('통계')).toEqual({ view: 'stats', lounge: false });
     expect(parseViewParam('notiset')).toEqual({ view: 'noti', lounge: false });
     expect(parseViewParam('feeed')).toEqual({ view: null, lounge: false });
     expect(parseViewParam(null)).toEqual({ view: null, lounge: false });

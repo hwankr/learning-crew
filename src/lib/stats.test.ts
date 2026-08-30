@@ -2,12 +2,14 @@
    한 집합으로 모이고, 도장 유래 날짜가 전부 KST 규약 하나로 파생되는지를 본다.
    (KST 파생은 러너 시간대와 무관하다 — 기록 날짜는 문자열 그대로라 역시 무관하다.) */
 import { describe, expect, it } from 'vitest';
-import type { Entry, MemberStatus } from '../../shared/types';
-import { daysOf, monthDaysOf, streakOf, studyDaysOf } from './stats';
+import type { Entry, MemberStatus, Tag } from '../../shared/types';
+import {
+  dayTagsOf, daysOf, maxStreakOf, monthDaysOf, monthKeysOf, streakOf, studyDaysOf,
+} from './stats';
 
-const entry = (day: string): Entry => ({
-  id: `e-${day}`, m: 'sh', day, time: '10:00',
-  tag: '영어', tags: ['영어'], stars: 3, memo: '', body: '', todos: [], photos: [],
+const entry = (day: string, tags: Tag[] = ['영어']): Entry => ({
+  id: `e-${day}-${tags.join('+')}`, m: 'sh', day, time: '10:00',
+  tag: tags[0] ?? '기타', tags, stars: 3, memo: '', body: '', todos: [], photos: [],
   v: 1, updatedAt: `${day}T03:00:00.000Z`, deletedAt: null,
 });
 
@@ -59,5 +61,65 @@ describe('studyDaysOf', () => {
     );
     expect(monthDaysOf(days, '2026-08-')).toBe(3);
     expect(streakOf(days, TODAY)).toBe(3); // 오늘은 아직 없어도 봐준다 — 11·12·13 연속
+  });
+});
+
+describe('dayTagsOf', () => {
+  it('같은 날의 여러 기록을 태그 합집합으로 모은다 — 중복 없이 등장 순서', () => {
+    const map = dayTagsOf([
+      entry('2026-08-12', ['자격증', '영어']),
+      entry('2026-08-12', ['영어', '코딩테스트']),
+      entry('2026-08-13', ['OFF']),
+      { ...entry('2026-08-14'), m: 'wg' }, // 남의 기록은 안 섞인다
+    ], 'sh');
+    expect(map.get('2026-08-12')).toEqual(['자격증', '영어', '코딩테스트']);
+    expect(map.get('2026-08-13')).toEqual(['OFF']); // OFF도 그대로 — 뺄지는 보는 쪽 몫
+    expect(map.has('2026-08-14')).toBe(false);
+  });
+});
+
+describe('maxStreakOf', () => {
+  it('월 경계를 넘는 연속 구간도 하나로 센다', () => {
+    expect(maxStreakOf(new Set([
+      '2026-07-30', '2026-07-31', '2026-08-01', // 3연속 — 최장
+      '2026-08-05', '2026-08-06', // 2연속
+    ]))).toBe(3);
+  });
+
+  it('빈 집합은 0, 하루면 1', () => {
+    expect(maxStreakOf(new Set())).toBe(0);
+    expect(maxStreakOf(new Set(['2026-08-05']))).toBe(1);
+  });
+});
+
+describe('monthKeysOf', () => {
+  it('가장 이른 기록 달부터 이번 달까지 — 빈 달도 자리에 남는다', () => {
+    expect(monthKeysOf(new Set(['2026-05-10', '2026-08-01']), TODAY))
+      .toEqual(['2026-05', '2026-06', '2026-07', '2026-08']);
+  });
+
+  it('해를 넘긴 범위도 이어진다', () => {
+    expect(monthKeysOf(new Set(['2025-11-30']), TODAY))
+      .toEqual(['2025-11', '2025-12', ...Array.from({ length: 8 }, (_, i) => `2026-0${i + 1}`)]);
+  });
+
+  it('기록이 없으면 이번 달 하나', () => {
+    expect(monthKeysOf(new Set(), TODAY)).toEqual(['2026-08']);
+  });
+
+  it('아주 먼 과거·미래도 이번 달을 품는 120개월 창으로 접는다', () => {
+    const past = monthKeysOf(new Set(['1996-01-15']), TODAY);
+    expect(past).toHaveLength(120);
+    expect(past[0]).toBe('2016-09');
+    expect(past[119]).toBe('2026-08'); // 창을 접어도 이번 달은 남는다
+    const future = monthKeysOf(new Set(['2041-01-01']), TODAY);
+    expect(future).toHaveLength(120);
+    expect(future[0]).toBe('2026-08');
+    expect(future[119]).toBe('2036-07'); // 창 밖의 먼 미래 달은 접는다
+  });
+
+  it('미래 달의 기록이 있으면 그 달까지 편다 — 누적에 세는 달이 목록에 없으면 어긋난다', () => {
+    expect(monthKeysOf(new Set(['2026-12-01']), TODAY))
+      .toEqual(['2026-08', '2026-09', '2026-10', '2026-11', '2026-12']);
   });
 });
