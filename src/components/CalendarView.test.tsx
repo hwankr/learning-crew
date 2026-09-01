@@ -14,7 +14,7 @@ const TODAY = '2026-08-16';
 
 function entry(id: string, day: string): Entry {
   return {
-    id, m: 'wg', day, time: '12:00', tag: '영어', tags: ['영어'], stars: 4,
+    id, m: 'wg', day, time: '12:00', tag: '영어', tags: ['영어'], stars: 4, studyMinutes: null,
     memo: '', body: '', todos: [], photos: [],
     v: 0, updatedAt: '2026-08-16T03:00:00.000Z', deletedAt: null,
   };

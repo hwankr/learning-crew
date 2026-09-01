@@ -34,6 +34,7 @@ function e(partial: Partial<Entry>): Entry {
     tag: '영어',
     tags: ['영어'],
     stars: 3,
+    studyMinutes: null,
     memo: '',
     body: '원래 본문',
     todos: [{ t: '단어 암기', done: false }],
@@ -87,6 +88,17 @@ describe('mergeEntry (필드 단위 3-way 병합)', () => {
     const legacy = e({}) as Omit<Entry, 'photos'> & { photos?: Entry['photos'] };
     delete legacy.photos;
     expect(normalizeEntry(legacy as Entry).photos).toEqual([]);
+  });
+
+  it('구버전 IDB의 누락·손상 공부시간과 OFF 숫자 공부시간을 null로 복원한다', () => {
+    const legacy = e({ studyMinutes: 90 }) as Omit<Entry, 'studyMinutes'> & {
+      studyMinutes?: Entry['studyMinutes'];
+    };
+    delete legacy.studyMinutes;
+    expect(normalizeEntry(legacy as Entry).studyMinutes).toBeNull();
+    expect(normalizeEntry(e({ studyMinutes: 0 })).studyMinutes).toBeNull();
+    expect(normalizeEntry(e({ studyMinutes: 1441 })).studyMinutes).toBeNull();
+    expect(normalizeEntry(e({ tags: ['OFF'], studyMinutes: 90 })).studyMinutes).toBeNull();
   });
 
   it('사진과 본문을 다른 기기에서 고쳐도 3-way 병합이 둘 다 보존한다', () => {
@@ -207,6 +219,43 @@ describe('mergeEntry (필드 단위 3-way 병합)', () => {
     expect(serverOffWins.tag).toBe('OFF');
     expect(serverOffWins.stars).toBeNull();
   });
+
+  it('공부시간을 독립 필드로 3-way 병합하고 명시 null 삭제를 보존한다', () => {
+    const base = e({ studyMinutes: 60 });
+
+    const localChanged = mergeEntry(
+      base,
+      e({ studyMinutes: 90 }),
+      e({ body: '서버 본문', studyMinutes: 60, v: 2 }),
+    );
+    expect(localChanged.studyMinutes).toBe(90);
+    expect(localChanged.body).toBe('서버 본문');
+
+    const serverChanged = mergeEntry(
+      base,
+      e({ studyMinutes: 60 }),
+      e({ studyMinutes: 120, v: 2 }),
+    );
+    expect(serverChanged.studyMinutes).toBe(120);
+
+    const localDeleted = mergeEntry(
+      base,
+      e({ studyMinutes: null }),
+      e({ studyMinutes: 120, v: 2 }),
+    );
+    expect(localDeleted.studyMinutes).toBeNull();
+  });
+
+  it('태그 병합 결과가 OFF면 어느 쪽의 공부시간 수정도 null로 강제한다', () => {
+    const base = e({ studyMinutes: 60 });
+    const merged = mergeEntry(
+      base,
+      e({ studyMinutes: 90 }),
+      e({ tags: ['OFF'], stars: null, studyMinutes: null, v: 2 }),
+    );
+    expect(merged.tags).toEqual(['OFF']);
+    expect(merged.studyMinutes).toBeNull();
+  });
 });
 
 describe('contentEqual (동기화 메타 제외 내용 비교)', () => {
@@ -215,6 +264,9 @@ describe('contentEqual (동기화 메타 제외 내용 비교)', () => {
   });
   it('본문이 다르면 다른 내용이다', () => {
     expect(contentEqual(e({}), e({ body: '다른 본문' }))).toBe(false);
+  });
+  it('공부시간이 다르면 다른 내용이다', () => {
+    expect(contentEqual(e({ studyMinutes: 60 }), e({ studyMinutes: 90 }))).toBe(false);
   });
   it('삭제 여부가 다르면 다른 내용이다', () => {
     expect(contentEqual(e({}), e({ deletedAt: '2026-08-12T02:00:00.000Z' }))).toBe(false);

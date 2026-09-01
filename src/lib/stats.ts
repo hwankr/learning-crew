@@ -1,7 +1,7 @@
 /* 멤버별 기록 집계 — 캘린더가 갖고 있던 계산을 크루 패널의 월 요약이 이어받는다.
    두 화면이 같은 숫자를 서로 다르게 세는 일이 없도록 한 곳에 둔다. */
 import type { Entry, MemberId, MemberStatus, Tag } from '../../shared/types';
-import { entryTags, isStatusActive } from '../../shared/types';
+import { STUDY_MINUTES_MAX, entryTags, isOffTags, isStatusActive } from '../../shared/types';
 import { kstDayStr } from '../../shared/notify';
 import { dayKey, pad2 } from './constants';
 
@@ -69,6 +69,69 @@ export function dayTagsOf(entries: readonly Entry[], m: MemberId): Map<string, T
     }
   }
   return map;
+}
+
+/** 한 날짜에 직접 입력된 공부시간. 체크인 도장·현재 상태에는 시간 정보가 없으므로
+    이 집계는 Entry만 받는다. 같은 날 기록이 여러 개면 분은 합치되, 평균의 분모가 되는
+    `recordedEntries > 0` 날짜는 한 번만 센다. null은 0분이 아니라 미입력이다. */
+export interface DayStudyTime {
+  minutes: number;
+  recordedEntries: number;
+  missingEntries: number;
+}
+
+/** 멤버의 날짜별 수동 공부시간 — 태그를 고르면 "그 태그가 포함된 기록"만 더한다.
+    한 기록에 태그가 여러 개여도 시간을 나누지 않는다. 따라서 태그별 결과끼리는 서로
+    겹칠 수 있고, 이 값으로 합계 100%인 비중 차트를 만들면 안 된다. */
+export function studyTimeByDayOf(
+  entries: readonly Entry[],
+  m: MemberId,
+  selectedTag: Tag | null = null,
+): Map<string, DayStudyTime> {
+  const map = new Map<string, DayStudyTime>();
+  for (const e of entries) {
+    if (e.m !== m) continue;
+    const tags = entryTags(e);
+    if (isOffTags(tags) || (selectedTag !== null && !tags.includes(selectedTag))) continue;
+
+    const cur = map.get(e.day) ?? { minutes: 0, recordedEntries: 0, missingEntries: 0 };
+    if (
+      typeof e.studyMinutes === 'number'
+      && Number.isInteger(e.studyMinutes)
+      && e.studyMinutes >= 1
+      && e.studyMinutes <= STUDY_MINUTES_MAX
+    ) {
+      cur.minutes += e.studyMinutes;
+      cur.recordedEntries += 1;
+    } else {
+      // null(및 구버전/손상 행의 누락)은 실제 0분으로 바꾸지 않는다.
+      cur.missingEntries += 1;
+    }
+    map.set(e.day, cur);
+  }
+  return map;
+}
+
+export interface StudyTimeSummary {
+  minutes: number;
+  /** 공부시간이 숫자로 입력된 날짜 수 — 일 평균의 분모. 기록 수가 아니다. */
+  recordedDays: number;
+}
+
+/** 날짜별 시간 중 원하는 기간의 합계와 입력일 수. 같은 날 숫자 기록과 null 기록이
+    함께 있어도 그 날은 시간 입력일 한 번이며, null만 있는 날은 평균 분모에서 빠진다. */
+export function studyTimeSummaryOf(
+  days: ReadonlyMap<string, DayStudyTime>,
+  pred: (day: string) => boolean = () => true,
+): StudyTimeSummary {
+  let minutes = 0;
+  let recordedDays = 0;
+  for (const [day, value] of days) {
+    if (!pred(day) || value.recordedEntries === 0) continue;
+    minutes += value.minutes;
+    recordedDays += 1;
+  }
+  return { minutes, recordedDays };
 }
 
 /** 날짜 키 → 에포크 일수. 달력 상 연속(어제→오늘)이 정확히 +1이 되는 눈금이다 —

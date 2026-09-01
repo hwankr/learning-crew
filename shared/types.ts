@@ -139,6 +139,8 @@ export interface EntryPhoto {
 }
 
 export const ENTRY_PHOTO_LIMIT = 4;
+/** 하루 기록 한 건에 수동 입력할 수 있는 최대 공부시간(24시간, 분 단위). */
+export const STUDY_MINUTES_MAX = 24 * 60;
 const ENTRY_PHOTO_DIMENSION_MAX = 10_000;
 
 /** 사진 메타 정규화 — 유효한 UUID만, 첫 등장 순서로 중복 없이, 최대 4장.
@@ -180,6 +182,8 @@ export interface Entry {
   /** 다중 선택된 공부 종류 — 최소 1개, 공용 결정 순서, 최대 8개, 'OFF'면 단독. */
   tags: Tag[];
   stars: number | null; // OFF(tags === ['OFF'])는 null
+  /** 수동 입력한 공부시간(분). 미입력은 null이고 OFF(tags === ['OFF'])도 항상 null. */
+  studyMinutes: number | null;
   memo: string;
   body: string;
   todos: Todo[];

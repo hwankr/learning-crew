@@ -6,7 +6,8 @@ import { EntryCard, type EntryActions } from './EntryCard';
 
 const entry: Entry = {
   id: 'e1', m: 'sh', day: '2026-08-14', time: '12:00',
-  tag: '코딩테스트', tags: ['코딩테스트'], stars: 4, memo: '', body: '오늘의 기록',
+  tag: '코딩테스트', tags: ['코딩테스트'], stars: 4, studyMinutes: null,
+  memo: '', body: '오늘의 기록',
   todos: [{ t: '기출 1회', done: true }, { t: '오답 정리', done: false }],
   photos: [],
   v: 0, updatedAt: '2026-08-14T03:00:00.000Z', deletedAt: null,
@@ -48,6 +49,28 @@ describe('EntryCard 할 일 접근성', () => {
 
   it('별점을 그림에도 텍스트 대체로 남긴다', () => {
     expect(card(false)).toContain('role="img" aria-label="만족도 4점"');
+  });
+});
+
+describe('EntryCard 공부시간', () => {
+  it('입력된 총 분을 읽기 쉬운 문구와 접근 가능한 이름으로 표시한다', () => {
+    const html = card(false, { ...entry, studyMinutes: 125 });
+    expect(html).toContain('2시간 5분');
+    expect(html).toContain('role="img" aria-label="공부 시간 2시간 5분"');
+  });
+
+  it('미입력·OFF·범위를 벗어난 값에는 시간 배지를 세우지 않는다', () => {
+    expect(card(false)).not.toContain('study-time-badge');
+    expect(card(false, {
+      ...entry, tag: 'OFF', tags: ['OFF'], stars: null, studyMinutes: 60,
+    })).not.toContain('study-time-badge');
+    expect(card(false, { ...entry, studyMinutes: 1441 })).not.toContain('study-time-badge');
+  });
+
+  it('컴팩트 카드에도 같은 시간과 접근 가능한 이름을 표시한다', () => {
+    const html = card(false, { ...entry, studyMinutes: 45 }, new Map(), true);
+    expect(html).toContain('study-time-badge compact');
+    expect(html).toContain('aria-label="공부 시간 45분"');
   });
 });
 

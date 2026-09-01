@@ -13,7 +13,7 @@ const actions: EntryActions = {
 
 const entry: Entry = {
   id: 'e1', m: 'sh', day: '2026-08-14', time: '12:00',
-  tag: '영어', tags: ['영어'], stars: 4, memo: '', body: '오늘의 기록',
+  tag: '영어', tags: ['영어'], stars: 4, studyMinutes: null, memo: '', body: '오늘의 기록',
   todos: [], photos: [],
   v: 0, updatedAt: '2026-08-14T03:00:00.000Z', deletedAt: null,
 };

@@ -52,6 +52,7 @@ function entry(e: Partial<Entry> & Pick<Entry, 'id' | 'm'>): Entry {
     memo: '오전 스퍼트', body: '', todos: [], photos: [], v: 1,
     updatedAt: `${TODAY}T10:00:00.000Z`, deletedAt: null,
     ...e,
+    studyMinutes: e.studyMinutes ?? null,
   };
 }
 

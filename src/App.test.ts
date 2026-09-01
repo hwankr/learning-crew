@@ -1,7 +1,16 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { EntryPhoto } from '../shared/types';
+import type { Entry, EntryPhoto } from '../shared/types';
 import { addDraftPhotos } from './lib/photoDraft';
-import { draftPhotoResultIsCurrent, notiNavPlan, runRevivePhotoClone } from './App';
+import { contentEqual } from './local/store';
+import {
+  draftHasContent,
+  draftPhotoResultIsCurrent,
+  loadDraft,
+  notiNavPlan,
+  runRevivePhotoClone,
+  saveDraft,
+} from './App';
+import { EMPTY_MODAL } from './components/EntryModal';
 
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
   let resolve!: (value: T) => void;
@@ -10,6 +19,74 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
   });
   return { promise, resolve };
 }
+
+describe('공부시간 초안', () => {
+  it('시간만 적은 신규 초안도 저장하고 다시 복원한다', () => {
+    const rows = new Map<string, string>();
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => rows.get(key) ?? null,
+      setItem: (key: string, value: string) => rows.set(key, value),
+      removeItem: (key: string) => rows.delete(key),
+    });
+    try {
+      const modal = {
+        ...EMPTY_MODAL,
+        open: true,
+        entryId: '11111111-1111-4111-8111-111111111111',
+        day: '2026-08-14',
+        tags: ['영어'],
+        stars: 4,
+        studyHoursInput: '2',
+        studyMinutesInput: '05',
+      };
+      expect(draftHasContent(modal)).toBe(true);
+
+      saveDraft('study-time-draft', modal, null);
+      const restored = loadDraft('study-time-draft');
+      expect(restored?.studyHoursInput).toBe('2');
+      expect(restored?.studyMinutesInput).toBe('05');
+      expect(restored?.body).toBe('');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('구버전 수정 초안 base의 누락된 공부시간을 null로 채워 이어 쓸 수 있게 한다', () => {
+    const rows = new Map<string, string>();
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => rows.get(key) ?? null,
+      setItem: (key: string, value: string) => rows.set(key, value),
+      removeItem: (key: string) => rows.delete(key),
+    });
+    try {
+      const current: Entry = {
+        id: '22222222-2222-4222-8222-222222222222',
+        m: 'sh', day: '2026-08-14', time: '21:00', tag: '영어', tags: ['영어'],
+        stars: 4, studyMinutes: null, memo: '', body: '기존 본문', todos: [], photos: [],
+        v: 3, updatedAt: '2026-08-14T12:00:00.000Z', deletedAt: null,
+      };
+      const { studyMinutes: _studyMinutes, ...legacyBase } = current;
+      const modal = {
+        ...EMPTY_MODAL,
+        open: true,
+        entryId: current.id,
+        editingId: current.id,
+        tags: current.tags,
+        stars: current.stars ?? 0,
+        body: '이어 쓰던 수정 초안',
+        day: current.day,
+      };
+
+      saveDraft('legacy-study-time-draft', modal, legacyBase as Entry);
+      const restored = loadDraft('legacy-study-time-draft');
+
+      expect(restored?.base?.studyMinutes).toBeNull();
+      expect(contentEqual(restored!.base!, current)).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
 
 describe('runRevivePhotoClone (삭제된 기록 살리기)', () => {
   it('blob 복제 await 동안 시트를 잠그고 세션 교체 시 복제본을 모두 rollback한다', async () => {

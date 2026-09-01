@@ -6,7 +6,18 @@ import { useMemo } from 'react';
 import type { Entry, MemberId, MemberStatus, Tag } from '../../shared/types';
 import { TAGS } from '../../shared/types';
 import { MEMBERS, W, pad2, tagMeta, type Member } from '../lib/constants';
-import { dayTagsOf, maxStreakOf, monthKeysOf, streakOf, studyDaysOf } from '../lib/stats';
+import {
+  dayTagsOf,
+  maxStreakOf,
+  monthKeysOf,
+  streakOf,
+  studyDaysOf,
+  studyTimeByDayOf,
+  studyTimeSummaryOf,
+  type DayStudyTime,
+  type StudyTimeSummary,
+} from '../lib/stats';
+import { formatStudyMinutes } from '../lib/studyTime';
 import { useIsDesktop } from '../lib/useMediaQuery';
 import { Avatar } from './icons';
 import { MeBadge } from './Board';
@@ -59,6 +70,34 @@ interface MemberStat {
   m: Member;
   days: ReadonlySet<string>;
   tags: Map<string, Tag[]>;
+}
+
+interface StudyTimeBucket {
+  key: string;
+  label: string;
+  minutes: number;
+  recordedDays: number;
+}
+
+function studyTimeValue(summary: StudyTimeSummary): string {
+  return summary.recordedDays > 0 ? formatStudyMinutes(summary.minutes) : '미입력';
+}
+
+function studyTimeChartLabel(
+  title: string,
+  summary: StudyTimeSummary,
+  buckets: readonly StudyTimeBucket[],
+): string {
+  const average = summary.recordedDays > 0
+    ? Math.round(summary.minutes / summary.recordedDays)
+    : 0;
+  const detail = buckets
+    .filter((bucket) => bucket.recordedDays > 0)
+    .map((bucket) => `${bucket.label} ${formatStudyMinutes(bucket.minutes)}`)
+    .join(', ');
+  return `${title}. 총 ${formatStudyMinutes(summary.minutes)}. `
+    + `시간 입력일 평균 ${formatStudyMinutes(average)}`
+    + (detail ? `. ${detail}` : '');
 }
 
 export function StatsView({
@@ -129,6 +168,18 @@ export function StatsView({
   const selCell = sel ? tagLook(sel).cell : null;
   const toggleTag = (t: Tag) => onSel(sel === t ? null : t);
   const dimOf = (t: Tag): number => (sel && sel !== t ? 0.35 : 1);
+
+  /* ---------- 수동 공부시간 — 도장·라이브 상태와 분리된 Entry 전용 집계 ----------
+     태그가 선택되면 그 태그가 포함된 기록의 시간을 통째로 더한다. 다중 태그 기록은
+     여러 태그 필터에 겹칠 수 있으므로 이 값은 태그 비중(합계 100%)으로 쓰지 않는다. */
+  const timeByMember = useMemo(
+    () => new Map<MemberId, Map<string, DayStudyTime>>(
+      MEMBERS.map((m) => [m.id, studyTimeByDayOf(entries, m.id, sel)]),
+    ),
+    [entries, sel],
+  );
+  const timeDaysOf = (m: MemberId): ReadonlyMap<string, DayStudyTime> =>
+    timeByMember.get(m) ?? new Map<string, DayStudyTime>();
 
   /* ---------- 일수 세기 — countIn은 sel이 있으면 그 태그를 공부한 날만 ---------- */
   const daysIn = (s: MemberStat, pred: (day: string) => boolean): number => {
@@ -208,6 +259,37 @@ export function StatsView({
   const firstLabel = monthInfoOf(crewMks[0]!, today).label;
   const lastLabel = monthInfoOf(crewMks[crewMks.length - 1]!, today).label;
   const crewRangeCap = crewMks.length > 1 ? `${firstLabel} – ${lastLabel}` : firstLabel;
+
+  /* ---------- 공부시간 카드 — 현재 범위·기간·태그 필터를 그대로 따른다 ---------- */
+  const mineTimeDays = timeDaysOf(mine.m.id);
+  const mineTimeSummary = studyTimeSummaryOf(mineTimeDays, inPeriod);
+  const dailyTimeBuckets: StudyTimeBucket[] = Array.from({ length: gm.dim }, (_, i) => {
+    const day = `${gm.mk}-${pad2(i + 1)}`;
+    const value = mineTimeDays.get(day);
+    return {
+      key: day,
+      label: `${i + 1}일`,
+      minutes: value?.minutes ?? 0,
+      recordedDays: value && value.recordedEntries > 0 ? 1 : 0,
+    };
+  });
+  const monthlyTimeBuckets: StudyTimeBucket[] = myMonths.map(({ mi }) => {
+    const summary = studyTimeSummaryOf(mineTimeDays, (day) => day.startsWith(mi.mk + '-'));
+    return { key: mi.mk, label: mi.label, ...summary };
+  });
+  const mineTimeBuckets = period === 'all' ? monthlyTimeBuckets : dailyTimeBuckets;
+  const mineTimeMax = Math.max(1, ...mineTimeBuckets.map((bucket) => bucket.minutes));
+
+  // 공부시간 카드는 기존 공부일 순서를 바꾸지 않는다. 태그를 눌러도 사람이 발밑에서
+  // 움직이지 않는다는 크루 잔디의 계약을 그대로 이어 간다.
+  const crewTimeRows = ranked.map(({ s }) => ({
+    s,
+    summary: studyTimeSummaryOf(timeDaysOf(s.m.id), inPeriod),
+  }));
+  const crewHasTime = crewTimeRows.some(({ summary }) => summary.recordedDays > 0);
+  const crewTimeMax = Math.max(1, ...crewTimeRows.map(({ summary }) => summary.minutes));
+  const timePeriodLabel = period === 'all' ? '전체' : gm.label;
+  const timeBasis = sel ? `${sel} 포함 기록 시간` : '수동 입력한 기록 시간';
 
   /* ---------- 연속 — 필터와 무관하게 늘 "공부한 날" 기준 ---------- */
   const curStreak = streakOf(mine.days, today);
@@ -317,6 +399,113 @@ export function StatsView({
           </div>
         ))}
       </div>
+    </section>
+  );
+
+  const mineTimeAverage = mineTimeSummary.recordedDays > 0
+    ? formatStudyMinutes(Math.round(mineTimeSummary.minutes / mineTimeSummary.recordedDays))
+    : '—';
+  const mineTimeChartTitle = `${timePeriodLabel} ${timeBasis} 분포`;
+  const timeCard = scope === 'me' ? (
+    <section className="st-card st-time-card">
+      <div className="st-card-head">
+        <span className="st-card-title">공부 시간</span>
+        <span className="st-card-cap">{timePeriodLabel}</span>
+      </div>
+      <dl className="st-time-summary">
+        <div className="st-time-metric">
+          <dt className="st-stat-label">총시간</dt>
+          <dd className="st-stat-val">{studyTimeValue(mineTimeSummary)}</dd>
+        </div>
+        <div className="st-time-metric">
+          <dt className="st-stat-label">시간 입력일 평균</dt>
+          <dd className="st-stat-val">{mineTimeAverage}</dd>
+        </div>
+      </dl>
+      {mineTimeSummary.recordedDays === 0 ? (
+        <div className="st-tag-empty">이 기간에는 입력한 공부시간이 없어요</div>
+      ) : period === 'all' ? (
+        <div className="st-mon-list st-time-months" role="list"
+          aria-label={mineTimeChartTitle}>
+          {mineTimeBuckets.map((bucket) => (
+            <div key={bucket.key} className="st-mon-row" role="listitem"
+              aria-label={`${bucket.label} ${bucket.recordedDays > 0
+                ? formatStudyMinutes(bucket.minutes) : '시간 미입력'}`}>
+              <span className="st-mon-label">{bucket.label}</span>
+              <div className="st-bar" aria-hidden="true">
+                <div className="st-bar-fill"
+                  style={{
+                    width: `${Math.round((bucket.minutes / mineTimeMax) * 100)}%`,
+                    background: selCell ?? '#FFB800',
+                  }} />
+              </div>
+              <span className="st-mon-val st-time-mon-val">
+                {bucket.recordedDays > 0 ? formatStudyMinutes(bucket.minutes) : '—'}
+              </span>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="st-time-days" role="img"
+          aria-label={studyTimeChartLabel(mineTimeChartTitle, mineTimeSummary, mineTimeBuckets)}>
+          {mineTimeBuckets.map((bucket, i) => {
+            const recorded = bucket.recordedDays > 0;
+            // 31일 달의 `30`과 `31`처럼 마지막 두 칸에 눈금이 연달아 서면 글자가 붙는다.
+            // 마지막 날은 항상 남기고, 그 앞 2칸 안의 5일 눈금만 생략한다.
+            const daysAfter = mineTimeBuckets.length - (i + 1);
+            const showTick = i === 0 || i === mineTimeBuckets.length - 1
+              || ((i + 1) % 5 === 0 && daysAfter >= 3);
+            return (
+              <div key={bucket.key} className={'st-time-day' + (recorded ? '' : ' missing')}
+                aria-hidden="true"
+                title={`${bucket.label} ${recorded ? formatStudyMinutes(bucket.minutes) : '시간 미입력'}`}>
+                <div className="st-time-day-track">
+                  {recorded && (
+                    <div className="st-time-day-fill"
+                      style={{
+                        height: `${(bucket.minutes / mineTimeMax) * 100}%`,
+                        background: selCell ?? '#FFB800',
+                      }} />
+                  )}
+                </div>
+                <span className="st-time-day-label">{showTick ? i + 1 : ''}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      <div className="st-hint">{timeBasis} 기준 · 미입력일은 평균에서 제외</div>
+    </section>
+  ) : (
+    <section className="st-card st-time-card">
+      <div className="st-card-head">
+        <span className="st-card-title">크루 공부 시간</span>
+        <span className="st-card-cap">{timePeriodLabel}</span>
+      </div>
+      {!crewHasTime ? (
+        <div className="st-tag-empty">이 기간에는 입력한 공부시간이 없어요</div>
+      ) : (
+        <div className="st-crew st-time-crew" role="list"
+          aria-label={`${timePeriodLabel} ${timeBasis}, 멤버별 총시간`}>
+          {crewTimeRows.map(({ s, summary }) => (
+            <div key={s.m.id} className="st-bar-row" role="listitem"
+              aria-label={`${s.m.name} 총 공부시간 ${studyTimeValue(summary)}`}>
+              <Avatar m={s.m} size={avSize} />
+              <span className="st-bar-nm">{s.m.name}</span>
+              {s.m.id === meId && <MeBadge />}
+              <div className="st-bar" aria-hidden="true">
+                <div className="st-bar-fill"
+                  style={{
+                    width: `${Math.round((summary.minutes / crewTimeMax) * 100)}%`,
+                    background: s.m.color,
+                  }} />
+              </div>
+              <span className="st-bar-n st-time-bar-n">{studyTimeValue(summary)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="st-hint">{timeBasis} 기준 · 체크인 시간은 포함하지 않아요</div>
     </section>
   );
 
@@ -455,7 +644,10 @@ export function StatsView({
         ))}
       </div>
       <div className="st-grid">
-        <div className="st-main">{mainCard}</div>
+        <div className="st-main st-main-stack">
+          {timeCard}
+          {mainCard}
+        </div>
         <div className="st-side">
           {tagCard}
           {sideCard}

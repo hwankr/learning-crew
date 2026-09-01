@@ -3,13 +3,16 @@
    (KST 파생은 러너 시간대와 무관하다 — 기록 날짜는 문자열 그대로라 역시 무관하다.) */
 import { describe, expect, it } from 'vitest';
 import type { Entry, MemberStatus, Tag } from '../../shared/types';
+import { STUDY_MINUTES_MAX } from '../../shared/types';
 import {
   dayTagsOf, daysOf, maxStreakOf, monthDaysOf, monthKeysOf, streakOf, studyDaysOf,
+  studyTimeByDayOf, studyTimeSummaryOf,
 } from './stats';
 
-const entry = (day: string, tags: Tag[] = ['영어']): Entry => ({
+const entry = (day: string, tags: Tag[] = ['영어'], studyMinutes: number | null = null): Entry => ({
   id: `e-${day}-${tags.join('+')}`, m: 'sh', day, time: '10:00',
   tag: tags[0] ?? '기타', tags, stars: 3, memo: '', body: '', todos: [], photos: [],
+  studyMinutes,
   v: 1, updatedAt: `${day}T03:00:00.000Z`, deletedAt: null,
 });
 
@@ -75,6 +78,73 @@ describe('dayTagsOf', () => {
     expect(map.get('2026-08-12')).toEqual(['자격증', '영어', '코딩테스트']);
     expect(map.get('2026-08-13')).toEqual(['OFF']); // OFF도 그대로 — 뺄지는 보는 쪽 몫
     expect(map.has('2026-08-14')).toBe(false);
+  });
+});
+
+describe('studyTimeByDayOf', () => {
+  it('같은 날 여러 기록의 분은 합치고 입력일 평균의 분모는 날짜 하나다', () => {
+    const days = studyTimeByDayOf([
+      { ...entry('2026-08-12', ['영어'], 40), id: 'a' },
+      { ...entry('2026-08-12', ['자격증'], 80), id: 'b' },
+      { ...entry('2026-08-13', ['영어'], 30), id: 'c' },
+    ], 'sh');
+
+    expect(days.get('2026-08-12')).toEqual({
+      minutes: 120, recordedEntries: 2, missingEntries: 0,
+    });
+    expect(studyTimeSummaryOf(days)).toEqual({ minutes: 150, recordedDays: 2 });
+  });
+
+  it('null·손상된 0분은 미입력이고, 숫자 시간이 없는 날은 평균 분모에서 빠진다', () => {
+    const days = studyTimeByDayOf([
+      { ...entry('2026-08-12', ['영어'], null), id: 'a' },
+      { ...entry('2026-08-13', ['영어'], 0), id: 'b' },
+      { ...entry('2026-08-13', ['영어'], null), id: 'c' },
+      { ...entry('2026-08-14', ['영어'], 20), id: 'd' },
+      { ...entry('2026-08-15', ['영어'], STUDY_MINUTES_MAX + 1), id: 'e' },
+    ], 'sh');
+
+    expect(days.get('2026-08-12')).toEqual({
+      minutes: 0, recordedEntries: 0, missingEntries: 1,
+    });
+    expect(days.get('2026-08-13')).toEqual({
+      minutes: 0, recordedEntries: 0, missingEntries: 2,
+    });
+    expect(days.get('2026-08-15')).toEqual({
+      minutes: 0, recordedEntries: 0, missingEntries: 1,
+    });
+    expect(studyTimeSummaryOf(days)).toEqual({ minutes: 20, recordedDays: 1 });
+  });
+
+  it('태그 선택은 해당 태그 포함 기록의 시간을 통째로 더하고 OFF·다른 멤버는 제외한다', () => {
+    const rows: Entry[] = [
+      { ...entry('2026-08-12', ['자격증', '영어'], 60), id: 'a' },
+      { ...entry('2026-08-12', ['영어'], null), id: 'b' },
+      { ...entry('2026-08-13', ['자격증'], 30), id: 'c' },
+      { ...entry('2026-08-14', ['OFF'], 999), id: 'd', stars: null },
+      { ...entry('2026-08-15', ['영어'], 90), id: 'e', m: 'wg' },
+    ];
+
+    const english = studyTimeByDayOf(rows, 'sh', '영어');
+    expect(studyTimeSummaryOf(english)).toEqual({ minutes: 60, recordedDays: 1 });
+    expect(english.get('2026-08-12')).toEqual({
+      minutes: 60, recordedEntries: 1, missingEntries: 1,
+    });
+
+    // 다중 태그 60분은 자격증에서도 다시 포함된다 — 서로 배타적인 비중 값이 아니다.
+    expect(studyTimeSummaryOf(studyTimeByDayOf(rows, 'sh', '자격증')))
+      .toEqual({ minutes: 90, recordedDays: 2 });
+  });
+
+  it('기간 조건은 합계와 입력일 수에 함께 적용된다', () => {
+    const days = studyTimeByDayOf([
+      entry('2026-07-31', ['영어'], 20),
+      entry('2026-08-01', ['영어'], 40),
+      entry('2026-08-02', ['영어'], null),
+    ], 'sh');
+
+    expect(studyTimeSummaryOf(days, (day) => day.startsWith('2026-08-')))
+      .toEqual({ minutes: 40, recordedDays: 1 });
   });
 });
 

@@ -35,6 +35,7 @@ import type {
 import {
   MEMBER_IDS,
   ENTRY_PHOTO_LIMIT,
+  STUDY_MINUTES_MAX,
   canonicalUuid,
   entryTags,
   isOffTags,
@@ -233,7 +234,7 @@ function onlineNow(): boolean {
 
 /** 3-way 병합 대상 필드 — 이 밖의 필드(v/updatedAt)는 동기화 메타데이터다.
     tag는 tags에서 파생되는 값이라 병합 대상이 아니다 — 병합 후 다시 계산한다. */
-const MERGE_FIELDS = ['day', 'time', 'tags', 'stars', 'memo', 'body'] as const;
+const MERGE_FIELDS = ['day', 'time', 'tags', 'stars', 'studyMinutes', 'memo', 'body'] as const;
 
 function fieldEq(
   a: Entry,
@@ -318,7 +319,7 @@ export function mergePhotos(
 
 /** IDB에서 읽은 행 정규화 — 구버전 데이터에 v가 없으면 0(서버 리비전 모름)으로.
     첫 push가 CAS 충돌을 내면 병합 경로가 base를 되찾아 준다.
-    tags/photos도 같은 이유로 여기서 채운다: 예전에 저장된 IDB 행과 구버전 Worker
+    tags/photos/studyMinutes도 같은 이유로 여기서 채운다: 예전에 저장된 IDB 행과 구버전 Worker
     응답에는 새 필드가 없다 — 그대로 두면 병합 비교와 push가 undefined를 진짜 값으로 본다. */
 export function normalizeEntry(e: Entry): Entry {
   const tags = entryTags(e);
@@ -328,16 +329,25 @@ export function normalizeEntry(e: Entry): Entry {
   // 서버 ACK 전까지 로컬 불변식이 깨지고, 병합에서 그 숫자를 "로컬 별점 수정"으로 오판한다.
   // 비-OFF+null은 레거시 "평가 없음"이므로 값을 지어내지 않고 그대로 보존한다.
   const stars = isOffTags(tags) ? null : e.stars;
+  const rawStudyMinutes: unknown = e.studyMinutes;
+  const studyMinutes = !isOffTags(tags) &&
+    typeof rawStudyMinutes === 'number' &&
+    Number.isInteger(rawStudyMinutes) &&
+    rawStudyMinutes >= 1 &&
+    rawStudyMinutes <= STUDY_MINUTES_MAX
+    ? rawStudyMinutes
+    : null;
   if (
     v === e.v &&
     e.tag === primaryTag(tags) &&
     e.stars === stars &&
+    e.studyMinutes === studyMinutes &&
     JSON.stringify(e.tags) === JSON.stringify(tags) &&
     JSON.stringify(e.photos) === JSON.stringify(photos)
   ) {
     return e;
   }
-  return { ...e, v, tags, tag: primaryTag(tags), stars, photos };
+  return { ...e, v, tags, tag: primaryTag(tags), stars, studyMinutes, photos };
 }
 
 /** 필드 단위 3-way 병합 — base에서 로컬이 고친 일반 필드만 로컬을 취하고 나머지는 서버를
@@ -362,6 +372,8 @@ export function mergeEntry(baseRaw: Entry | null, localRaw: Entry, serverRaw: En
   const stars = isOffTags(tags)
     ? null
     : (pickedStars ?? (tagsFromLocal ? local.stars : server.stars));
+  // null은 공부시간을 지운 명시적 수정이므로 별점처럼 다른 값을 fallback하지 않는다.
+  const studyMinutes = isOffTags(tags) ? null : pick('studyMinutes');
   return {
     ...server, // id/m/v/updatedAt은 서버 기준
     day: pick('day'),
@@ -369,6 +381,7 @@ export function mergeEntry(baseRaw: Entry | null, localRaw: Entry, serverRaw: En
     tags,
     tag: primaryTag(tags), // 파생 필드 — 병합 결과의 tags에 다시 맞춘다
     stars,
+    studyMinutes,
     memo: pick('memo'),
     body: pick('body'),
     todos: pick('todos'),
@@ -3794,6 +3807,7 @@ export class CrewStore implements PhotoUploadStorage {
               tag: primaryTag(tags),
               tags,
               stars: typeof e.stars === 'number' ? e.stars : null,
+              studyMinutes: null,
               memo: String(e.memo ?? ''),
               body: String(e.body ?? ''),
               todos: Array.isArray(e.todos)

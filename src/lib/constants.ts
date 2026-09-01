@@ -235,7 +235,7 @@ export const COPY: CopySet = {
   feedEmpty: '아직 기록이 없어요', feedEmptyHint: '오늘 기록 남기기로 첫 줄을 시작해보세요',
   notiReadAll: '알림을 모두 읽음으로 표시했어요',
   notiTargetGone: '원본 글을 찾을 수 없어요 — 삭제됐을 수 있어요',
-  offNote: '쉬는 날은 별점 없이 기록돼요.',
+  offNote: '쉬는 날은 만족도와 공부 시간 없이 기록돼요.',
   savedToday: '오늘 기록을 남겼어요', savedPast: '기록을 남겼어요',
   edited: '기록을 수정했어요', deleted: '기록을 삭제했어요',
   photoFull: `사진은 한 기록에 최대 ${ENTRY_PHOTO_LIMIT}장까지예요`,
@@ -283,8 +283,8 @@ export function shiftKey(days: number): string {
 export function seedEntries(): Entry[] {
   const t = shiftKey(0), y = shiftKey(-1), b = shiftKey(-2);
   const now = new Date().toISOString();
-  const base: Pick<Entry, 'body' | 'todos' | 'photos' | 'v' | 'updatedAt' | 'deletedAt'> = {
-    body: '', todos: [], photos: [], v: 0, updatedAt: now, deletedAt: null,
+  const base: Pick<Entry, 'studyMinutes' | 'body' | 'todos' | 'photos' | 'v' | 'updatedAt' | 'deletedAt'> = {
+    studyMinutes: null, body: '', todos: [], photos: [], v: 0, updatedAt: now, deletedAt: null,
   };
   // tag·stars는 tags의 파생값이라 직접 쓰지 않고 여기서 한 번에 맞춘다. tags도 여기서
   // 정규화한다 — 리터럴이 TAGS 순서가 아니면 시드가 만든 tag와 화면이 entryTags로 다시

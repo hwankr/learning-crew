@@ -34,7 +34,8 @@ function photos(n: number): EntryPhoto[] {
 
 const entry: Entry = {
   id: 'e1', m: 'sh', day: '2026-08-14', time: '12:00',
-  tag: '코딩테스트', tags: ['코딩테스트'], stars: 0, memo: '', body: '오늘의 기록',
+  tag: '코딩테스트', tags: ['코딩테스트'], stars: 0, studyMinutes: null,
+  memo: '', body: '오늘의 기록',
   todos: [], photos: [],
   v: 0, updatedAt: '2026-08-14T03:00:00.000Z', deletedAt: null,
 };
@@ -89,5 +90,41 @@ describe('작은 자리는 장수와 무관하게 썸네일', () => {
     );
     expect(photo.kinds.length).toBeGreaterThan(0);
     expect(photo.kinds).not.toContain('full');
+  });
+});
+
+describe('작성 시트 공부시간 입력', () => {
+  const sheet = (tags: string[] = ['영어']): string => renderToStaticMarkup(
+    <EntryModal
+      modal={{
+        ...EMPTY_MODAL,
+        open: true,
+        entryId: 'e1',
+        day: '2026-08-14',
+        tags,
+        stars: 4,
+        studyHoursInput: '2',
+        studyMinutesInput: '5',
+      }}
+      patch={vi.fn()} close={vi.fn()} submit={vi.fn()} wit={COPY}
+      demo={false} preparing={false} saving={false} durableStorage="ready"
+      customTags={[]} onAddCustomTag={() => null} onRemoveCustomTag={() => undefined}
+      fallbackRef={{ current: null }} onAddFiles={vi.fn()} onRemovePhoto={vi.fn()} />,
+  );
+
+  it('시간/분을 숫자 키보드용 두 입력과 하나의 접근 가능한 그룹으로 묶는다', () => {
+    const html = sheet();
+    expect(html).toContain('class="study-time-row" role="group"');
+    expect(html).toContain('공부 시간 중 시간');
+    expect(html).toContain('공부 시간 중 분');
+    expect(html.match(/inputMode="numeric"/g)).toHaveLength(2);
+    expect(html).toContain('value="2"');
+    expect(html).toContain('value="5"');
+  });
+
+  it('OFF에서는 직접 입력을 숨기고 생략 규칙을 알린다', () => {
+    const html = sheet(['OFF']);
+    expect(html).not.toContain('study-time-row');
+    expect(html).toContain('쉬는 날은 만족도와 공부 시간 없이 기록돼요');
   });
 });

@@ -21,6 +21,7 @@ function entry(v: number): Entry {
     tag: '영어',
     tags: ['영어'],
     stars: 4,
+    studyMinutes: null,
     memo: '',
     body: `공부 ${v}`,
     todos: [],

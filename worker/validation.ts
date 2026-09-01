@@ -1,7 +1,10 @@
 import {
   PUSH_LIMITS,
+  STUDY_MINUTES_MAX,
   TAG_LIMITS,
   UUID_RE,
+  entryTags,
+  isOffTags,
   normalizeCrewEvent,
   normalizePhotos,
   normalizeTags,
@@ -28,8 +31,17 @@ function isRealDay(day: string): boolean {
     photos가 아예 없는 구버전 행은 필드 누락 자체가 의미이므로 그대로 둔다 —
     쿼리 계층이 기존 서버 photos를 보존하는 근거가 이 undefined이다. */
 export function normalizePushedEntry(e: Entry): Entry {
-  const row = e.tags === undefined ? e : { ...e, tags: normalizeTags(e.tags) };
-  return row.photos === undefined ? row : { ...row, photos: normalizePhotos(row.photos) };
+  const withTags = e.tags === undefined ? e : { ...e, tags: normalizeTags(e.tags) };
+  const withPhotos = withTags.photos === undefined
+    ? withTags
+    : { ...withTags, photos: normalizePhotos(withTags.photos) };
+  // 필드 누락은 구버전 프로토콜의 "기존 값 보존" 신호라 만들어 내지 않는다.
+  // 명시된 값만 정규화하며, OFF 기록은 저장 전에 반드시 null로 내린다.
+  if (withPhotos.studyMinutes === undefined) return withPhotos;
+  return {
+    ...withPhotos,
+    studyMinutes: isOffTags(entryTags(withPhotos)) ? null : withPhotos.studyMinutes,
+  };
 }
 
 /** 본인 행 + 형식이 유효할 때만 통과. 실패 사유 문자열, 성공이면 null. */
@@ -62,6 +74,15 @@ export function invalidReason(e: Entry, me: MemberId): string | null {
   // 이유로 배치 전체를 400으로 막지 않으면서 OFF ⇒ null 불변식은 DB 경계에서 지킨다.
   if (e.stars !== null && (!Number.isInteger(e.stars) || e.stars < 1 || e.stars > 5)) {
     return 'bad stars';
+  }
+  // undefined는 공부시간 필드를 모르던 구버전 클라이언트다. null은 명시적 미입력/삭제,
+  // 숫자는 분 단위 정수만 받는다. OFF+숫자는 별점과 마찬가지로 정규화 경계에서 null이 된다.
+  if (
+    e.studyMinutes !== undefined &&
+    e.studyMinutes !== null &&
+    (!Number.isInteger(e.studyMinutes) || e.studyMinutes < 1 || e.studyMinutes > STUDY_MINUTES_MAX)
+  ) {
+    return 'bad studyMinutes';
   }
   if (typeof e.memo !== 'string' || e.memo.length > PUSH_LIMITS.memo) return 'bad memo';
   if (typeof e.body !== 'string' || e.body.length > PUSH_LIMITS.body) return 'bad body';

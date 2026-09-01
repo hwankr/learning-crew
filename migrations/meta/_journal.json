@@ -127,6 +127,13 @@
       "when": 1787755474479,
       "tag": "0017_smart_valeria_richards",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1788186650853,
+      "tag": "0018_study_minutes",
+      "breakpoints": true
     }
   ]
 }

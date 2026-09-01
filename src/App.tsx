@@ -24,12 +24,21 @@ import { ImageDecodeError } from './lib/image';
 import { addDraftPhotos } from './lib/photoDraft';
 import { lightboxIndex, shownPhotos } from './lib/photos';
 import {
+  normalizeStudyTimeInputPart,
+  splitStudyMinutes,
+} from './lib/studyTime';
+import {
   addCustomEventTag,
   addCustomTag,
   removeCustomEventTag,
   removeCustomTag,
 } from './lib/tagPrefs';
-import { PhotoLimitError, PhotoStorageUnavailableError, contentEqual } from './local/store';
+import {
+  PhotoLimitError,
+  PhotoStorageUnavailableError,
+  contentEqual,
+  normalizeEntry,
+} from './local/store';
 import { BY_ID, COPY, MEMBERS, W, dayKey, pad2, shiftKey } from './lib/constants';
 import { eventSpanLabel } from './lib/events';
 import type { AppConfig } from './lib/config';
@@ -84,6 +93,8 @@ interface Draft {
   entryId: string;
   tags: Tag[];
   stars: number;
+  studyHoursInput: string;
+  studyMinutesInput: string;
   body: string;
   todos: Todo[];
   photos: EntryPhoto[];
@@ -96,19 +107,23 @@ interface Draft {
 const DRAFT_PREFIX = 'lc-draft:';
 const DRAFT_TTL_MS = 14 * 86_400_000;
 
-function draftHasContent(d: { body: string; todos: Todo[]; photos: EntryPhoto[] }): boolean {
-  return !!d.body.trim() || d.todos.some((t) => t.t.trim()) || d.photos.length > 0;
+export function draftHasContent(
+  d: Pick<ModalState,
+    'studyHoursInput' | 'studyMinutesInput' | 'body' | 'todos' | 'photos'>,
+): boolean {
+  return !!d.studyHoursInput.trim() || !!d.studyMinutesInput.trim() || !!d.body.trim()
+    || d.todos.some((t) => t.t.trim()) || d.photos.length > 0;
 }
 
-/** 저장된 기록 스냅샷의 구버전 경계 보정 — 초안 base도 현재 Entry 모양으로 되살린다. */
-function withTags(e: Entry): Entry {
-  const tags = entryTags(e);
-  return { ...e, tags, tag: primaryTag(tags), photos: normalizePhotos(e.photos) };
+/** 저장된 기록 스냅샷의 구버전 경계 보정 — tags/photos뿐 아니라 새로 생긴
+    studyMinutes 누락도 null로 채워 현재 IDB Entry와 내용 비교가 어긋나지 않게 한다. */
+function normalizeDraftBase(e: Entry): Entry {
+  return normalizeEntry(e);
 }
 
 /** 읽을 때 방어적으로 정규화한다 — 깨진/구버전 초안이 크래시를 내거나,
     서버가 거부할 값(한도 초과·이상한 날짜)이 큐에 들어가 동기화를 막으면 안 된다. */
-function loadDraft(key: string): Draft | null {
+export function loadDraft(key: string): Draft | null {
   try {
     const raw = localStorage.getItem(key);
     if (!raw) return null;
@@ -127,6 +142,8 @@ function loadDraft(key: string): Draft | null {
           : '',
       tags: d.tags === undefined ? normalizeTags([legacyTag]) : normalizeTags(d.tags),
       stars: typeof d.stars === 'number' && d.stars >= 0 && d.stars <= 5 ? d.stars : 0,
+      studyHoursInput: normalizeStudyTimeInputPart(d.studyHoursInput),
+      studyMinutesInput: normalizeStudyTimeInputPart(d.studyMinutesInput),
       body: d.body.slice(0, PUSH_LIMITS.body),
       todos: d.todos.slice(0, PUSH_LIMITS.todos).map((t) => ({
         t: String((t as Partial<Todo> | undefined)?.t ?? '').slice(0, PUSH_LIMITS.todoText),
@@ -136,7 +153,7 @@ function loadDraft(key: string): Draft | null {
       day: isDayKey(d.day) ? d.day : '',
       // 초안 기준 스냅샷도 파생을 채워 둔다 — 다중 태그 이전에 저장된 base는 tags가 없어
       // contentEqual이 무조건 불일치가 되고, 멀쩡한 수정 초안이 통째로 버려진다
-      base: d.base && typeof d.base === 'object' ? withTags(d.base as Entry) : null,
+      base: d.base && typeof d.base === 'object' ? normalizeDraftBase(d.base as Entry) : null,
       savedAt: typeof d.savedAt === 'number' ? d.savedAt : 0,
     };
   } catch {
@@ -147,13 +164,15 @@ function loadDraft(key: string): Draft | null {
 // 마지막으로 저장한 초안 내용(키 포함, savedAt 제외) — 같은 내용의 중복 쓰기를 건너뛴다
 let lastSavedDraftSig = '';
 
-function saveDraft(key: string, m: ModalState, base: Entry | null): void {
+export function saveDraft(key: string, m: ModalState, base: Entry | null): void {
   try {
     if (draftHasContent(m)) {
       const payload = {
         entryId: m.entryId,
         tags: m.tags,
         stars: m.stars,
+        studyHoursInput: m.studyHoursInput,
+        studyMinutesInput: m.studyMinutesInput,
         body: m.body,
         todos: m.todos,
         photos: m.photos,
@@ -207,13 +226,15 @@ function pruneDrafts(store: CrewStore): void {
   }
 }
 
-function modalFromDraft(d: Draft, editingId: string | null, fallbackDay: string): ModalState {
+export function modalFromDraft(d: Draft, editingId: string | null, fallbackDay: string): ModalState {
   return {
     open: true,
     entryId: editingId ?? (d.entryId || crypto.randomUUID()),
     editingId,
     tags: d.tags,
     stars: d.stars,
+    studyHoursInput: d.studyHoursInput,
+    studyMinutesInput: d.studyMinutesInput,
     body: d.body,
     todos: d.todos,
     photos: d.photos,
@@ -485,7 +506,8 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
 
   const submitNow = async () => {
     const isOff = isOffTags(modal.tags);
-    if (modal.tags.length === 0 || (!isOff && modal.stars <= 0)) return;
+    const gate = saveGate(modal);
+    if (!gate.canSave) return;
     if (revivingRef.current) return;
     const saveSession = photoSession.current + 1;
     photoSession.current = saveSession; // 저장으로 세션이 끝난다
@@ -496,6 +518,7 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
       tags: modal.tags,
       tag: primaryTag(modal.tags), // 파생 필드 — 직접 고르는 값이 아니다
       stars: isOff ? null : modal.stars,
+      studyMinutes: isOff ? null : gate.studyMinutes,
       memo: '',
       body: modal.body.trim().slice(0, PUSH_LIMITS.body),
       todos: modal.todos
@@ -595,12 +618,15 @@ export function App({ cfg, store }: { cfg: AppConfig; store: CrewStore }) {
         }
         removeDraft(key);
       }
+      const studyInput = splitStudyMinutes(e.studyMinutes);
       setModal({
         open: true,
         entryId: e.id,
         editingId: e.id,
         tags: entryTags(e), // 구버전 IDB 행(tags 없음)도 대표 태그에서 되살린다
         stars: e.stars ?? 0,
+        studyHoursInput: studyInput.hours,
+        studyMinutesInput: studyInput.minutes,
         // 예전 한 줄 메모는 본문 첫 줄로 승격해서 이어 쓴다 (서버 한도 내로)
         body: [e.memo, e.body].filter(Boolean).join('\n').slice(0, PUSH_LIMITS.body),
         todos: e.todos.map((t) => ({ ...t })),
