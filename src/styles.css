@@ -404,6 +404,13 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 .entry-head-tags .chip { min-width: 0; overflow: hidden; }
 .entry-head-tags .chip-label { overflow: hidden; text-overflow: ellipsis; }
 .todo-count { font-size: 11px; font-weight: 700; color: #B37F00; background: #FFF9E6; border-radius: 999px; padding: 3.5px 9px; white-space: nowrap; }
+.study-time-badge {
+  display: inline-flex; align-items: center; gap: 4px; flex: none;
+  padding: 3.5px 9px; border-radius: 999px; background: #F1F3F6;
+  color: #4E555F; font-size: 11px; font-weight: 700; white-space: nowrap;
+}
+.study-time-badge > svg { flex: none; }
+.study-time-badge.compact { padding: 2.5px 7px; font-size: 10.5px; }
 .entry-memo { font-size: 14.5px; font-weight: 700; color: #16181D; margin-top: 9px; line-height: 1.5; overflow-wrap: break-word; }
 .entry-body { font-size: 13.5px; color: #4E555F; margin-top: 5px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: break-word; }
 /* 제목이 없는 기록은 본문이 제목 자리로 올라온다 — 한 줄 기록이 잔글씨로 깔리지 않게 */
@@ -575,9 +582,11 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
    "사진 추가" 버튼 하나만 남아야 한다 */
 .photo-file { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 /* 시트 안 인라인 안내는 한 목소리로 — 사진 칸과 태그 칸이 같은 잔글씨를 쓴다 */
-.photo-hint, .tag-hint { font-size: 11.5px; color: #9AA1AD; margin-top: 8px; line-height: 1.5; }
+.photo-hint, .tag-hint, .study-time-hint {
+  font-size: 11.5px; color: #9AA1AD; margin-top: 8px; line-height: 1.5;
+}
 .photo-hint.full { color: #B37F00; }
-.photo-hint.warn, .tag-hint.warn { color: #D3352A; }
+.photo-hint.warn, .tag-hint.warn, .study-time-hint.warn { color: #D3352A; }
 
 /* 피드 카드의 모자이크 — 열·행·높이는 장수에 따라 인라인으로 온다(lib/photos.ts) */
 .photo-mosaic { display: grid; gap: 4px; margin-top: 11px; border-radius: 12px; overflow: hidden; }
@@ -1041,6 +1050,8 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
   display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 20px;
 }
 .sheet-label-row .sheet-label { margin-top: 0; }
+.sheet-label-optional { font-weight: 600; color: #B4BAC4; }
+.study-time-label, .study-time-label .sheet-label-optional { color: #6B7280; }
 
 .tag-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
 .tag-chip {
@@ -1115,6 +1126,23 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 .star-btn path { transition: fill 120ms; }
 .star-count { font-size: 12px; font-weight: 700; color: #9AA1AD; margin-left: 4px; white-space: nowrap; }
 .off-note { display: block; font-size: 13px; color: #6B7280; margin-top: 9px; }
+
+/* 측정기가 아니라 하루 합계를 직접 적는 두 칸. 각 단위를 입력 테두리 안에 붙여
+   0:00 같은 시각 입력으로 읽히지 않고 "시간 / 분"이라는 기간으로 읽히게 한다. */
+.study-time-row { display: flex; align-items: center; gap: 10px; margin-top: 9px; }
+.study-time-field {
+  display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; height: 44px;
+  padding: 0 12px; border: 1.5px solid #E4E7EC; border-radius: 12px; background: #FFFFFF;
+  transition: border-color 120ms;
+}
+.study-time-field:focus-within { border-color: #FFB800; }
+.study-time-field.invalid { border-color: #D3352A; }
+.study-time-input {
+  width: 100%; min-width: 0; padding: 0; border: none; outline: none; background: transparent;
+  color: #23262E; caret-color: #FFB800; font-size: 15px; font-weight: 700; text-align: right;
+}
+.study-time-input::placeholder { color: #C3C9D2; font-weight: 500; }
+.study-time-unit { flex: none; color: #6B7280; font-size: 12.5px; font-weight: 700; }
 
 .modal-diary {
   display: block; width: 100%; margin-top: 9px; padding: 12px 14px;
@@ -1724,11 +1752,47 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 .st-tab.on { color: #16181D; border-bottom-color: #FFB800; }
 .st-grid { display: flex; flex-direction: column; gap: 10px; margin-top: 16px; }
 .st-main { min-width: 0; }
+.st-main-stack { display: flex; flex-direction: column; gap: 10px; }
 .st-side { display: flex; flex-direction: column; gap: 10px; }
 .st-card { border: 1.5px solid #E4E7EC; border-radius: 16px; padding: 16px; background: #FFFFFF; }
 .st-card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
 .st-card-title { font-size: 14px; font-weight: 800; letter-spacing: -0.01em; white-space: nowrap; }
 .st-card-cap { font-size: 11px; color: #9AA1AD; font-weight: 600; white-space: nowrap; }
+
+/* 수동 공부시간 — 합계/평균은 같은 무게로, 월 화면은 31개의 세로 막대,
+   전체 화면은 기존 월별 막대 문법을 잇는다. 빈 날은 0분으로 칠하지 않고 빈 트랙만 둔다. */
+.st-time-summary {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 14px 0 0;
+}
+.st-time-metric { min-width: 0; padding: 0 12px; }
+.st-time-metric:first-child { padding-left: 0; border-right: 1px solid #F1F3F6; }
+.st-time-metric:last-child { padding-right: 0; }
+.st-time-metric dd { margin: 0; }
+.st-time-summary .st-stat-val { font-size: 20px; overflow-wrap: anywhere; }
+.st-time-days {
+  display: flex; align-items: stretch; gap: 2px; height: 118px; margin-top: 16px;
+}
+.st-time-day {
+  display: flex; flex: 1 1 0; min-width: 0; flex-direction: column; gap: 5px;
+}
+.st-time-day-track {
+  position: relative; flex: 1; min-height: 0; overflow: hidden;
+  border-radius: 4px 4px 2px 2px; background: #F5F6F8;
+}
+.st-time-day.missing .st-time-day-track { background: #F8F9FB; }
+.st-time-day-fill {
+  position: absolute; inset-inline: 0; bottom: 0; min-height: 2px;
+  border-radius: 4px 4px 2px 2px; transition: height 240ms;
+}
+.st-time-day-label {
+  height: 11px; overflow: visible; text-align: center;
+  color: #9AA1AD; font-size: 8.5px; font-weight: 700; line-height: 11px;
+}
+.st-time-card .st-card-cap, .st-time-card .st-hint { color: #6B7280; }
+.st-time-months .st-mon-label { min-width: 74px; white-space: nowrap; }
+.st-mon-val.st-time-mon-val { width: 96px; white-space: nowrap; }
+.st-bar-n.st-time-bar-n { width: 96px; white-space: nowrap; }
 
 /* 잔디 — 요일 머리(일요일만 빨강) + 한 칸 = 하루 격자. 색은 데이터라 인라인으로 든다. */
 .st-week { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; margin-top: 12px; }
@@ -1891,10 +1955,21 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
   .st-scope-btn { padding: 5px 16px; font-size: 12px; }
   .st-tabs { gap: 18px; margin-top: 14px; }
   .st-grid { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 14px; margin-top: 20px; align-items: start; }
+  .st-main-stack { gap: 14px; }
   .st-side { gap: 14px; }
   .st-card { padding: 20px 22px; }
   .st-tag-card { padding: 18px 20px; }
   .st-card-cap { font-size: 11.5px; }
+  .st-time-summary { margin-top: 18px; }
+  .st-time-metric { padding: 0 18px; }
+  .st-time-summary .st-stat-val { font-size: 24px; }
+  .st-time-days { height: 148px; margin-top: 20px; gap: 3px; }
+  .st-time-day { gap: 6px; }
+  .st-time-day-track { border-radius: 5px 5px 2px 2px; }
+  .st-time-day-fill { border-radius: 5px 5px 2px 2px; }
+  .st-time-day-label { height: 12px; font-size: 9.5px; line-height: 12px; }
+  .st-time-months .st-mon-label { min-width: 86px; }
+  .st-mon-val.st-time-mon-val, .st-bar-n.st-time-bar-n { width: 108px; }
   .st-week { gap: 5px; margin-top: 16px; }
   .st-wd { font-size: 11.5px; }
   .st-heat { gap: 5px; margin-top: 8px; }

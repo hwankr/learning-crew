@@ -1,4 +1,5 @@
 import {
+  check,
   pgTable,
   uuid,
   text,
@@ -11,6 +12,8 @@ import {
   boolean,
   primaryKey,
 } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
+import { STUDY_MINUTES_MAX } from '../shared/types';
 
 export const entries = pgTable(
   'entries',
@@ -24,6 +27,8 @@ export const entries = pgTable(
     // 다중 선택된 공부 종류. 기존 행은 마이그레이션이 [tag]로 백필한다
     tags: jsonb('tags').notNull().default([]),
     stars: integer('stars'),
+    // 수동 입력 공부시간(분). null은 미입력이며 OFF 기록도 null이어야 한다.
+    studyMinutes: integer('study_minutes'),
     memo: text('memo').notNull().default(''),
     body: text('body').notNull().default(''),
     todos: jsonb('todos').notNull().default([]),
@@ -34,7 +39,13 @@ export const entries = pgTable(
     updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
     deletedAt: timestamp('deleted_at', { withTimezone: true, mode: 'string' }),
   },
-  (t) => [index('entries_updated_at_id_idx').on(t.updatedAt, t.id)],
+  (t) => [
+    index('entries_updated_at_id_idx').on(t.updatedAt, t.id),
+    check(
+      'entries_study_minutes_check',
+      sql`${t.studyMinutes} is null or (${t.studyMinutes} between 1 and ${sql.raw(String(STUDY_MINUTES_MAX))} and ${t.tag} <> 'OFF')`,
+    ),
+  ],
 );
 
 /** 크루 공유 일정 — entries와 같은 version CAS + (updated_at, id) pull 스트림. */

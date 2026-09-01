@@ -8,6 +8,7 @@ import { W, dayKey, pad2, tagMeta, type CopySet } from '../lib/constants';
 import type { DurableStorageState } from '../local/store';
 import { useFocusTrap } from '../lib/useFocusTrap';
 import { useOnline } from '../lib/useOnline';
+import { parseStudyTimeInput } from '../lib/studyTime';
 import { CameraIcon, CheckMark, Icon, PLUS_D, STAR_D, X_D } from './icons';
 import { PhotoImg } from './PhotoImg';
 
@@ -19,6 +20,9 @@ export interface ModalState {
   /** 고른 공부 종류 — 다중 선택. 항상 normalizeTags를 지난 값(결정적 순서, 'OFF'면 단독). */
   tags: Tag[];
   stars: number;
+  /** 공부시간 직접 입력의 두 칸 — 저장할 때 총 분으로 바꾼다. 빈 두 칸은 미입력(null). */
+  studyHoursInput: string;
+  studyMinutesInput: string;
   body: string;
   todos: Todo[];
   photos: EntryPhoto[];
@@ -26,7 +30,8 @@ export interface ModalState {
 }
 
 export const EMPTY_MODAL: ModalState = {
-  open: false, entryId: '', editingId: null, tags: [], stars: 0, body: '', todos: [], photos: [], day: '',
+  open: false, entryId: '', editingId: null, tags: [], stars: 0,
+  studyHoursInput: '', studyMinutesInput: '', body: '', todos: [], photos: [], day: '',
 };
 
 export function photoStorageNotice(args: {
@@ -212,11 +217,13 @@ export function collapsedChips(
 
 /** 저장 문턱과 막힌 이유 — 두 단계로 나뉘어 있던 검사("다음"의 내용 검사, 저장의 태그·별점
     검사)가 시트가 한 장이 되면서 저장 버튼 하나로 모였다. 뜻은 그대로다:
-    태그 하나 이상 + (쉬는 날이거나 별점 하나 이상), 그리고 새 기록은 글/할 일/사진이 있어야 한다
-    (수정은 예외 — 내용을 지우는 것도 수정이다).
+    태그 하나 이상 + (쉬는 날이거나 별점 하나 이상), 그리고 새 기록은 글/할 일/사진/공부시간 중
+    하나가 있어야 한다(수정은 예외 — 내용을 지우는 것도 수정이다).
     이유는 채울 순서대로 하나만 돌려준다 — 한 번에 다 늘어놓으면 무엇부터 손대야 할지 흐려진다. */
 export function saveGate(
-  m: Pick<ModalState, 'editingId' | 'tags' | 'stars' | 'body' | 'todos' | 'photos'>,
+  m: Pick<ModalState,
+    'editingId' | 'tags' | 'stars' | 'studyHoursInput' | 'studyMinutesInput' |
+    'body' | 'todos' | 'photos'>,
   /** 고른 사진을 아직 리사이즈하는 중 — 곧 내용이 될 사진을 두고 "한 줄 적어주세요"라고
       막지 않는다. 저장은 준비가 끝난 뒤에 이어서 실행된다(App이 대기시킨다). */
   preparing = false,
@@ -224,19 +231,34 @@ export function saveGate(
   canSave: boolean;
   hasContent: boolean;
   blocked: string;
+  studyMinutes: number | null;
+  studyError: string;
 } {
-  const ready = m.tags.length > 0 && (isOffTags(m.tags) || m.stars > 0);
-  const hasContent = !!m.body.trim() || m.todos.some((t) => t.t.trim()) || m.photos.length > 0;
-  const canSave = ready && (hasContent || preparing || !!m.editingId);
+  const isOff = isOffTags(m.tags);
+  // OFF로 잠깐 바꿨다가 돌아와도 적던 값을 잃지 않게 폼 상태는 두되, 저장 문턱과 저장값에서는 뺀다.
+  const study = isOff
+    ? { minutes: null, error: '' }
+    : parseStudyTimeInput(m.studyHoursInput, m.studyMinutesInput);
+  const ready = m.tags.length > 0 && (isOff || m.stars > 0);
+  const hasContent = !!m.body.trim() || m.todos.some((t) => t.t.trim()) || m.photos.length > 0
+    || study.minutes !== null;
+  const canSave = ready && !study.error && (hasContent || preparing || !!m.editingId);
   const blocked = !m.tags.length ? '무엇을 했는지 골라주세요'
     : !ready ? '만족도를 골라주세요'
-      : !canSave ? '기록을 한 줄 적거나 사진을 넣어주세요' : '';
-  return { canSave, hasContent, blocked };
+      : study.error || (!canSave ? '기록을 적거나 사진 또는 공부 시간을 입력해 주세요' : '');
+  return {
+    canSave,
+    hasContent,
+    blocked,
+    studyMinutes: study.minutes,
+    studyError: study.error,
+  };
 }
 
 const CHEVRON_D = 'M6 9l6 6 6-6';
 const PREV_D = 'M15 18l-6-6 6-6';
 const NEXT_D = 'M9 6l6 6-6 6';
+const STUDY_INPUT_RE = /^\d{0,2}$/;
 
 function parseDay(key: string): { y: number; m: number; d: number } {
   const [y = 0, m = 1, d = 1] = key.split('-').map(Number);
@@ -341,6 +363,7 @@ export function EntryModal({
   const [tagExpanded, setTagExpanded] = useState(false);
   const [tagName, setTagName] = useState('');
   const [tagError, setTagError] = useState('');
+  const [studyTouched, setStudyTouched] = useState(false);
   const addBtnRef = useRef<HTMLButtonElement>(null);
   /* 저장이 막힌 이유는 한 번 눌러 본 뒤부터 보여준다 — 빈 시트를 열자마자 "골라주세요"가
      떠 있으면 아직 시작도 안 한 사람을 다그치는 꼴이 된다. */
@@ -350,6 +373,8 @@ export function EntryModal({
 
   const titleId = useId();
   const bodyId = useId();
+  const studyLabelId = useId();
+  const studyHintId = useId();
   const sheetRef = useRef<HTMLDivElement>(null);
   const bodyRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -396,8 +421,9 @@ export function EntryModal({
   const dateSuffix = modal.editingId ? '· 수정 중' : isToday ? '· 오늘' : '· 지난 기록';
 
   const isOff = isOffTags(modal.tags);
-  const { canSave, hasContent, blocked } = saveGate(modal, preparing);
+  const { canSave, hasContent, blocked, studyError } = saveGate(modal, preparing);
   const showBlocked = tried && !!blocked;
+  const showStudyError = !isOff && !!studyError && (studyTouched || tried);
 
   const { all: pickerAll, removable } = pickerTags(customTags, modal.tags);
   const { shown, hidden, collapsible } = collapsedChips(pickerAll, modal.tags, tagExpanded, pickerWidth);
@@ -649,6 +675,61 @@ export function EntryModal({
           </div>
         ) : (
           <span className="off-note">{wit.offNote}</span>
+        )}
+
+        {!isOff && (
+          <>
+            <div className="sheet-label study-time-label" id={studyLabelId}>
+              공부 시간 <span className="sheet-label-optional">(선택)</span>
+            </div>
+            <div className="study-time-row" role="group" aria-labelledby={studyLabelId}>
+              <label className={'study-time-field' + (showStudyError ? ' invalid' : '')}>
+                <span className="sr-only">공부 시간 중 시간</span>
+                <input
+                  className="study-time-input"
+                  value={modal.studyHoursInput}
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  maxLength={2}
+                  placeholder="0"
+                  aria-invalid={showStudyError || undefined}
+                  aria-describedby={showStudyError ? studyHintId : undefined}
+                  onChange={(ev) => {
+                    if (STUDY_INPUT_RE.test(ev.target.value)) {
+                      patch({ studyHoursInput: ev.target.value });
+                    }
+                  }}
+                  onBlur={() => setStudyTouched(true)}
+                />
+                <span className="study-time-unit" aria-hidden="true">시간</span>
+              </label>
+              <label className={'study-time-field' + (showStudyError ? ' invalid' : '')}>
+                <span className="sr-only">공부 시간 중 분</span>
+                <input
+                  className="study-time-input"
+                  value={modal.studyMinutesInput}
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  maxLength={2}
+                  placeholder="0"
+                  aria-invalid={showStudyError || undefined}
+                  aria-describedby={showStudyError ? studyHintId : undefined}
+                  onChange={(ev) => {
+                    if (STUDY_INPUT_RE.test(ev.target.value)) {
+                      patch({ studyMinutesInput: ev.target.value });
+                    }
+                  }}
+                  onBlur={() => setStudyTouched(true)}
+                />
+                <span className="study-time-unit" aria-hidden="true">분</span>
+              </label>
+            </div>
+            {showStudyError && (
+              <div className="study-time-hint warn" id={studyHintId} role="status" aria-live="polite">
+                {studyError}
+              </div>
+            )}
+          </>
         )}
 
         <label className="sheet-label" htmlFor={bodyId}>기록</label>

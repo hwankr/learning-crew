@@ -6,7 +6,7 @@ import { Board } from './Board';
 
 const base: Entry = {
   id: 'e1', m: 'wg', day: '2026-08-14', time: '12:00',
-  tag: '영어', tags: ['영어'], stars: 4, memo: '', body: '본문 첫 줄\n둘째 줄',
+  tag: '영어', tags: ['영어'], stars: 4, studyMinutes: null, memo: '', body: '본문 첫 줄\n둘째 줄',
   todos: [{ t: '할 일 첫 줄', done: false }],
   photos: [],
   v: 0, updatedAt: '2026-08-14T03:00:00.000Z', deletedAt: null,

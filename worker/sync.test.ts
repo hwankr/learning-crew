@@ -43,6 +43,7 @@ import { invalidCrewEventReason, invalidReason, normalizePushedEntry } from './v
 import { NOTIFY_COOLDOWN_MS, shouldNotify } from './push';
 import {
   STATUS_TTL_MS,
+  STUDY_MINUTES_MAX,
   canonicalUuid,
   isStatusActive,
   normalizeEmojis,
@@ -71,6 +72,7 @@ function entry(partial: Partial<Entry> & Pick<Entry, 'id' | 'm'>): Entry {
     tag: '영어',
     tags: ['영어'],
     stars: 3,
+    studyMinutes: null,
     memo: '',
     body: '',
     todos: [],
@@ -115,6 +117,21 @@ describe('entry push validation', () => {
     const { tags: _omit, ...legacy } = entry({ id: A, m: 'sh', tags: ['영어'] });
     expect(invalidReason(legacy as Entry, 'sh')).toBeNull();
     expect(invalidReason({ ...entry({ id: A, m: 'sh', tags: ['영어'] }), tag: 'OFF' }, 'sh')).toBeNull();
+  });
+
+  it('공부시간은 null·1..1440 정수만 받고, 누락은 구버전 보존 신호로 허용한다', () => {
+    expect(invalidReason(entry({ id: A, m: 'sh', studyMinutes: null }), 'sh')).toBeNull();
+    expect(invalidReason(entry({ id: A, m: 'sh', studyMinutes: 1 }), 'sh')).toBeNull();
+    expect(invalidReason(entry({ id: A, m: 'sh', studyMinutes: STUDY_MINUTES_MAX }), 'sh')).toBeNull();
+    expect(invalidReason(entry({ id: A, m: 'sh', studyMinutes: 0 }), 'sh')).toBe('bad studyMinutes');
+    expect(invalidReason(entry({ id: A, m: 'sh', studyMinutes: 1.5 }), 'sh')).toBe('bad studyMinutes');
+    expect(invalidReason(entry({ id: A, m: 'sh', studyMinutes: STUDY_MINUTES_MAX + 1 }), 'sh'))
+      .toBe('bad studyMinutes');
+
+    const { studyMinutes: _omit, ...legacy } = entry({ id: A, m: 'sh', studyMinutes: 90 });
+    expect(invalidReason(legacy as Entry, 'sh')).toBeNull();
+    expect(normalizePushedEntry(entry({ id: A, m: 'sh', tags: ['OFF'], studyMinutes: 90 })))
+      .toMatchObject({ tags: ['OFF'], studyMinutes: null });
   });
 });
 
@@ -310,6 +327,50 @@ describe('study_days DB 마이그레이션', () => {
   });
 });
 
+describe('study_minutes DB 마이그레이션', () => {
+  it('0018이 기존 행은 null로 보존하고 1..1440 및 OFF-null CHECK를 건다', async () => {
+    const pg = new PGlite();
+    try {
+      const migrations = readdirSync('migrations').filter((f) => f.endsWith('.sql')).sort();
+      const studyMinutesMigration = migrations.find((f) => f.startsWith('0018_'));
+      expect(studyMinutesMigration).toBeDefined();
+
+      for (const migration of migrations.filter((f) => f < studyMinutesMigration!)) {
+        const ddl = readFileSync(`migrations/${migration}`, 'utf8');
+        for (const stmt of ddl.split('--> statement-breakpoint')) await pg.exec(stmt);
+      }
+      const id = 'f1818181-1818-4181-8181-181818181818';
+      await pg.exec(`
+        insert into entries (id, member_id, day, time, tag, tags, stars)
+        values ('${id}', 'sh', '2026-08-12', '10:00', '영어', '["영어"]'::jsonb, 3)
+      `);
+
+      const ddl = readFileSync(`migrations/${studyMinutesMigration!}`, 'utf8');
+      for (const stmt of ddl.split('--> statement-breakpoint')) await pg.exec(stmt);
+      const migrated = await pg.query<{ study_minutes: number | null }>(
+        `select study_minutes from entries where id = '${id}'`,
+      );
+      expect(migrated.rows).toEqual([{ study_minutes: null }]);
+
+      await pg.exec(`update entries set study_minutes = 1 where id = '${id}'`);
+      await pg.exec(`update entries set study_minutes = ${STUDY_MINUTES_MAX} where id = '${id}'`);
+      await expect(pg.exec(`update entries set study_minutes = 0 where id = '${id}'`)).rejects.toThrow();
+      await expect(
+        pg.exec(`update entries set study_minutes = ${STUDY_MINUTES_MAX + 1} where id = '${id}'`),
+      ).rejects.toThrow();
+      await expect(
+        pg.exec(`update entries set tag = 'OFF', tags = '["OFF"]'::jsonb where id = '${id}'`),
+      ).rejects.toThrow();
+      await pg.exec(`
+        update entries set study_minutes = null, tag = 'OFF', tags = '["OFF"]'::jsonb
+        where id = '${id}'
+      `);
+    } finally {
+      await pg.close();
+    }
+  });
+});
+
 describe('study day queries', () => {
   it('기록은 멱등하고 입력의 중복·깨진 날짜를 걸러낸다', async () => {
     await recordStudyDays(db, 'sh', ['2026-08-10', '2026-08-11', '2026-08-10']);
@@ -489,6 +550,136 @@ describe('sync queries', () => {
     await pushEntries(db, [entry({ id: C, m: 'th', tags: ['OFF'], stars: 4 })], 'th');
     const r = await pullSince(db, null);
     expect(r.rows.find((x) => x.id === C)!.stars).toBeNull();
+  });
+});
+
+describe('공부시간 동기화', () => {
+  const E = 'a1818181-1818-4181-8181-181818181818';
+  const L = 'a2828282-2828-4282-8282-282828282828';
+  const O = 'a3838383-3838-4383-8383-383838383838';
+  const P1 = 'b1818181-1818-4181-8181-181818181818';
+  const P2 = 'b2828282-2828-4282-8282-282828282828';
+  const P3 = 'b3838383-3838-4383-8383-383838383838';
+  const P4 = 'b4848484-4848-4484-8484-484848484848';
+
+  it('CAS에서 photos와 studyMinutes의 누락/명시 값을 독립적으로 반영한다', async () => {
+    const created = await pushEntries(db, [entry({
+      id: E,
+      m: 'th',
+      studyMinutes: 90,
+      photos: [{ id: P1, w: 1600, h: 900 }],
+    })], 'th');
+    expect(created.applied[0]).toMatchObject({ studyMinutes: 90, photos: [{ id: P1, w: 1600, h: 900 }] });
+
+    // studyMinutes 누락 + photos 명시 []: 시간은 보존하고 사진만 지운다.
+    const { studyMinutes: _study1, ...withoutStudy } = {
+      ...created.applied[0]!,
+      photos: [],
+    };
+    const photoRemoved = await pushEntries(db, [withoutStudy as unknown as Entry], 'th');
+    expect(photoRemoved.applied[0]).toMatchObject({ studyMinutes: 90, photos: [] });
+
+    // 두 필드 모두 명시하면 둘 다 반영한다(삭제된 사진 id 대신 새 id 사용).
+    const bothSet = await pushEntries(db, [{
+      ...photoRemoved.applied[0]!,
+      studyMinutes: 45,
+      photos: [{ id: P2, w: 800, h: 600 }],
+    }], 'th');
+    expect(bothSet.applied[0]).toMatchObject({ studyMinutes: 45, photos: [{ id: P2, w: 800, h: 600 }] });
+
+    // photos 누락 + studyMinutes 명시 null: 사진은 보존하고 시간만 삭제한다.
+    const { photos: _photos1, ...withoutPhotos } = {
+      ...bothSet.applied[0]!,
+      studyMinutes: null,
+    };
+    const studyRemoved = await pushEntries(db, [withoutPhotos as Entry], 'th');
+    expect(studyRemoved.applied[0]).toMatchObject({ studyMinutes: null, photos: [{ id: P2, w: 800, h: 600 }] });
+
+    // 둘 다 누락된 구버전 수정은 두 값을 그대로 둔다.
+    const { photos: _photos2, studyMinutes: _study2, ...withoutBoth } = {
+      ...studyRemoved.applied[0]!,
+      memo: '구버전 CAS 수정',
+    };
+    const preserved = await pushEntries(db, [withoutBoth as Entry], 'th');
+    expect(preserved.applied[0]).toMatchObject({
+      memo: '구버전 CAS 수정',
+      studyMinutes: null,
+      photos: [{ id: P2, w: 800, h: 600 }],
+    });
+  });
+
+  it('legacy LWW에서도 photos와 studyMinutes의 누락/명시 값을 독립적으로 반영한다', async () => {
+    const { v: _v1, ...first } = entry({
+      id: L,
+      m: 'jj',
+      studyMinutes: 120,
+      photos: [{ id: P3, w: 1200, h: 800 }],
+    });
+    const [created] = await pushEntriesLegacy(db, [first], 'jj');
+
+    const { v: _v2, studyMinutes: _study1, ...studyOmitted } = {
+      ...created!,
+      photos: [],
+    };
+    const [photoRemoved] = await pushEntriesLegacy(
+      db,
+      [studyOmitted as unknown as Omit<Entry, 'v'>],
+      'jj',
+    );
+    expect(photoRemoved).toMatchObject({ studyMinutes: 120, photos: [] });
+
+    const { v: _v3, ...both } = {
+      ...photoRemoved!,
+      studyMinutes: 30,
+      photos: [{ id: P4, w: 900, h: 1200 }],
+    };
+    const [bothSet] = await pushEntriesLegacy(db, [both], 'jj');
+
+    const { v: _v4, photos: _photos1, ...photosOmitted } = {
+      ...bothSet!,
+      studyMinutes: null,
+    };
+    const [studyRemoved] = await pushEntriesLegacy(
+      db,
+      [photosOmitted as unknown as Omit<Entry, 'v'>],
+      'jj',
+    );
+    expect(studyRemoved).toMatchObject({
+      studyMinutes: null,
+      photos: [{ id: P4, w: 900, h: 1200 }],
+    });
+
+    const { v: _v5, photos: _photos2, studyMinutes: _study2, ...bothOmitted } = {
+      ...studyRemoved!,
+      memo: '구버전 LWW 수정',
+    };
+    const [preserved] = await pushEntriesLegacy(
+      db,
+      [bothOmitted as unknown as Omit<Entry, 'v'>],
+      'jj',
+    );
+    expect(preserved).toMatchObject({
+      memo: '구버전 LWW 수정',
+      studyMinutes: null,
+      photos: [{ id: P4, w: 900, h: 1200 }],
+    });
+  });
+
+  it('공부시간을 모르는 구버전 요청이 OFF로 바꿔도 DB에는 null만 남는다', async () => {
+    const created = await pushEntries(db, [entry({ id: O, m: 'wg', studyMinutes: 80 })], 'wg');
+    const { studyMinutes: _study, ...legacyOff } = {
+      ...created.applied[0]!,
+      tag: 'OFF' as const,
+      tags: ['OFF'] as Entry['tags'],
+      stars: 4,
+    };
+    const changed = await pushEntries(db, [legacyOff as Entry], 'wg');
+    expect(changed.applied[0]).toMatchObject({ tags: ['OFF'], stars: null, studyMinutes: null });
+
+    const stored = await db.execute(sql`
+      select study_minutes from entries where id = ${O}::uuid
+    `);
+    expect(stored.rows).toEqual([{ study_minutes: null }]);
   });
 });
 

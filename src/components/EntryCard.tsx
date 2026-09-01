@@ -1,7 +1,8 @@
 import type { Comment, Entry, MemberId, ReactionEmoji, ReactionSet } from '../../shared/types';
-import { entryTags, isOffTags } from '../../shared/types';
+import { STUDY_MINUTES_MAX, entryTags, isOffTags } from '../../shared/types';
 import { memberOf } from '../lib/constants';
 import { mosaicArea, mosaicGrid, mosaicPhotoKind, photoStatusOf, shownPhotos } from '../lib/photos';
+import { formatStudyMinutes } from '../lib/studyTime';
 import type { PhotoUploadInfo } from '../local/store';
 import { Avatar, BANG_D, CheckMark, ClockIcon, Icon, StarsRow } from './icons';
 import { Chip, MoreChip } from './Chip';
@@ -47,6 +48,13 @@ export function EntryCard({
   // 구버전 IDB 행(tags 없음)도 대표 태그에서 되살아난다 — 항상 1개 이상이다
   const tags = entryTags(e);
   const hasStars = !isOffTags(tags) && (e.stars ?? 0) > 0;
+  // 구버전 IDB 행에는 필드가 없을 수 있다 — 값이 있는 기록에만 시간 배지를 세운다.
+  const studyMinutes = !isOffTags(tags) && typeof e.studyMinutes === 'number'
+    && Number.isSafeInteger(e.studyMinutes) && e.studyMinutes > 0
+    && e.studyMinutes <= STUDY_MINUTES_MAX
+    ? e.studyMinutes
+    : null;
+  const studyTimeLabel = studyMinutes === null ? '' : formatStudyMinutes(studyMinutes);
   const doneN = e.todos.filter((t) => t.done).length;
   const photoN = e.photos.length;
   // 라이트박스에 세울 수 있는 사진 — 여기서의 자리(index)가 곧 라이트박스의 자리다
@@ -76,6 +84,13 @@ export function EntryCard({
                 )}
               </span>
               {hasStars && <StarsRow n={e.stars ?? 0} w={55} h={11} />}
+              {studyMinutes !== null && (
+                <span className="study-time-badge compact" role="img"
+                  aria-label={`공부 시간 ${studyTimeLabel}`}>
+                  <ClockIcon size={12} />
+                  {studyTimeLabel}
+                </span>
+              )}
             </>
           )}
           {/* 내 기록이면 어디서 보든(피드·캘린더) 고치고 지울 수 있다 */}
@@ -93,6 +108,13 @@ export function EntryCard({
               <Chip key={t} tag={t} variant="md" />
             ))}
             {hasStars && <StarsRow n={e.stars ?? 0} w={66} h={13} />}
+            {studyMinutes !== null && (
+              <span className="study-time-badge" role="img"
+                aria-label={`공부 시간 ${studyTimeLabel}`}>
+                <ClockIcon size={13} />
+                {studyTimeLabel}
+              </span>
+            )}
             {e.todos.length > 0 && (
               <span className="todo-count">할 일 {doneN}/{e.todos.length}</span>
             )}

@@ -4,12 +4,18 @@
    모바일 셸이고, 스코프·기간·필터는 App이 드는 상태라 값을 그대로 넣어 준다. */
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import type { Entry, Tag } from '../../shared/types';
+import type { Entry, MemberId, Tag } from '../../shared/types';
 import { StatsView, type StatPeriod, type StatScope } from './StatsView';
 
-function entry(id: string, day: string, tags: Tag[] = ['영어']): Entry {
+function entry(
+  id: string,
+  day: string,
+  tags: Tag[] = ['영어'],
+  studyMinutes: number | null = null,
+): Entry {
   return {
     id, m: 'sh', day, time: '12:00', tag: tags[0] ?? '기타', tags, stars: 4,
+    studyMinutes,
     memo: '', body: '', todos: [], photos: [],
     v: 0, updatedAt: '2026-08-16T03:00:00.000Z', deletedAt: null,
   };
@@ -17,10 +23,11 @@ function entry(id: string, day: string, tags: Tag[] = ['영어']): Entry {
 
 function view(opts: {
   entries?: Entry[]; scope?: StatScope; period?: StatPeriod; rawSel?: Tag | null; today?: Date;
+  studyDays?: Partial<Record<MemberId, ReadonlySet<string>>>;
 }): string {
   const today = opts.today ?? new Date(2026, 7, 16); // 2026-08-16 (로컬)
   return renderToStaticMarkup(
-    <StatsView entries={opts.entries ?? []} studyDays={{}} statuses={{}} meId="sh"
+    <StatsView entries={opts.entries ?? []} studyDays={opts.studyDays ?? {}} statuses={{}} meId="sh"
       now={today.getTime()} today={today}
       scope={opts.scope ?? 'me'} period={opts.period ?? 'cur'} rawSel={opts.rawSel ?? null}
       onScope={() => {}} onPeriod={() => {}} onSel={() => {}} />,
@@ -80,6 +87,100 @@ describe('통계 잔디와 집계', () => {
     // 승환 스트립은 기록 없는 미래 날 14칸, 나머지 넷은 15칸씩
     expect(html.split('st-strip-cell future').length - 1).toBe(14 + 15 * 4);
     expect(html).toContain('8월 승환 공부한 날 2일 — 10일, 20일');
+  });
+});
+
+describe('수동 공부시간 통계', () => {
+  it('나 × 월은 같은 날 여러 기록을 합산하고 시간 입력일만 평균 분모로 센다', () => {
+    const html = view({
+      entries: [
+        entry('a', '2026-08-10', ['영어'], 30),
+        entry('b', '2026-08-10', ['자격증'], 90),
+        entry('c', '2026-08-11', ['영어'], null),
+        entry('d', '2026-08-12', ['영어'], 60),
+      ],
+    });
+
+    expect(html).toContain('<dt class="st-stat-label">총시간</dt><dd class="st-stat-val">3시간</dd>');
+    expect(html).toContain('시간 입력일 평균</dt><dd class="st-stat-val">1시간 30분</dd>');
+    expect(html).toContain('10일 2시간, 12일 1시간');
+    expect(html).not.toContain('11일 0분'); // null은 실제 0분이 아니다
+  });
+
+  it('기간 탭과 태그 필터를 함께 따르며 다중 태그 기록의 시간은 통째로 포함한다', () => {
+    const html = view({
+      period: 'prev',
+      rawSel: '영어',
+      entries: [
+        entry('a', '2026-07-10', ['자격증', '영어'], 60),
+        entry('b', '2026-07-11', ['자격증'], 30),
+        entry('c', '2026-08-10', ['영어'], 120),
+      ],
+    });
+
+    expect(html).toContain('영어 포함 기록 시간 기준');
+    expect(html).toContain('<dt class="st-stat-label">총시간</dt><dd class="st-stat-val">1시간</dd>');
+    expect(html).not.toContain('시간 입력일 평균</dt><dd class="st-stat-val">1시간 30분</dd>');
+  });
+
+  it('나 × 전체는 월별 분포와 전체 합계·입력일 평균을 보여 준다', () => {
+    const html = view({
+      period: 'all',
+      entries: [
+        entry('a', '2026-08-10', ['영어'], 60),
+        entry('b', '2026-09-05', ['영어'], 90),
+      ],
+    });
+
+    expect(html).toContain('<dt class="st-stat-label">총시간</dt><dd class="st-stat-val">2시간 30분</dd>');
+    expect(html).toContain('시간 입력일 평균</dt><dd class="st-stat-val">1시간 15분</dd>');
+    expect(html).toContain('aria-label="8월 1시간"');
+    expect(html).toContain('aria-label="9월 1시간 30분"');
+  });
+
+  it('체크인 도장과 null 기록은 공부시간을 만들어 내지 않는다', () => {
+    const html = view({
+      entries: [entry('a', '2026-08-11', ['영어'], null)],
+      studyDays: { sh: new Set(['2026-08-10']) },
+    });
+
+    // 잔디에는 기록일과 도장일이 모두 남지만 시간 카드는 둘 다 시간으로 추정하지 않는다.
+    expect(html).toContain('공부한 날 2일');
+    expect(html).toContain('이 기간에는 입력한 공부시간이 없어요');
+    expect(html).toContain('<dt class="st-stat-label">총시간</dt><dd class="st-stat-val">미입력</dd>');
+  });
+
+  it('크루는 기존 공부일 순서를 유지한 채 멤버별 총시간 막대를 그린다', () => {
+    const html = view({
+      scope: 'crew',
+      entries: [
+        entry('a', '2026-08-10', ['영어'], 60),
+        { ...entry('b', '2026-08-11', ['영어'], 120), m: 'wg' },
+        { ...entry('c', '2026-08-12', ['영어'], null), m: 'th' },
+      ],
+    });
+
+    expect(html).toContain('aria-label="승환 총 공부시간 1시간"');
+    expect(html).toContain('aria-label="웅 총 공부시간 2시간"');
+    expect(html).toContain('aria-label="태현 총 공부시간 미입력"');
+    expect(html).toContain('width:50%');
+    expect(html).toContain('width:100%');
+    expect(html.indexOf('승환 총 공부시간')).toBeLessThan(html.indexOf('웅 총 공부시간'));
+  });
+
+  it('크루 전원이 미입력이면 0분 막대 대신 빈 상태를 보여 준다', () => {
+    const html = view({
+      scope: 'crew',
+      entries: [
+        entry('a', '2026-08-10', ['영어'], null),
+        { ...entry('b', '2026-08-11', ['영어'], null), m: 'wg' },
+      ],
+      studyDays: { th: new Set(['2026-08-12']) },
+    });
+
+    expect(html).toContain('이 기간에는 입력한 공부시간이 없어요');
+    expect(html).not.toContain('st-time-crew');
+    expect(html).not.toContain('총 공부시간 0분');
   });
 });
 

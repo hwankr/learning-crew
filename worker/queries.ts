@@ -80,6 +80,8 @@ function toEntry(r: typeof entries.$inferSelect): Entry {
     tag: primaryTag(tags),
     tags,
     stars: r.stars,
+    // tag/tags가 손상된 과거 행도 프로토콜에서는 OFF ⇒ null 불변식을 지킨다.
+    studyMinutes: isOffTags(tags) ? null : r.studyMinutes,
     memo: r.memo,
     body: r.body,
     todos: r.todos as Todo[],
@@ -105,6 +107,8 @@ function toInsertRow(e: Omit<Entry, 'v'>, version: number) {
     tags,
     // 비-OFF+null은 레거시 "평가 없음"으로 보존하고, OFF만 DB 경계에서 null로 강제한다.
     stars: isOffTags(tags) ? null : e.stars,
+    // 신규 구버전 행(필드 누락)은 null로 시작한다. 기존 행 보존은 UPDATE SET에서 처리한다.
+    studyMinutes: isOffTags(tags) ? null : (e.studyMinutes ?? null),
     memo: e.memo,
     body: e.body,
     todos: e.todos,
@@ -116,9 +120,9 @@ function toInsertRow(e: Omit<Entry, 'v'>, version: number) {
   };
 }
 
-/** onConflictDoUpdate가 공유하는 내용 필드 갱신 — version/updated_at은 호출부가 정한다.
-    photos는 별도로 더한다. 구버전 push의 필드 누락을 [] 삭제로 오인하지 않으려면
-    "포함된 행"과 "누락된 행"을 다른 upsert SET으로 보내야 한다. */
+/** onConflictDoUpdate가 공유하는 필수 내용 필드 — version/updated_at은 호출부가 정한다.
+    photos/studyMinutes는 각각 누락이 "기존 값 보존"이라는 프로토콜 의미를 가지므로
+    존재 여부 조합별 그룹이 아래에서 별도의 SET을 만든다. */
 const CONTENT_SET = {
   day: sql`excluded.day`,
   time: sql`excluded.time`,
@@ -133,14 +137,49 @@ const CONTENT_SET = {
 
 const PHOTO_SET = { photos: sql`excluded.photos` } as const;
 
-/** 구버전 행의 photos 누락을 기존 DB 값 보존으로 처리하는 CAS upsert.
-    신규 행은 toInsertRow의 []가 저장되고, 기존 행은 includePhotos=false일 때
-    SET에 photos를 넣지 않아 갱신 시점의 값을 원자적으로 그대로 둔다. */
+/** 공부시간이 명시됐으면 null(삭제)까지 그대로 반영한다. 누락됐으면 기존 값을 보존하되,
+    같은 구버전 요청이 태그를 OFF로 바꾼 경우에는 OFF ⇒ null 불변식을 우선한다. */
+function entryContentSet(includePhotos: boolean, includeStudyMinutes: boolean) {
+  return {
+    ...CONTENT_SET,
+    ...(includePhotos ? PHOTO_SET : {}),
+    studyMinutes: includeStudyMinutes
+      ? sql`excluded.study_minutes`
+      : sql`case when excluded.tag = 'OFF' then null else ${entries.studyMinutes} end`,
+  };
+}
+
+interface EntryUpdateGroup<T> {
+  rows: T[];
+  includePhotos: boolean;
+  includeStudyMinutes: boolean;
+}
+
+/** 독립적인 optional-field 존재 비트를 네 그룹으로 나눈다. 한쪽 필드가 누락됐다는 이유로
+    다른 쪽의 명시적 빈 값([]/null)이 보존 처리되는 교차 오염을 막는다. */
+function entryUpdateGroups<T extends Omit<Entry, 'v'>>(rows: T[]): EntryUpdateGroup<T>[] {
+  const groups: EntryUpdateGroup<T>[] = [];
+  for (const includePhotos of [true, false]) {
+    for (const includeStudyMinutes of [true, false]) {
+      const grouped = rows.filter((e) =>
+        (e.photos !== undefined) === includePhotos &&
+        (e.studyMinutes !== undefined) === includeStudyMinutes,
+      );
+      if (grouped.length > 0) groups.push({ rows: grouped, includePhotos, includeStudyMinutes });
+    }
+  }
+  return groups;
+}
+
+/** 구버전 행의 optional 필드 누락을 기존 DB 값 보존으로 처리하는 CAS upsert.
+    신규 행은 toInsertRow의 기본값([], null)이 저장되고, 기존 행은 각 include 플래그에
+    맞춘 SET으로 갱신 시점의 값을 원자적으로 그대로 둔다. */
 async function pushEntriesCasGroup(
   db: Db,
   rows: Entry[],
   me: MemberId,
   includePhotos: boolean,
+  includeStudyMinutes: boolean,
 ): Promise<(typeof entries.$inferSelect)[]> {
   if (rows.length === 0) return [];
   return db
@@ -149,8 +188,7 @@ async function pushEntriesCasGroup(
     .onConflictDoUpdate({
       target: entries.id,
       set: {
-        ...CONTENT_SET,
-        ...(includePhotos ? PHOTO_SET : {}),
+        ...entryContentSet(includePhotos, includeStudyMinutes),
         version: sql`excluded.version`,
         updatedAt: sql`now()`,
       },
@@ -173,14 +211,16 @@ export interface PushOutcome {
       전송이 겹쳐도 한쪽만 반영된다. 불일치 행은 현재 서버 행을 conflicts로 돌려준다. */
 export async function pushEntries(db: Db, rows: Entry[], me: MemberId): Promise<PushOutcome> {
   if (rows.length === 0) return { applied: [], conflicts: [] };
-  // undefined인 행은 구버전 프로토콜: 빈 배열을 보낸 것이 아니므로 기존 값을 보존한다.
-  const withPhotos = rows.filter((e) => e.photos !== undefined);
-  const withoutPhotos = rows.filter((e) => e.photos === undefined);
-  const [withReturned, withoutReturned] = await Promise.all([
-    pushEntriesCasGroup(db, withPhotos, me, true),
-    pushEntriesCasGroup(db, withoutPhotos, me, false),
-  ]);
-  const returned = [...withReturned, ...withoutReturned];
+  // undefined는 구버전 프로토콜의 보존 신호다. photos와 studyMinutes를 독립적으로 나눈다.
+  const returned = (await Promise.all(
+    entryUpdateGroups(rows).map((group) => pushEntriesCasGroup(
+      db,
+      group.rows,
+      me,
+      group.includePhotos,
+      group.includeStudyMinutes,
+    )),
+  )).flat();
   const appliedIds = new Set(returned.map((r) => r.id));
   const missed = rows.filter((e) => !appliedIds.has(e.id)).map((e) => e.id);
   const current = missed.length
@@ -201,6 +241,7 @@ export async function pushEntriesLegacy(
   const run = async (
     group: Omit<Entry, 'v'>[],
     includePhotos: boolean,
+    includeStudyMinutes: boolean,
   ): Promise<(typeof entries.$inferSelect)[]> => {
     if (group.length === 0) return [];
     return db
@@ -209,8 +250,7 @@ export async function pushEntriesLegacy(
       .onConflictDoUpdate({
         target: entries.id,
         set: {
-          ...CONTENT_SET,
-          ...(includePhotos ? PHOTO_SET : {}),
+          ...entryContentSet(includePhotos, includeStudyMinutes),
           version: sql`${entries.version} + 1`,
           updatedAt: sql`now()`,
         },
@@ -218,11 +258,13 @@ export async function pushEntriesLegacy(
       })
       .returning();
   };
-  const [withReturned, withoutReturned] = await Promise.all([
-    run(rows.filter((e) => e.photos !== undefined), true),
-    run(rows.filter((e) => e.photos === undefined), false),
-  ]);
-  const returned = [...withReturned, ...withoutReturned];
+  const returned = (await Promise.all(
+    entryUpdateGroups(rows).map((group) => run(
+      group.rows,
+      group.includePhotos,
+      group.includeStudyMinutes,
+    )),
+  )).flat();
   return returned.map(toEntry);
 }
 

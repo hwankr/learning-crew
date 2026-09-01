@@ -275,13 +275,43 @@ describe('saveGate (한 장짜리 시트의 저장 문턱)', () => {
   it('막힌 이유는 태그 → 별점 → 내용 순으로 하나씩만 알린다', () => {
     expect(saveGate(m({})).blocked).toBe('무엇을 했는지 골라주세요');
     expect(saveGate(m({ tags: ['영어'] })).blocked).toBe('만족도를 골라주세요');
-    expect(saveGate(m({ tags: ['영어'], stars: 3 })).blocked).toBe('기록을 한 줄 적거나 사진을 넣어주세요');
+    expect(saveGate(m({ tags: ['영어'], stars: 3 })).blocked)
+      .toBe('기록을 적거나 사진 또는 공부 시간을 입력해 주세요');
     expect(saveGate(m({ tags: ['영어'], stars: 3, body: '한 줄' })).blocked).toBe('');
   });
 
   it('쉬는 날은 별점을 묻지 않는다 — 내용만 있으면 저장된다', () => {
-    expect(saveGate(m({ tags: ['OFF'] })).blocked).toBe('기록을 한 줄 적거나 사진을 넣어주세요');
+    expect(saveGate(m({ tags: ['OFF'] })).blocked)
+      .toBe('기록을 적거나 사진 또는 공부 시간을 입력해 주세요');
     expect(saveGate(m({ tags: ['OFF'], body: '재충전' })).canSave).toBe(true);
+  });
+
+  it('공부시간만 적어도 새 기록의 내용으로 친다', () => {
+    const gate = saveGate(m({
+      tags: ['영어'], stars: 4, studyHoursInput: '1', studyMinutesInput: '30',
+    }));
+    expect(gate.canSave).toBe(true);
+    expect(gate.hasContent).toBe(true);
+    expect(gate.studyMinutes).toBe(90);
+  });
+
+  it('잘못 적은 공부시간은 저장을 막고 구체적인 이유를 말한다', () => {
+    const badMinute = saveGate(m({
+      tags: ['영어'], stars: 4, studyHoursInput: '1', studyMinutesInput: '60', body: '본문',
+    }));
+    expect(badMinute.canSave).toBe(false);
+    expect(badMinute.blocked).toBe('분은 0~59로 입력해 주세요');
+
+    const tooLong = saveGate(m({
+      tags: ['영어'], stars: 4, studyHoursInput: '24', studyMinutesInput: '1', body: '본문',
+    }));
+    expect(tooLong.blocked).toBe('하루 공부 시간은 24시간 이내로 입력해 주세요');
+  });
+
+  it('OFF는 폼에 남은 공부시간을 저장 문턱과 저장값에서 무시한다', () => {
+    const gate = saveGate(m({ tags: ['OFF'], studyHoursInput: '2', body: '재충전' }));
+    expect(gate.canSave).toBe(true);
+    expect(gate.studyMinutes).toBeNull();
   });
 
   it('수정은 내용을 다 지워도 저장할 수 있다 — 지우는 것도 수정이다', () => {
@@ -305,7 +335,7 @@ describe('saveGate (한 장짜리 시트의 저장 문턱)', () => {
 
   it('사진을 준비하는 중이면 아직 비어 있어도 막지 않는다 — 저장은 준비가 끝난 뒤 이어진다', () => {
     const sheet = m({ tags: ['영어'], stars: 3 });
-    expect(saveGate(sheet).blocked).toBe('기록을 한 줄 적거나 사진을 넣어주세요');
+    expect(saveGate(sheet).blocked).toBe('기록을 적거나 사진 또는 공부 시간을 입력해 주세요');
     const gate = saveGate(sheet, true);
     expect(gate.canSave).toBe(true);
     expect(gate.blocked).toBe('');

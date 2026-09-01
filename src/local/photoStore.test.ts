@@ -41,6 +41,7 @@ function entry(photos: EntryPhoto[], partial: Partial<Entry> = {}): Entry {
     updatedAt: '2026-08-15T00:00:00.000Z',
     deletedAt: null,
     ...partial,
+    studyMinutes: partial.studyMinutes ?? null,
   };
 }
 
