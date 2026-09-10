@@ -2,8 +2,7 @@
    끄기는 카드의 "공부 종료" 하나뿐이다(장소 타일을 다시 눌러 끄던 예전 규칙은
    켜진 동안 타일이 아예 안 보이므로 사라졌다). */
 import { PLACES, isStatusActive, type MemberStatus, type Place } from '../../shared/types';
-import { fmtElapsed, type CopySet } from '../lib/constants';
-import { StudyPlaceIcon } from './icons';
+import { PLACE_ICON, fmtElapsed, type CopySet } from '../lib/constants';
 
 export function StatusBar({
   status, wit, now, onSet,
@@ -21,7 +20,7 @@ export function StatusBar({
         <div className="chk-head">
           <span className="live-dot" />
           <span className="chk-on">{wit.statusOn}</span>
-          <span className="chk-place-ico"><StudyPlaceIcon place={place} /></span>
+          <span className="chk-place-ico">{PLACE_ICON[place]}</span>
         </div>
         <div className="chk-time">
           <span className="chk-elapsed">{status.since ? fmtElapsed(status.since, now) : ''}</span>
@@ -41,7 +40,7 @@ export function StatusBar({
       <div className="chk-places">
         {PLACES.map((p) => (
           <button key={p} className="chk-tile" onClick={() => onSet(true, p)}>
-            <span className="chk-tile-ico"><StudyPlaceIcon place={p} /></span>
+            <span className="chk-tile-ico">{PLACE_ICON[p]}</span>
             <span className="chk-tile-label">{p}</span>
           </button>
         ))}

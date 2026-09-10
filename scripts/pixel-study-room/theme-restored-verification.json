@@ -1,0 +1,382 @@
+{
+  "result": "PASS",
+  "branch": "feat/pixel-study-room",
+  "restoredFiles": [
+    {
+      "file": "src/styles.css",
+      "identicalTo": "66fba35",
+      "sha256": "bbd7824baff6c448b42043ed422e520e2b2525b02b440974faaedddd6862c439"
+    },
+    {
+      "file": "src/components/icons.tsx",
+      "identicalTo": "66fba35",
+      "sha256": "61644ad9a7dccfe136efc50b4a7deeb48d6037968f7e772fb70ebe1c53f0b237"
+    },
+    {
+      "file": "src/components/StatusBar.tsx",
+      "identicalTo": "66fba35",
+      "sha256": "73ec16b10865ca8313ff6e883d0e7343e03f825c06824412c206479e83a95745"
+    },
+    {
+      "file": "src/components/PixelCharacter.tsx",
+      "identicalTo": "66fba35",
+      "sha256": "89e8a3daafa11b555bb00693d0bbf625c2fd2ac8ff9ef79d83d445da9ab2e3a9"
+    }
+  ],
+  "build": {
+    "command": "npm run build",
+    "result": "PASS"
+  },
+  "tests": {
+    "command": "npm test -- --run",
+    "filesPassed": 44,
+    "testsPassed": 755
+  },
+  "integration": {
+    "script": "scripts/pixel-study-room/check-integration.js",
+    "viewports": [
+      "1440x1000",
+      "390x844"
+    ],
+    "result": "PASS",
+    "checks": [
+      "Original white theme, original avatars, separate check-in and home section order, no outer study-space card",
+      "Check-in arrives at the study seat; roster, keyboard map selection and mood changes preserve the active walk and study state",
+      "Settings disclose, pause and resume; ending study restores four place choices; other location and selected member remain intact; no API calls or page overflow"
+    ]
+  },
+  "app": {
+    "result": "PASS",
+    "viewports": [
+      {
+        "width": 1440,
+        "height": 1000,
+        "body": "rgb(255, 255, 255)",
+        "screen": "rgb(255, 255, 255)",
+        "overflow": false,
+        "mapWidth": 268,
+        "noOuterCard": true,
+        "originalOrder": true,
+        "checkinHeight": 46,
+        "originalAvatars": true,
+        "globalFeatureColors": ""
+      },
+      {
+        "width": 1280,
+        "height": 900,
+        "body": "rgb(255, 255, 255)",
+        "screen": "rgb(255, 255, 255)",
+        "overflow": false,
+        "mapWidth": 268,
+        "noOuterCard": true,
+        "originalOrder": true,
+        "checkinHeight": 46,
+        "originalAvatars": true,
+        "globalFeatureColors": ""
+      },
+      {
+        "width": 1024,
+        "height": 768,
+        "body": "rgb(255, 255, 255)",
+        "screen": "rgb(255, 255, 255)",
+        "overflow": false,
+        "mapWidth": 268,
+        "noOuterCard": true,
+        "originalOrder": true,
+        "checkinHeight": 46,
+        "originalAvatars": true,
+        "globalFeatureColors": ""
+      },
+      {
+        "width": 900,
+        "height": 900,
+        "body": "rgb(255, 255, 255)",
+        "screen": "rgb(255, 255, 255)",
+        "overflow": false,
+        "mapWidth": 268,
+        "noOuterCard": true,
+        "originalOrder": true,
+        "checkinHeight": 46,
+        "originalAvatars": true,
+        "globalFeatureColors": ""
+      },
+      {
+        "width": 899,
+        "height": 900,
+        "body": "rgb(255, 255, 255)",
+        "screen": "rgb(255, 255, 255)",
+        "overflow": false,
+        "mapWidth": 844,
+        "noOuterCard": true,
+        "originalOrder": true,
+        "checkinHeight": 46,
+        "originalAvatars": true,
+        "globalFeatureColors": ""
+      },
+      {
+        "width": 768,
+        "height": 1024,
+        "body": "rgb(255, 255, 255)",
+        "screen": "rgb(255, 255, 255)",
+        "overflow": false,
+        "mapWidth": 713,
+        "noOuterCard": true,
+        "originalOrder": true,
+        "checkinHeight": 46.00000762939453,
+        "originalAvatars": true,
+        "globalFeatureColors": ""
+      },
+      {
+        "width": 390,
+        "height": 844,
+        "body": "rgb(255, 255, 255)",
+        "screen": "rgb(255, 255, 255)",
+        "overflow": false,
+        "mapWidth": 335,
+        "noOuterCard": true,
+        "originalOrder": true,
+        "checkinHeight": 46,
+        "originalAvatars": true,
+        "globalFeatureColors": ""
+      },
+      {
+        "width": 320,
+        "height": 740,
+        "body": "rgb(255, 255, 255)",
+        "screen": "rgb(255, 255, 255)",
+        "overflow": false,
+        "mapWidth": 265,
+        "noOuterCard": true,
+        "originalOrder": true,
+        "checkinHeight": 46,
+        "originalAvatars": true,
+        "globalFeatureColors": ""
+      }
+    ],
+    "checks": [
+      "White app surfaces, original check-in dimensions, avatars and section order at eight widths; no main card, overflow or feature colors on the global root",
+      "Real mobile touch starts library study; camera buttons are at least 44px and touch pans both axes",
+      "Mobile home, feed, calendar and statistics navigation render without errors or page overflow",
+      "Token-free app demo makes no API requests"
+    ],
+    "touchDrag": {
+      "left": 115,
+      "top": 115
+    }
+  },
+  "demo": {
+    "result": "PASS",
+    "viewports": [
+      {
+        "width": 1440,
+        "height": 1000,
+        "zoom": 1,
+        "mapHeight": 520,
+        "overflow": false,
+        "sameWorld": true,
+        "sameActors": true,
+        "sameWalk": true,
+        "correctLayout": true,
+        "quickCheckinVisible": true,
+        "galleryAfterControls": true,
+        "selection": "sh",
+        "studying": "3명 공부 중"
+      },
+      {
+        "width": 1280,
+        "height": 900,
+        "zoom": 1,
+        "mapHeight": 520,
+        "overflow": false,
+        "sameWorld": true,
+        "sameActors": true,
+        "sameWalk": true,
+        "correctLayout": true,
+        "quickCheckinVisible": true,
+        "galleryAfterControls": true,
+        "selection": "sh",
+        "studying": "3명 공부 중"
+      },
+      {
+        "width": 1100,
+        "height": 900,
+        "zoom": 1,
+        "mapHeight": 451,
+        "overflow": false,
+        "sameWorld": true,
+        "sameActors": true,
+        "sameWalk": true,
+        "correctLayout": true,
+        "quickCheckinVisible": true,
+        "galleryAfterControls": true,
+        "selection": "sh",
+        "studying": "3명 공부 중"
+      },
+      {
+        "width": 1099,
+        "height": 900,
+        "zoom": 1,
+        "mapHeight": 520,
+        "overflow": false,
+        "sameWorld": true,
+        "sameActors": true,
+        "sameWalk": true,
+        "correctLayout": true,
+        "quickCheckinVisible": true,
+        "galleryAfterControls": true,
+        "selection": "sh",
+        "studying": "3명 공부 중"
+      },
+      {
+        "width": 1024,
+        "height": 768,
+        "zoom": 1,
+        "mapHeight": 445,
+        "overflow": false,
+        "sameWorld": true,
+        "sameActors": true,
+        "sameWalk": true,
+        "correctLayout": true,
+        "quickCheckinVisible": true,
+        "galleryAfterControls": true,
+        "selection": "sh",
+        "studying": "3명 공부 중"
+      },
+      {
+        "width": 900,
+        "height": 900,
+        "zoom": 1,
+        "mapHeight": 520,
+        "overflow": false,
+        "sameWorld": true,
+        "sameActors": true,
+        "sameWalk": true,
+        "correctLayout": true,
+        "quickCheckinVisible": true,
+        "galleryAfterControls": true,
+        "selection": "sh",
+        "studying": "3명 공부 중"
+      },
+      {
+        "width": 768,
+        "height": 1024,
+        "zoom": 1.5,
+        "mapHeight": 438,
+        "overflow": false,
+        "sameWorld": true,
+        "sameActors": true,
+        "sameWalk": true,
+        "correctLayout": true,
+        "quickCheckinVisible": true,
+        "galleryAfterControls": true,
+        "selection": "sh",
+        "studying": "3명 공부 중"
+      },
+      {
+        "width": 680,
+        "height": 900,
+        "zoom": 2,
+        "mapHeight": 300,
+        "overflow": false,
+        "sameWorld": true,
+        "sameActors": true,
+        "sameWalk": true,
+        "correctLayout": true,
+        "quickCheckinVisible": true,
+        "galleryAfterControls": true,
+        "selection": "sh",
+        "studying": "3명 공부 중"
+      },
+      {
+        "width": 390,
+        "height": 844,
+        "zoom": 2.5,
+        "mapHeight": 268,
+        "overflow": false,
+        "sameWorld": true,
+        "sameActors": true,
+        "sameWalk": true,
+        "correctLayout": true,
+        "quickCheckinVisible": true,
+        "galleryAfterControls": true,
+        "selection": "sh",
+        "studying": "3명 공부 중"
+      },
+      {
+        "width": 320,
+        "height": 740,
+        "zoom": 3,
+        "mapHeight": 240,
+        "overflow": false,
+        "sameWorld": true,
+        "sameActors": true,
+        "sameWalk": true,
+        "correctLayout": true,
+        "quickCheckinVisible": true,
+        "galleryAfterControls": true,
+        "selection": "sh",
+        "studying": "3명 공부 중"
+      },
+      {
+        "width": 844,
+        "height": 390,
+        "zoom": 2.5,
+        "mapHeight": 226,
+        "overflow": false,
+        "sameWorld": true,
+        "sameActors": true,
+        "sameWalk": true,
+        "correctLayout": true,
+        "quickCheckinVisible": true,
+        "galleryAfterControls": true,
+        "selection": "sh",
+        "studying": "3명 공부 중"
+      },
+      {
+        "width": 1440,
+        "height": 1000,
+        "zoom": 1,
+        "mapHeight": 520,
+        "overflow": false,
+        "sameWorld": true,
+        "sameActors": true,
+        "sameWalk": true,
+        "correctLayout": true,
+        "quickCheckinVisible": true,
+        "galleryAfterControls": true,
+        "selection": "sh",
+        "studying": "3명 공부 중"
+      }
+    ],
+    "checks": [
+      "12 viewport transitions preserve the world, all actors, the active walk, selection and check-ins",
+      "Desktop crew rail, mobile quick check-in and secondary gallery remain correctly ordered without page overflow",
+      "Explicit zoom survives resizing; full view fits both dimensions at 320px",
+      "Mobile crew selector, quick check-in, crew cards and keyboard-selected map actor share the same state",
+      "Reduced motion disables all map animations; standalone preview makes no API requests"
+    ]
+  },
+  "demoSurfaces": [
+    {
+      "width": 1440,
+      "background": "rgb(255, 255, 255)",
+      "layoutBorder": "0px",
+      "shadow": "none",
+      "overflow": false
+    },
+    {
+      "width": 390,
+      "background": "rgb(255, 255, 255)",
+      "layoutBorder": "0px",
+      "shadow": "none",
+      "overflow": false
+    }
+  ],
+  "browserErrors": [],
+  "screenshots": [
+    "theme-restored-app-desktop.png",
+    "theme-restored-app-mobile.png",
+    "theme-restored-demo-desktop.png",
+    "theme-restored-demo-mobile.png"
+  ]
+}

@@ -1,0 +1,7 @@
+/* The original roster keeps its spacing; only its avatar gains a map action. */
+.crew-map-select { position: relative; display: grid; place-items: center; flex: none; width: 38px; height: 38px; padding: 0; background: transparent; border: 0; border-radius: 50%; cursor: pointer; }
+.crew-map-select::after { content: ''; position: absolute; inset: -3px; border-radius: 50%; }
+.crew-map-select:hover, .crew-map-select[aria-pressed="true"] { outline: 2px solid #FFB800; outline-offset: 2px; }
+.crew-map-select:focus-visible { outline: 2px solid #16181D; outline-offset: 3px; }
+.pixel-room-compact .pixel-map { scroll-margin-top: 84px; }
+@media (max-width: 899px) { .pixel-room-compact .pixel-map { scroll-margin-top: 20px; } }

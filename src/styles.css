@@ -8,17 +8,12 @@
   src: url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/woff2/PretendardVariable.woff2') format('woff2-variations');
 }
 
-:root {
-  --crew-paper: #f8f7f2; --crew-surface: #fffefa; --crew-soft: #f1eee5;
-  --crew-line: #e6e2d7; --crew-ink: #2c342e; --crew-muted: #777e72;
-  --crew-brand: #ffbd25; --crew-brand-soft: #fff2cc; --crew-leaf: #527956;
-}
 * { box-sizing: border-box; }
-html, body { margin: 0; padding: 0; background: var(--crew-paper); }
+html, body { margin: 0; padding: 0; background: #FFFFFF; }
 body {
   font-family: 'Pretendard', -apple-system, 'Apple SD Gothic Neo', sans-serif;
   -webkit-font-smoothing: antialiased;
-  color: var(--crew-ink);
+  color: #16181D;
 }
 a { color: #1B72D8; text-decoration: none; }
 a:hover { color: #14579F; }
@@ -33,16 +28,16 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 
 /* ---------- 셸 (상단 바 + 접히는 크루 패널) ---------- */
 /* 상단 바는 ≥900px에서만 그려진다(좁은 화면은 하단 탭바 셸) — 여기 값도 그 폭 기준이다 */
-.screen { min-height: 100vh; background: var(--crew-paper); }
+.screen { min-height: 100vh; background: #FFFFFF; }
 /* 스크롤해도 남는 줄 — 탭·기록 버튼이 화면 밖으로 나가면 긴 피드 한가운데서 갈 곳이 없어진다 */
-.topbar { position: sticky; top: 0; z-index: 10; background: var(--crew-surface); border-bottom: 1px solid var(--crew-line); }
+.topbar { position: sticky; top: 0; z-index: 10; background: #FFFFFF; border-bottom: 1px solid #F1F3F6; }
 .topbar-inner {
   display: flex; align-items: center; gap: 16px;
   max-width: 1512px; margin: 0 auto; padding: 13px 28px;
 }
 .panel-btn {
   display: flex; align-items: center; gap: 6px; flex: none; height: 36px; padding: 0 12px;
-  border: 1px solid var(--crew-line); border-radius: 10px; background: var(--crew-surface); color: var(--crew-muted);
+  border: 1px solid #E4E7EC; border-radius: 10px; background: #FFFFFF; color: #4E555F;
   font-size: 11.5px; font-weight: 700; white-space: nowrap; cursor: pointer;
   transition: background 160ms ease, color 160ms ease;
 }
@@ -63,7 +58,7 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 .brand-word { position: relative; padding: 0.08em 0.26em 0.12em; }
 .brand-box {
   position: absolute; top: 0; bottom: 0; left: 50%; width: 50%;
-  background: var(--crew-brand); border-radius: 0.3em;
+  background: #FFB800; border-radius: 0.3em;
 }
 /* 왕복은 느긋하게 — 건너가서 잠깐 머물고 돌아와 다시 머문다(양 끝 dwell).
    쉼 없이 오가면 로고가 조급해 보인다. :hover가 아니라 .run(상태)인 이유는
@@ -102,12 +97,12 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 /* 밑줄 아래로 라벨이 처지지 않게 같은 두께만큼 위를 채워 수직 중심을 지킨다 */
 .seg-btn > span, .seg-btn::after { padding-top: 7.5px; }
 .seg-btn.on { color: #16181D; font-weight: 800; }
-.seg-btn.on > span { border-bottom-color: var(--crew-brand); }
+.seg-btn.on > span { border-bottom-color: #FFB800; }
 .top-gap { flex: 1; }
 .top-cta {
   display: flex; align-items: center; justify-content: center; gap: 7px; flex: none;
   height: 38px; padding: 0 16px; border: none; border-radius: 999px;
-  background: var(--crew-brand); color: var(--crew-ink); font-size: 13px; font-weight: 800; white-space: nowrap;
+  background: #FFB800; color: #16181D; font-size: 13px; font-weight: 800; white-space: nowrap;
   cursor: pointer; transition: background 140ms;
 }
 .top-cta:hover { background: #F5B000; }
@@ -135,7 +130,7 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
 /* ---------- 모바일 셸 (하단 탭바 + 떠 있는 기록 버튼) ---------- */
 /* 홈 머리 — 상단 바가 없는 셸에서 여기가 유일한 이름표다.
    아래 체크인이 스스로 16px을 띄우므로 여기서는 나머지 4px만 보탠다(합쳐서 디자인의 20px). */
-.mhome-head { margin-bottom: 16px; }
+.mhome-head { margin-bottom: 4px; }
 .mhome-title { font-size: 21px; font-weight: 800; letter-spacing: -0.02em; line-height: 1.2; }
 .mhome-sub { font-size: 12.5px; color: #6B7280; margin-top: 5px; }
 
@@ -145,7 +140,7 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 15;
   display: flex; align-items: stretch; height: calc(66px + env(safe-area-inset-bottom));
   padding-bottom: env(safe-area-inset-bottom);
-  border-top: 1px solid var(--crew-line); border-radius: 16px 16px 0 0; background: var(--crew-surface);
+  border-top: 1px solid #F1F3F6; border-radius: 16px 16px 0 0; background: #FFFFFF;
 }
 .tab {
   flex: 1; min-width: 0; display: flex; flex-direction: column;
@@ -1908,7 +1903,7 @@ input::placeholder, textarea::placeholder { color: #C3C9D2; }
     padding-left: 0; border-left: 1px solid transparent;
     transition: padding-left 300ms cubic-bezier(0.4, 0, 0.2, 1), border-color 300ms ease;
   }
-  .body.open .main-col { padding-left: 36px; border-left-color: var(--crew-line); }
+  .body.open .main-col { padding-left: 36px; border-left-color: #F1F3F6; }
   /* 피드 — 제목이 서고 메타는 그 옆의 잔글씨로 물러난다 */
   .feed-title { display: block; }
   .feed-meta { font-size: 12.5px; font-weight: 400; }

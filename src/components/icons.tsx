@@ -1,7 +1,5 @@
-import { useId, useRef, useState, type CSSProperties } from 'react';
+import { useRef, useState, type CSSProperties } from 'react';
 import type { Member } from '../lib/constants';
-import type { Place } from '../../shared/types';
-import { PixelFace } from './PixelCharacter';
 
 export const STAR_D =
   'M12 2.6l2.9 5.9 6.5 1-4.7 4.6 1.1 6.5-5.8-3.1-5.8 3.1 1.1-6.5-4.7-4.6 6.5-1z';
@@ -26,16 +24,6 @@ export function Icon({ d, size, sw }: { d: string; size: number; sw: number }) {
       <path d={d} />
     </svg>
   );
-}
-
-export function StudyPlaceIcon({ place }: { place: Place }) {
-  return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6"
-    strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={block}>
-    {place === '도서관' ? <><path d="M12 6v15M3 4h5a4 4 0 0 1 4 2 4 4 0 0 1 4-2h5v15h-5a5 5 0 0 0-4 2 5 5 0 0 0-4-2H3Z" /></>
-      : place === '집' ? <><path d="m3 10 9-7 9 7M5 9v12h14V9M9 21v-8h6v8" /></>
-        : place === '카페' ? <><path d="M4 7h12v8a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5ZM16 8h2a3 3 0 0 1 0 6h-2M3 22h16M8 2v2M12 2v2" /></>
-          : <><path d="M19 10c0 5-7 11-7 11S5 15 5 10a7 7 0 0 1 14 0Z" /><circle cx="12" cy="10" r="2.5" /></>}
-  </svg>;
 }
 
 /** 톱니(알림 설정) — 축과 테두리 두 조각이라 단일 path인 Icon으로는 못 그린다.
@@ -125,16 +113,19 @@ export function Avatar({
   className?: string;
   bg?: string;
 }) {
-  const clipId = useId();
   const style: CSSProperties = { ...block };
   if (opacity !== undefined) style.opacity = opacity;
   if (bg) style.background = bg;
   return (
-    <svg width={size} height={size} viewBox="0 0 48 48" className={className} style={style} aria-hidden="true" data-crew-avatar={m.id}>
-      <defs><clipPath id={clipId}><circle cx={24} cy={24} r={19.5} /></clipPath></defs>
+    <svg width={size} height={size} viewBox="0 0 48 48" className={className} style={style}>
       <circle cx={24} cy={24} r={21.5} fill={m.soft} stroke={ring ?? m.color} strokeWidth={3}
         strokeDasharray={dash ?? '0'} />
-      <g clipPath={`url(#${clipId})`}><svg x={4} y={4} width={40} height={40}><PixelFace m={m} /></svg></g>
+      <circle cx={24} cy={27} r={12.5} fill="#F6D7BC" />
+      <path d={m.hair} fill={m.hairC} />
+      <circle cx={19.5} cy={27.5} r={1.6} fill="#23262E" />
+      <circle cx={28.5} cy={27.5} r={1.6} fill="#23262E" />
+      <path d="M20.5 31.5c1 1.2 2.2 1.8 3.5 1.8s2.5-.6 3.5-1.8" stroke="#23262E" strokeWidth={1.6}
+        fill="none" strokeLinecap="round" />
     </svg>
   );
 }

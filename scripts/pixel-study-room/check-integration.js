@@ -5,32 +5,34 @@
   assert(new URLSearchParams(location.search).get('user') === '승환' && !localStorage.getItem('lc-token'), 'Use the token-free 승환 app demo');
   assert(document.querySelector('.demo-note') || document.querySelector('.mhome-head'), 'App demo is not visible');
   const room = document.querySelector('.pixel-room');
-  const campus = room.closest('.crew-campus');
   const world = room.querySelector('.pixel-room-world');
   const actor = (id) => world.querySelector(`.px-actor[data-member="${id}"]`);
   const button = (label) => document.querySelector(`button[aria-label="${label}"]`);
   const selected = () => room.querySelector('.pixel-room-insight').dataset.selectedMember;
   const report = [];
-  assert(campus?.querySelector('.crew') && room.querySelector('.pixel-room-checkin .chk-off'), 'Check-in, map and roster are not composed together');
   const members = ['sh', 'wg', 'th', 'jj', 'kj'];
-  for (const id of members) {
-    const expected = actor(id).querySelector('image').getAttribute('href');
-    const avatars = [...document.querySelectorAll(`[data-crew-avatar="${id}"] image`)];
-    assert(avatars.length >= 2 && avatars.every((image) => image.getAttribute('href') === expected), `${id}: avatars do not match the world character`);
+  const checkin = document.querySelector('.chk-off');
+  assert(checkin && !room.contains(checkin) && !document.querySelector('.crew-campus'), 'The original check-in or open layout was replaced');
+  const sections = [checkin, room, document.querySelector('.evlead'), document.querySelector('.crew'), document.querySelector('.mon')];
+  assert(sections.every((section, i) => section && (!i || sections[i - 1].compareDocumentPosition(section) & Node.DOCUMENT_POSITION_FOLLOWING)), 'Original home section order changed');
+  for (const selector of ['html', 'body', '.screen', '.topbar']) {
+    const surface = document.querySelector(selector);
+    if (surface) assert(getComputedStyle(surface).backgroundColor === 'rgb(255, 255, 255)', `${selector}: original white background changed`);
   }
-  const clipIds = [...document.querySelectorAll('[data-crew-avatar] clipPath')].map((clip) => clip.id);
-  assert(clipIds.length === new Set(clipIds).size, 'Shared avatars have duplicate SVG clip IDs');
-  report.push('PASS: check-in, map and roster share one surface; app avatars reuse the same five character assets with unique clip IDs');
+  const roomStyle = getComputedStyle(room);
+  assert(roomStyle.borderTopWidth === '0px' && roomStyle.boxShadow === 'none', 'An outer card still encloses the study space');
+  assert(!document.querySelector('.crew-av image'), 'Existing app avatars were replaced');
+  report.push('PASS: original white theme, avatars, separate check-in and section order; study space has no outer card');
   const settings = room.querySelector('.pixel-room-settings');
   assert(!settings.open, 'Advanced controls should initially be folded');
   settings.querySelector('summary').click();
   button('자율 행동').click();
   await sleep(80);
-  const ownCheckin = [...room.querySelectorAll('.chk-tile')].find((tile) => tile.textContent.trim() === '도서관');
+  const ownCheckin = [...document.querySelectorAll('.chk-tile')].find((tile) => tile.querySelector('.chk-tile-label')?.textContent === '도서관');
   ownCheckin.click();
   await sleep(100);
   const walk = actor('sh').getAnimations()[0];
-  assert(walk?.playState === 'running', 'The integrated check-in did not start a walk');
+  assert(walk?.playState === 'running', 'The original check-in did not start a walk');
   const afterCheckin = members.map((id) => actor(id).dataset.activity).join();
   button('웅 크루 상태 보기').click();
   await sleep(100);
@@ -54,14 +56,14 @@
     await sleep(70);
   }
   assert(actor('sh').dataset.activity === 'library' && actor('sh').dataset.spot === 'home', 'Study did not arrive at the real study seat');
-  report.push('PASS: integrated study check-in arrives; roster, map keyboard selection and mood changes preserve the active walk and every check-in');
+  report.push('PASS: original study check-in arrives; roster, map keyboard selection and mood changes preserve the active walk and every check-in');
   settings.querySelector('summary').click();
   button('캐릭터 움직임 끄기').click();
   await sleep(100);
   assert(room.querySelector('.pixel-room-stage').getAnimations({ subtree: true }).every((a) => a.playState !== 'running'), 'Settings pause left a character moving');
-  room.querySelector('.chk-end').click();
+  document.querySelector('.chk-end').click();
   await sleep(100);
-  assert(actor('sh').dataset.activity === 'rest' && room.querySelectorAll('.chk-tile').length === 4, 'Ending study did not restore place choices');
+  assert(actor('sh').dataset.activity === 'rest' && document.querySelectorAll('.chk-tile').length === 4, 'Ending study did not restore place choices');
   assert(button('진주 크루 상태 보기').getAttribute('aria-pressed') === 'true', 'Own check-in overwrote the selected crew member');
   button('캐릭터 움직임 켜기').click();
   settings.querySelector('summary').click();

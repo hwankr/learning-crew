@@ -72,9 +72,9 @@ function CrewRow({
 
   const avatar = <LiveAvatar live={live} m={m} size={38} className="crew-av"
     ring={active ? m.color : '#CDD2DB'} dash={active ? '0' : '5 4'}
-    opacity={active || selectedId === m.id ? undefined : 0.5} />;
+    opacity={active ? undefined : 0.5} />;
   return (
-    <div className={'crew-row' + (selectedId === m.id ? ' crew-row-selected' : '')}>
+    <div className="crew-row">
       {onSelectMember ? <button type="button" className="crew-map-select" aria-label={`${m.name} 크루 상태 보기`}
         aria-pressed={selectedId === m.id} title="캐릭터와 공부 상태 보기" onClick={() => onSelectMember(m.id)}>{avatar}</button> : avatar}
       <div className="crew-main">
