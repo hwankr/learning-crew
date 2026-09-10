@@ -2,18 +2,24 @@ import { useCallback, useLayoutEffect, useRef, useState, type ReactNode } from '
 import type { MemberId } from '../../shared/types';
 
 /** Camera movement is independent of the world: zooming never restarts an actor's walk. */
-export function PixelMapViewport({ selected, compact, motion, children }: {
-  selected: MemberId; compact: boolean; motion: boolean; children: ReactNode;
+export function PixelMapViewport({ selected, motion, children }: {
+  selected: MemberId; motion: boolean; children: ReactNode;
 }) {
   const viewport = useRef<HTMLDivElement>(null);
   const pendingCenter = useRef<{ x: number; y: number } | null>(null);
   const drag = useRef<{ x: number; y: number; left: number; top: number } | null>(null);
-  const [zoom, setZoom] = useState(() => typeof window !== 'undefined' && (compact || window.innerWidth < 680) ? 2.5 : 1);
+  const [manualZoom, setManualZoom] = useState<number | null>(null);
   const [baseWidth, setBaseWidth] = useState<number>();
+  // Keep characters legible in a sidebar as well as a phone. Explicit zoom choices
+  // survive resizing; the default camera adapts to the space the map actually has.
+  const zoom = manualZoom ?? (baseWidth ? Math.min(3, Math.max(1, Math.ceil(700 / baseWidth * 2) / 2)) : 1);
   useLayoutEffect(() => {
     const element = viewport.current;
     if (!element) return;
-    const resize = () => setBaseWidth(Math.min(element.clientWidth, element.clientHeight * 1.6));
+    const resize = () => {
+      const width = Math.min(element.clientWidth, element.clientHeight * 1.6);
+      if (width > 0) setBaseWidth(width);
+    };
     resize();
     const observer = new ResizeObserver(resize);
     observer.observe(element);
@@ -38,10 +44,11 @@ export function PixelMapViewport({ selected, compact, motion, children }: {
     } else focusMember();
   }, [zoom, baseWidth, focusMember]);
   const changeZoom = (value: number) => {
+    const next = Math.max(1, Math.min(3, value));
     const element = viewport.current;
-    if (element) pendingCenter.current = { x: (element.scrollLeft + element.clientWidth / 2) / element.scrollWidth,
+    if (element && next !== zoom) pendingCenter.current = { x: (element.scrollLeft + element.clientWidth / 2) / element.scrollWidth,
       y: (element.scrollTop + element.clientHeight / 2) / element.scrollHeight };
-    setZoom(Math.max(1, Math.min(3, value)));
+    setManualZoom(next);
   };
   return <div className="pixel-map">
     <div className="pixel-map-toolbar" role="group" aria-label="지도 보기">

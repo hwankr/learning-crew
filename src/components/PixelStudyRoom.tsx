@@ -90,7 +90,7 @@ export function PixelStudyRoom({ statuses, now, meId, compact = false, selectedI
         </div>}
         <span className="pixel-room-live"><span />{studying}명 공부 중</span>
       </div>
-      <PixelMapViewport selected={selected} compact={compact} motion={motion}>
+      <PixelMapViewport selected={selected} motion={motion}>
         <svg viewBox={`0 0 ${ROOM_WIDTH} ${ROOM_HEIGHT}`} className="pixel-room-world"
           role="group" aria-label={description} shapeRendering="crispEdges">
           <g aria-hidden="true"><PixelRoomBackdrop /></g>

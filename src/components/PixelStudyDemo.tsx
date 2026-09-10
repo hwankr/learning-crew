@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { isStatusActive, type MemberId, type MemberStatus } from '../../shared/types';
-import { MEMBERS, fmtElapsed } from '../lib/constants';
+import { BY_ID, MEMBERS, fmtElapsed } from '../lib/constants';
 import { ROOM_PERSONALITY } from '../lib/pixelRoom';
 import { PixelPortrait } from './PixelCharacter';
 import { PixelStudyRoom } from './PixelStudyRoom';
@@ -61,6 +61,9 @@ export function PixelStudyDemo() {
   }, [playing, announce]);
 
   const studying = MEMBERS.filter((m) => isStatusActive(statuses[m.id], now)).length;
+  const selectedMember = BY_ID[selectedId];
+  const selectedStatus = statuses[selectedId];
+  const selectedActive = isStatusActive(selectedStatus, now);
   const setMember = (id: MemberId, on: boolean) => {
     setPlaying(false);
     const at = Date.now();
@@ -113,12 +116,23 @@ export function PixelStudyDemo() {
         </div>
         <div className="pixel-demo-layout">
           <div className="pixel-demo-scene">
+            <div className="pixel-demo-quick" role="group" aria-label="선택한 크루 체크인">
+              <span className="pixel-demo-avatar" style={{ background: selectedMember.soft }}><PixelPortrait m={selectedMember} /></span>
+              <div className="pixel-demo-quick-copy">
+                <select aria-label="체크인할 크루" value={selectedId} onChange={(event) => setSelectedId(event.target.value as MemberId)}>
+                  {MEMBERS.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                </select>
+                <span>{selectedActive && selectedStatus.since ? `도서관 · ${fmtElapsed(selectedStatus.since, now)}` : '캠퍼스에서 쉬는 중'}</span>
+              </div>
+              <button type="button" className="pixel-demo-checkin" aria-pressed={selectedActive}
+                aria-label={`선택한 ${selectedMember.name} ${selectedActive ? '공부 종료' : '도서관에서 공부 시작'}`}
+                onClick={() => setMember(selectedId, !selectedActive)}>{selectedActive ? '공부 종료' : '공부 시작'}</button>
+            </div>
             <PixelStudyRoom statuses={statuses} now={now} selectedId={selectedId} onSelectMember={setSelectedId} />
             <div className="pixel-demo-caption" role="status" aria-live="polite">
               <span aria-hidden="true">↳</span> {message}
             </div>
           </div>
-          <PixelCharacterGallery />
           <aside className="pixel-demo-controls" aria-label="크루 공부 상태 시연">
             <div className="pixel-demo-crew-head"><h2>함께하는 크루</h2><span>{studying}<span> / {MEMBERS.length}</span></span></div>
             <p className="pixel-demo-crew-sub"><span className="pixel-demo-online-dot" />{studying ? `${studying}명이 각자의 페이지를 채우고 있어요` : '시작을 기다리는 조용한 공간'}</p>
@@ -153,6 +167,7 @@ export function PixelStudyDemo() {
             <div className="pixel-demo-note"><span aria-hidden="true">✳</span><p>시연은 실제 공부 기록에 반영되지 않아요. 캐릭터의 산책과 대화는 공간 속 연출이며, 공부 중 표시와 시간은 체크인 상태를 따라가요.</p></div>
           </aside>
         </div>
+        <PixelCharacterGallery />
         <footer className="pixel-demo-footer"><span>잠깐 쉬어가도, 우리는 같은 곳에.</span><span>LEARNING CREW · MADE FOR OUR LITTLE EVERYDAY</span></footer>
       </main>
     </div>
