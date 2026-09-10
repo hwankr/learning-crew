@@ -3,6 +3,8 @@
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const assert = (value, message) => { if (!value) throw Error(message); };
   const gallery = document.querySelector('.pixel-character-gallery');
+  const disclosure = gallery.closest('details');
+  if (disclosure && !disclosure.open) { disclosure.querySelector('summary').click(); await sleep(100); }
   const button = (root, label) => [...root.querySelectorAll('button')].find((b) => b.textContent.trim() === label || b.getAttribute('aria-label') === label);
   const sprites = () => [...gallery.querySelectorAll('.px-sprite-sheet')];
   const results = [];

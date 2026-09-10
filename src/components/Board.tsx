@@ -30,7 +30,7 @@ function LiveAvatar({ live, ...av }: { live: boolean } & Parameters<typeof Avata
 }
 
 function CrewRow({
-  m, todays, status, now, todayKey, meId, wit, photoUploads, onOpenPhoto,
+  m, todays, status, now, todayKey, meId, wit, photoUploads, onOpenPhoto, selectedId, onSelectMember,
 }: {
   m: Member;
   todays: Entry[];
@@ -41,6 +41,8 @@ function CrewRow({
   wit: CopySet;
   photoUploads: Map<string, PhotoUploadInfo>;
   onOpenPhoto: (e: Entry, photoId: string) => void;
+  selectedId?: MemberId;
+  onSelectMember?: (id: MemberId) => void;
 }) {
   const mine = todays.filter((e) => e.m === m.id).sort((a, b) => b.time.localeCompare(a.time));
   const latest = mine[0];
@@ -68,11 +70,13 @@ function CrewRow({
   // 오늘 최신 기록의 사진 — 올라가는 중인 내 사진은 아직 아무도 못 보므로 세지 않는다
   const shown = latest ? shownPhotos(latest.photos, isMe, photoUploads) : [];
 
+  const avatar = <LiveAvatar live={live} m={m} size={38} className="crew-av"
+    ring={active ? m.color : '#CDD2DB'} dash={active ? '0' : '5 4'}
+    opacity={active || selectedId === m.id ? undefined : 0.5} />;
   return (
-    <div className="crew-row">
-      <LiveAvatar live={live} m={m} size={38} className="crew-av"
-        ring={active ? m.color : '#CDD2DB'} dash={active ? '0' : '5 4'}
-        opacity={active ? undefined : 0.5} />
+    <div className={'crew-row' + (selectedId === m.id ? ' crew-row-selected' : '')}>
+      {onSelectMember ? <button type="button" className="crew-map-select" aria-label={`${m.name} 크루 상태 보기`}
+        aria-pressed={selectedId === m.id} title="캐릭터와 공부 상태 보기" onClick={() => onSelectMember(m.id)}>{avatar}</button> : avatar}
       <div className="crew-main">
         <div className="crew-name">
           <span className="crew-nm">{m.name}</span>
@@ -102,7 +106,7 @@ function CrewRow({
 }
 
 export function Board({
-  todays, statuses, now, todayKey, meId, wit, photoUploads, onOpenPhoto,
+  todays, statuses, now, todayKey, meId, wit, photoUploads, onOpenPhoto, selectedId, onSelectMember,
 }: {
   todays: Entry[];
   statuses: Partial<Record<MemberId, MemberStatus>>;
@@ -112,6 +116,8 @@ export function Board({
   wit: CopySet;
   photoUploads: Map<string, PhotoUploadInfo>;
   onOpenPhoto: (e: Entry, photoId: string) => void;
+  selectedId?: MemberId;
+  onSelectMember?: (id: MemberId) => void;
 }) {
   const done = MEMBERS.filter((m) => hasTodayStudyStamp(statuses[m.id], now, todayKey)).length;
 
@@ -124,7 +130,8 @@ export function Board({
       {MEMBERS.map((m) => (
         <CrewRow key={m.id} m={m} todays={todays} status={statuses[m.id]} now={now}
           todayKey={todayKey} meId={meId}
-          wit={wit} photoUploads={photoUploads} onOpenPhoto={onOpenPhoto} />
+          wit={wit} photoUploads={photoUploads} onOpenPhoto={onOpenPhoto}
+          selectedId={selectedId} onSelectMember={onSelectMember} />
       ))}
     </div>
   );

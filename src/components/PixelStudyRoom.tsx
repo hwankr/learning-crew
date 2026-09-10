@@ -1,11 +1,11 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useState, type ReactNode } from 'react';
 import type { MemberId, MemberStatus } from '../../shared/types';
 import { BY_ID, MEMBERS, fmtElapsed } from '../lib/constants';
 import {
   ROOM_HEIGHT, ROOM_WIDTH, ROOM_PERSONALITY, roomActivity, roomDestination, roomStatusLabel,
   type RoomMood,
 } from '../lib/pixelRoom';
-import { PixelPortrait } from './PixelCharacter';
+import { Avatar } from './icons';
 import { PixelDesk, PixelDeskLight } from './PixelRoomArt';
 import { PixelFrontWall, PixelRoomBackdrop, PixelRoomForeground } from './PixelCampusArt';
 import { PixelMapViewport } from './PixelMapViewport';
@@ -29,13 +29,14 @@ export function MoodIcon({ mood }: { mood: RoomMood }) {
   </svg>;
 }
 
-export function PixelStudyRoom({ statuses, now, meId, compact = false, selectedId, onSelectMember }: {
+export function PixelStudyRoom({ statuses, now, meId, compact = false, selectedId, onSelectMember, checkin }: {
   statuses: Partial<Record<MemberId, MemberStatus>>;
   now: number;
   meId?: MemberId;
   compact?: boolean;
   selectedId?: MemberId;
   onSelectMember?: (id: MemberId) => void;
+  checkin?: ReactNode;
 }) {
   const [paused, setPaused] = useState(false);
   const [autonomous, setAutonomous] = useState(true);
@@ -78,11 +79,30 @@ export function PixelStudyRoom({ statuses, now, meId, compact = false, selectedI
   }));
   const layers = [...scenery, ...actors, { key: 'front-wall', depth: 358, node: <PixelFrontWall /> }].sort((a, b) => a.depth - b.depth);
 
+  const roomTools = <div className="pixel-room-tools">
+    <button type="button" className="pixel-life-toggle" aria-pressed={autonomous} aria-label="자율 행동"
+      onClick={() => { if (autonomous) returnHome(); setAutonomous((value) => !value); }}>
+      <span aria-hidden="true">{autonomous ? '✦' : '·'}</span>자율 행동 {autonomous ? '켜짐' : '꺼짐'}
+    </button>
+    {!compact && <button type="button" className="pixel-life-speed" aria-label={`캐릭터 속도 ${speed}배`} onClick={() => setSpeed((value) => value === 1 ? 2 : 1)}>{speed}×</button>}
+    {compact && <button type="button" className="pixel-mood-cycle" onClick={() => setMood(nextMood.id)}
+      aria-label={`현재 ${MOODS[moodIndex]!.label} · ${nextMood.label} 분위기로 바꾸기`}>
+      <MoodIcon mood={mood} />{MOODS[moodIndex]!.label}
+    </button>}
+    <button type="button" className="pixel-motion-toggle" aria-pressed={paused}
+      aria-label={paused ? '캐릭터 움직임 켜기' : '캐릭터 움직임 끄기'} onClick={() => setPaused((value) => !value)}>
+      <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+        {paused ? <path d="m5 3 7 5-7 5z" fill="currentColor" /> : <path d="M4 3h3v10H4zM9 3h3v10H9z" fill="currentColor" />}
+      </svg>
+      {paused ? '움직임 켜기' : '움직임 끄기'}
+    </button>
+  </div>;
+
   return (
     <section className={'pixel-room' + (compact ? ' pixel-room-compact' : '')} aria-label="크루 도서관" data-mood={mood}
       data-autonomous={autonomous} data-life-clock={life.clock}>
       <div className="pixel-room-head">
-        <div className="pixel-room-heading"><div className="pixel-room-title"><span className="pixel-room-mark" aria-hidden="true">✦</span> 숲속 캠퍼스</div>
+        <div className="pixel-room-heading"><div className="pixel-room-title"><span className="pixel-room-mark" aria-hidden="true">✦</span> 우리의 공부 공간</div>
           {!compact && <span className="pixel-room-subtitle">{MOODS.find((m) => m.id === mood)!.description}</span>}</div>
         {!compact && <div className="pixel-room-moods" role="group" aria-label="공간 분위기">
           {MOODS.map((option) => <button key={option.id} type="button" aria-pressed={mood === option.id}
@@ -90,6 +110,7 @@ export function PixelStudyRoom({ statuses, now, meId, compact = false, selectedI
         </div>}
         <span className="pixel-room-live"><span />{studying}명 공부 중</span>
       </div>
+      {checkin && <div className="pixel-room-checkin">{checkin}</div>}
       <PixelMapViewport selected={selected} motion={motion}>
         <svg viewBox={`0 0 ${ROOM_WIDTH} ${ROOM_HEIGHT}`} className="pixel-room-world"
           role="group" aria-label={description} shapeRendering="crispEdges">
@@ -100,7 +121,7 @@ export function PixelStudyRoom({ statuses, now, meId, compact = false, selectedI
         </svg>
       </PixelMapViewport>
       <div className="pixel-room-insight" data-selected-member={selected}>
-        <span className="pixel-room-insight-avatar" style={{ background: BY_ID[selected].soft }}><PixelPortrait m={BY_ID[selected]} /></span>
+        <span className="pixel-room-insight-avatar"><Avatar m={BY_ID[selected]} size={compact ? 30 : 38} /></span>
         <div className="pixel-room-insight-copy"><strong>{BY_ID[selected].name}<span>{selectedActivity === 'library' ? '도서관' : selectedActivity === 'rest' ? '휴식 중' : selectedStatus?.place ?? '기타'}</span></strong><span>{details}</span></div>
         <span className="pixel-room-insight-time">{selectedActivity !== 'rest' && selectedStatus?.since ? fmtElapsed(selectedStatus.since, now) : '잠깐의 여유'}</span>
       </div>
@@ -111,26 +132,12 @@ export function PixelStudyRoom({ statuses, now, meId, compact = false, selectedI
       </div>}
       <div className="pixel-room-foot">
         <span className="pixel-room-rest"><span />휴식 {resting}명{away.length > 0 ? ` · 다른 장소 ${away.length}명` : ''}</span>
-        <div className="pixel-room-tools">
-        <button type="button" className="pixel-life-toggle" aria-pressed={autonomous} aria-label="자율 행동"
-          onClick={() => { if (autonomous) returnHome(); setAutonomous((value) => !value); }}>
-          <span aria-hidden="true">{autonomous ? '✦' : '·'}</span>자율 행동 {autonomous ? '켜짐' : '꺼짐'}
-        </button>
-        {!compact && <button type="button" className="pixel-life-speed" aria-label={`캐릭터 속도 ${speed}배`} onClick={() => setSpeed((value) => value === 1 ? 2 : 1)}>{speed}×</button>}
-        {compact && <button type="button" className="pixel-mood-cycle" onClick={() => setMood(nextMood.id)}
-          aria-label={`현재 ${MOODS[moodIndex]!.label} · ${nextMood.label} 분위기로 바꾸기`}>
-          <MoodIcon mood={mood} />{MOODS[moodIndex]!.label}
-        </button>}
-        <button type="button" className="pixel-motion-toggle" aria-pressed={paused}
-          aria-label={paused ? '캐릭터 움직임 켜기' : '캐릭터 움직임 끄기'} onClick={() => setPaused((value) => !value)}>
-          <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
-            {paused ? <path d="m5 3 7 5-7 5z" fill="currentColor" /> : <path d="M4 3h3v10H4zM9 3h3v10H9z" fill="currentColor" />}
-          </svg>
-          {paused ? '움직임 켜기' : '움직임 끄기'}
-        </button>
-        </div>
+        {compact ? <details className="pixel-room-settings">
+          <summary>공간 설정</summary>
+          {roomTools}
+          <p className="pixel-room-fiction-note">산책과 대화는 캐릭터의 작은 일상 연출이에요.</p>
+        </details> : roomTools}
       </div>
-      {compact && <p className="pixel-room-fiction-note">산책과 대화는 캐릭터의 작은 일상 연출이에요.</p>}
       {away.length > 0 && <p className="pixel-room-away">다른 곳에서도 함께해요 · {away.map(({ m }) => `${m.name}(${statuses[m.id]?.place ?? '기타'})`).join(', ')}</p>}
     </section>
   );

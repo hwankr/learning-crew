@@ -41,3 +41,12 @@ export function PixelPortrait({ m }: { m: Member }) {
     <PixelCharacter m={m} motion={false} />
   </svg>;
 }
+
+/** The same character's face, cropped from a still frame for app-wide identity. */
+export function PixelFace({ m }: { m: Member }) {
+  const { width, height, columns, rows } = CHARACTER_FRAME;
+  const top = CHARACTER_CLIPS.idle.row * height + 34;
+  return <svg width="100%" height="100%" viewBox={`38 ${top} 116 116`} aria-hidden="true">
+    <image href={ATLASES[m.id]} width={width * columns} height={height * rows} />
+  </svg>;
+}
