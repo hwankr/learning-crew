@@ -63,7 +63,7 @@
   for (const label of ['밤', '비', '노을']) {
     button(`${label} 분위기`).click();
     await sleep(80);
-    assert(world.getAnimations({ subtree: true }).length === 0, `${label} ignores the motion preference`);
+    assert(world.getAnimations({ subtree: true }).every((animation) => animation.playState !== 'running'), `${label} ignores the motion preference`);
   }
   button('캐릭터 움직임 켜기').click();
   await sleep(80);

@@ -21,6 +21,44 @@
 .pixel-demo-caption { display: flex; align-items: baseline; gap: 9px; min-height: 44px; padding: 12px 4px; color: #7d8c71; font-size: 10px; line-height: 1.6; }
 .pixel-demo-caption > span { color: #9daf88; }
 .pixel-demo-controls { min-width: 0; padding: 18px 0 0; }
+.pixel-character-gallery { margin: 8px 0 28px; padding: 23px 26px 15px; border: 1px solid #dce4d3; border-radius: 16px; background: #fafbf5; }
+.pixel-character-gallery-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.pixel-character-gallery-head p { margin: 0 0 7px; font: 600 8px ui-monospace, monospace; letter-spacing: 1.6px; color: #8a9879; }
+.pixel-character-gallery h2 { margin: 0; font-size: 19px; font-weight: 700; letter-spacing: -.045em; }
+.pixel-character-pause { flex: none; border: 1px solid #dce3d2; background: #f2f5e9; color: #7b896b; border-radius: 7px; padding: 8px 10px; min-height: 34px; font-size: 10px; cursor: pointer; }
+.pixel-character-scenes { display: flex; flex-wrap: wrap; gap: 5px; margin: 19px 0 7px; }
+.pixel-character-scenes button, .pixel-character-directions button { border: 1px solid transparent; border-radius: 20px; background: transparent; color: #879479; padding: 7px 12px; min-height: 33px; font-size: 10px; cursor: pointer; }
+.pixel-character-scenes button[aria-pressed="true"], .pixel-character-directions button[aria-pressed="true"] { border-color: #d8e2ca; background: #eaf0df; color: #506d42; font-weight: 650; }
+.pixel-character-cast { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 15px; }
+.pixel-character-cast figure { margin: 0; min-width: 0; padding: 2px 0 10px; text-align: center; }
+.pixel-character-plinth { position: relative; display: grid; place-items: center; height: 176px; border-radius: 50%; background: radial-gradient(ellipse at 50% 64%, color-mix(in srgb, var(--character-tint) 55%, transparent), transparent 64%); }
+.pixel-character-closeup { position: relative; display: block; width: 150px; height: 175px; overflow: visible; }
+.pixel-character-ground { position: absolute; bottom: 13px; left: 50%; width: 68px; height: 12px; transform: translateX(-50%); border-radius: 50%; background: #69795612; }
+.pixel-character-cast figcaption { display: flex; justify-content: center; align-items: center; gap: 6px; font-size: 12px; font-weight: 650; }
+.pixel-character-cast figcaption span { width: 5px; height: 5px; border-radius: 50%; }
+.pixel-character-gallery-foot { display: flex; min-height: 38px; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 5px 15px; border-top: 1px solid #e7ecde; margin-top: 8px; padding-top: 8px; }
+.pixel-character-gallery-foot > p { margin: 0; color: #8a967d; font-size: 10px; line-height: 1.7; }
+.pixel-character-directions { display: flex; gap: 2px; }
+.pixel-character-directions button { font-size: 9px; min-height: 30px; padding: 5px 8px; }
+@media (max-width: 680px) {
+  .pixel-character-gallery { padding: 18px 12px 12px; margin-bottom: 17px; }
+  .pixel-character-gallery h2 { font-size: 17px; }
+  .pixel-character-pause { padding: 7px 8px; font-size: 9px; }
+  .pixel-character-scenes { gap: 2px; margin-top: 15px; }
+  .pixel-character-scenes button { padding: 7px 10px; min-height: 35px; }
+  .pixel-character-cast { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 2px 0; }
+  .pixel-character-cast figure { grid-column: span 2; }
+  .pixel-character-cast figure:nth-child(4) { grid-column: 2 / span 2; }
+  .pixel-character-cast figure:nth-child(5) { grid-column: 4 / span 2; }
+  .pixel-character-plinth { height: 139px; }
+  .pixel-character-closeup { width: 120px; height: 140px; max-width: 135%; }
+  .pixel-character-ground { width: 47px; height: 9px; bottom: 10px; }
+  .pixel-character-cast figcaption { font-size: 10px; }
+  .pixel-character-cast figure { padding-bottom: 8px; }
+  .pixel-character-gallery-foot { padding-top: 10px; }
+  .pixel-character-directions { flex-wrap: wrap; }
+}
+@media (prefers-reduced-motion: reduce) { .pixel-character-gallery .px-sprite-sheet { animation: none !important; } }
 .pixel-demo-crew-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 0 8px; }
 .pixel-demo-crew-head h2 { margin: 0; font-size: 16px; font-weight: 750; letter-spacing: -.035em; }
 .pixel-demo-crew-head > span { color: #698455; font-size: 17px; font-weight: 750; font-variant-numeric: tabular-nums; }

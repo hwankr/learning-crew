@@ -1,4 +1,4 @@
-import { useCallback, useState, useSyncExternalStore } from 'react';
+import { useCallback, useState } from 'react';
 import type { MemberId, MemberStatus } from '../../shared/types';
 import { BY_ID, MEMBERS, fmtElapsed } from '../lib/constants';
 import {
@@ -11,22 +11,9 @@ import { PixelFrontWall, PixelRoomBackdrop, PixelRoomForeground } from './PixelC
 import { PixelMapViewport } from './PixelMapViewport';
 import { PixelRoomMember } from './PixelRoomMember';
 import { useRoomLife } from './useRoomLife';
+import { useRoomMotion } from './useRoomMotion';
 import { roomAgentBubble, roomAgentLabel, type RoomActivities } from '../lib/pixelLife';
 import './pixel-study-room.css';
-
-const REDUCED_MOTION = '(prefers-reduced-motion: reduce)';
-function subscribeMotion(cb: () => void): () => void {
-  const media = window.matchMedia(REDUCED_MOTION);
-  media.addEventListener('change', cb);
-  document.addEventListener('visibilitychange', cb);
-  return () => {
-    media.removeEventListener('change', cb);
-    document.removeEventListener('visibilitychange', cb);
-  };
-}
-function motionAllowed(): boolean {
-  return !window.matchMedia(REDUCED_MOTION).matches && document.visibilityState !== 'hidden';
-}
 
 const MOODS: { id: RoomMood; label: string; description: string }[] = [
   { id: 'sunset', label: '노을', description: '노을이 내려앉은 오후' },
@@ -63,7 +50,7 @@ export function PixelStudyRoom({ statuses, now, meId, compact = false, selectedI
   const onDepth = useCallback((id: MemberId, y: number) => {
     setDepths((old) => old[id] === y ? old : { ...old, [id]: y });
   }, []);
-  const allowed = useSyncExternalStore(subscribeMotion, motionAllowed, () => false);
+  const allowed = useRoomMotion();
   const motion = allowed && !paused;
   const members = MEMBERS.map((m, index) => ({ m, index, activity: roomActivity(statuses[m.id], now) }));
   const activities = Object.fromEntries(members.map(({ m, activity }) => [m.id, activity])) as RoomActivities;

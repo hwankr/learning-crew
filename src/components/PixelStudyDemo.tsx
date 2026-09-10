@@ -4,6 +4,7 @@ import { MEMBERS, fmtElapsed } from '../lib/constants';
 import { ROOM_PERSONALITY } from '../lib/pixelRoom';
 import { PixelPortrait } from './PixelCharacter';
 import { PixelStudyRoom } from './PixelStudyRoom';
+import { PixelCharacterGallery } from './PixelCharacterGallery';
 import { Wordmark } from './icons';
 import './pixel-study-demo.css';
 
@@ -117,6 +118,7 @@ export function PixelStudyDemo() {
               <span aria-hidden="true">↳</span> {message}
             </div>
           </div>
+          <PixelCharacterGallery />
           <aside className="pixel-demo-controls" aria-label="크루 공부 상태 시연">
             <div className="pixel-demo-crew-head"><h2>함께하는 크루</h2><span>{studying}<span> / {MEMBERS.length}</span></span></div>
             <p className="pixel-demo-crew-sub"><span className="pixel-demo-online-dot" />{studying ? `${studying}명이 각자의 페이지를 채우고 있어요` : '시작을 기다리는 조용한 공간'}</p>

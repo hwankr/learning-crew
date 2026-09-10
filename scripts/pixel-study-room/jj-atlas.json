@@ -1,0 +1,54 @@
+{
+  "member": "jj",
+  "output": "src/assets/pixel-characters/jj-v5.webp",
+  "cell": {
+    "width": 192,
+    "height": 224,
+    "baseline": 204
+  },
+  "columns": 6,
+  "rows": 12,
+  "frames": 72,
+  "main": {
+    "width": 1086,
+    "height": 1448,
+    "scale": 0.9467455621301775,
+    "rowOffsets": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      -11
+    ],
+    "silhouettes": 48,
+    "alpha": "source"
+  },
+  "extra": {
+    "width": 1536,
+    "height": 1024,
+    "scale": 0.6530612244897959,
+    "rowOffsets": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "silhouettes": 24,
+    "alpha": "recovered exterior matte"
+  },
+  "gait": {
+    "width": 1774,
+    "height": 887,
+    "scale": 0.5693950177935944,
+    "rowOffsets": [
+      0,
+      0,
+      0
+    ],
+    "silhouettes": 18,
+    "alpha": "recovered exterior matte"
+  }
+}

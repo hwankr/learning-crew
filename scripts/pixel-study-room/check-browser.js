@@ -52,7 +52,7 @@
   const frozen = point('sh');
   await sleep(800);
   assert(JSON.stringify(point('sh')) === JSON.stringify(frozen), 'Pausing did not freeze the visible position');
-  assert(document.querySelector('.pixel-room-world').getAnimations({ subtree: true }).length === 0, 'Decorative animation still running');
+  assert(document.querySelector('.pixel-room-world').getAnimations({ subtree: true }).every((a) => a.playState !== 'running'), 'Decorative animation still running');
   click('모두 도서관으로');
   await sleep(80);
   assert(settled() && point('sh').y === 186, 'State changes with motion disabled missed their destination');
@@ -76,7 +76,7 @@
   Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
   document.dispatchEvent(new Event('visibilitychange'));
   await sleep(80);
-  assert(document.querySelector('.pixel-room-world').getAnimations({ subtree: true }).length === 0, 'Hidden scene kept animating');
+  assert(document.querySelector('.pixel-room-world').getAnimations({ subtree: true }).every((a) => a.playState !== 'running'), 'Hidden scene kept animating');
   delete document.visibilityState;
   document.dispatchEvent(new Event('visibilitychange'));
   await sleep(80);

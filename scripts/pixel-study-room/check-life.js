@@ -36,8 +36,8 @@ window.__pixelLifeResult = { result: 'RUNNING' };
           places.add(a.dataset.spot);
         }
         if (a.dataset.action === 'water' && a.dataset.phase === 'acting') {
-          const can = a.querySelector('.px-facing-side .px-watering-can');
-          assert(can && getComputedStyle(a.querySelector('.px-facing-side')).display !== 'none', 'Watering has no visible tool');
+          const sprite = a.querySelector('.px-person[data-clip="water"] .px-sprite-sheet');
+          assert(sprite && sprite.getAttribute('href').includes('-v5.webp'), 'Watering has no illustrated can frames');
           waterVisible = true;
         }
       }
@@ -70,7 +70,7 @@ window.__pixelLifeResult = { result: 'RUNNING' };
     await sleep(1200);
     assert(room.dataset.lifeClock === clock, 'Paused life clock advanced');
     assert(JSON.stringify(point(actor(id))) === JSON.stringify(frozen), 'Paused walk moved');
-    assert(world.getAnimations({ subtree: true }).length === 0, 'Paused decoration continued');
+    assert(world.getAnimations({ subtree: true }).every((a) => a.playState !== 'running'), 'Paused decoration continued');
     button('캐릭터 움직임 켜기').click(); await sleep(40);
     assert(Math.hypot(point(actor(id)).x - frozen.x, point(actor(id)).y - frozen.y) < 20, 'Resuming teleported');
 
@@ -79,7 +79,7 @@ window.__pixelLifeResult = { result: 'RUNNING' };
     document.dispatchEvent(new Event('visibilitychange')); await sleep(100);
     const hiddenClock = room.dataset.lifeClock;
     await sleep(1200);
-    assert(room.dataset.lifeClock === hiddenClock && world.getAnimations({ subtree: true }).length === 0, 'Hidden tab kept running');
+    assert(room.dataset.lifeClock === hiddenClock && world.getAnimations({ subtree: true }).every((a) => a.playState !== 'running'), 'Hidden tab kept running');
     delete document.visibilityState; document.dispatchEvent(new Event('visibilitychange')); await sleep(100);
     assert(Number(room.dataset.lifeClock) - Number(hiddenClock) <= 500, 'Hidden tab caught up missed time');
 
