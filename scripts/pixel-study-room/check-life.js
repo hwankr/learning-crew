@@ -11,6 +11,7 @@ window.__pixelLifeResult = { result: 'RUNNING' };
   const actor = (id) => world.querySelector(`[data-member="${id}"]`);
   const button = (label) => [...document.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === label);
   const point = (element) => { const m = new DOMMatrix(getComputedStyle(element).transform); return { x: m.e, y: m.f }; };
+  const inLibrary = ({ x, y }) => x > 70 && x < 634 && y < 354;
   const errors = [];
   const onError = (event) => errors.push(String(event.message ?? event.reason));
   window.addEventListener('error', onError);
@@ -30,6 +31,8 @@ window.__pixelLifeResult = { result: 'RUNNING' };
     while (Date.now() < end) {
       for (const a of actors()) {
         assert(a.dataset.activity === truth[a.dataset.member], 'Autonomous activity changed check-in truth');
+        assert(inLibrary(point(a)) === (a.dataset.activity === 'library'), `${a.dataset.member}: crossed the library boundary without a check-in`);
+        assert(a.dataset.action !== 'chat' || a.dataset.activity === 'rest', 'A studying member was invited to the garden conversation');
         if (a.dataset.moving === 'true') walked = true;
         if (a.dataset.phase === 'acting') {
           actions.add(a.dataset.action);
@@ -85,7 +88,7 @@ window.__pixelLifeResult = { result: 'RUNNING' };
 
     assert(!performance.getEntriesByType('resource').some((r) => new URL(r.name).pathname.startsWith('/api/')), 'Autonomous demo contacted the API');
     assert(!document.querySelector('vite-error-overlay') && errors.length === 0, `Runtime errors: ${errors.join('; ')}`);
-    return { result: 'PASS', observation: '85 seconds at normal speed with no input', actions: [...actions], places: [...places], speakers: [...speakers], dialogueLines: [...lines], checks: ['actual arrivals before dialogue', 'watering tool visible', 'brew and sip', 'truthful check-in count', 'pause and resume', 'hidden clock frozen', 'no API or runtime errors'] };
+    return { result: 'PASS', observation: '85 seconds at normal speed with no input', actions: [...actions], places: [...places], speakers: [...speakers], dialogueLines: [...lines], checks: ['studying members stay inside the library', 'resting members never enter the library', 'only resting members join garden conversations', 'actual arrivals before dialogue', 'watering tool visible', 'brew and sip', 'truthful check-in count', 'pause and resume', 'hidden clock frozen', 'no API or runtime errors'] };
   } finally {
     delete document.visibilityState; document.dispatchEvent(new Event('visibilitychange'));
     window.removeEventListener('error', onError); window.removeEventListener('unhandledrejection', onError);

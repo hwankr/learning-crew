@@ -30,12 +30,12 @@ export interface RoomLife {
 
 const REST_ROUTINES: Record<MemberId, RoomSpotId[]> = {
   sh: ['flowers', 'pond', 'coffee', 'reading', 'willow'],
-  wg: ['coffee', 'reading', 'gate', 'books_west', 'flowers'],
-  th: ['reading', 'flowers', 'books_east', 'pond', 'coffee'],
+  wg: ['coffee', 'reading', 'gate', 'pond', 'flowers'],
+  th: ['reading', 'flowers', 'willow', 'pond', 'coffee'],
   jj: ['tea_right', 'willow', 'flowers', 'reading', 'gate'],
-  kj: ['books_west', 'tea_left', 'reading', 'pond', 'flowers'],
+  kj: ['coffee', 'tea_left', 'reading', 'pond', 'flowers'],
 };
-const STUDY_ROUTINE: RoomSpotId[] = ['books_west', 'coffee', 'books_east', 'tea_right'];
+const STUDY_ROUTINE: RoomSpotId[] = ['books_west', 'books_east'];
 const DIALOGUES = [
   ['오늘 공부는 어때?', '조금씩 풀리고 있어!', '끝나고 커피 한 잔?', '좋아, 같이 힘내자.'],
   ['괜찮은 책 찾았어?', '응, 다음에 빌려줄게.', '고마워! 기대된다.', '천천히 읽어도 좋아.'],
@@ -73,6 +73,10 @@ function travel(agent: RoomAgent, spot: RoomSpotId | 'home', clock: number): Roo
 /** Reservations include people already travelling there; home seats stay private. */
 function available(state: RoomLife, spot: RoomSpotId, id: MemberId): boolean {
   const point = ROOM_SPOTS[spot];
+  const home = state.agents[id].home;
+  // Every autonomous destination, including paired chats and coffee follow-ups,
+  // must stay on the same side of the library door as the real check-in.
+  if (home === 'away' || (point.zone === '도서관') !== (home === 'library')) return false;
   return MEMBER_IDS.every((other) => other === id || state.agents[other].home === 'away'
     || Math.hypot(state.agents[other].target.x - point.x, state.agents[other].target.y - point.y) >= 28);
 }
@@ -147,8 +151,7 @@ export function advanceRoomLife(state: RoomLife, elapsed: number): RoomLife {
   if (!next.conversation && next.clock >= next.nextChatAt) {
     const candidates = MEMBER_IDS.filter((id) => {
       const agent = next.agents[id];
-      return agent.home !== 'away' && agent.phase === 'acting' && agent.action !== 'water' && agent.action !== 'browse'
-        && (agent.home !== 'library' || next.clock - agent.startedAt >= 12_000);
+      return agent.home === 'rest' && agent.phase === 'acting' && agent.action !== 'water' && agent.action !== 'browse';
     }).sort((a, b) => next.agents[a].conversations - next.agents[b].conversations || MEMBER_IDS.indexOf(a) - MEMBER_IDS.indexOf(b));
     if (candidates.length >= 2 && available(next, 'chat_left', candidates[0]!) && available(next, 'chat_right', candidates[1]!)) {
       const members: [MemberId, MemberId] = [candidates[0]!, candidates[1]!];

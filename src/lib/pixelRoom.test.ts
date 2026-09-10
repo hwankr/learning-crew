@@ -133,6 +133,23 @@ describe('pixel room routes', () => {
     }
   });
 
+  it('keeps library routes indoors and outside routes from taking shortcuts through the library', () => {
+    const inside = (p: RoomPoint) => p.x > 70 && p.x < 634 && p.y < 354;
+    const points = [...Object.values(ROOM_SPOTS), ...MEMBERS.flatMap((_, i) => [dest(i, 'library'), dest(i, 'rest')]), dest(0, 'away')];
+    for (const from of points) for (const to of points) {
+      if (inside(from) !== inside(to)) continue; // Real check-in entry and exit use the door.
+      const route = roomRoute(from, to);
+      expect(route.every((p) => inside(p) === inside(from))).toBe(true);
+      if (!inside(from)) for (let i = 1; i < route.length; i++) {
+        const a = route[i - 1]!; const b = route[i]!;
+        const entersLibrary = a.x === b.x
+          ? a.x > 70 && a.x < 634 && Math.min(a.y, b.y) < 354
+          : a.y < 354 && Math.max(a.x, b.x) > 70 && Math.min(a.x, b.x) < 634;
+        expect(entersLibrary).toBe(false);
+      }
+    }
+  });
+
   it('redirects between autonomous activities from fractional positions along every turn', () => {
     for (const from of Object.values(ROOM_SPOTS)) {
       const route = roomRoute(from, dest(0, 'library'));

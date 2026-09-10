@@ -1,10 +1,22 @@
 import { describe, expect, it } from 'vitest';
 import { MEMBER_IDS, type MemberId } from '../../shared/types';
 import { advanceRoomLife, arriveRoomAgent, createRoomLife, returnRoomLifeHome, roomAgentBubble, syncRoomLife, type RoomActivities, type RoomLife } from './pixelLife';
-import { roomDestination, roomMotion, roomRoute, type RoomAction, type RoomPoint } from './pixelRoom';
+import { ROOM_SPOTS, roomDestination, roomMotion, roomRoute, type RoomAction, type RoomPoint } from './pixelRoom';
 
 const mixed: RoomActivities = { sh: 'rest', wg: 'library', th: 'rest', jj: 'rest', kj: 'library' };
 const all = (activity: RoomActivities['sh']): RoomActivities => Object.fromEntries(MEMBER_IDS.map((id) => [id, activity])) as RoomActivities;
+
+function expectAllowedDestinations(life: RoomLife) {
+  for (const agent of Object.values(life.agents)) {
+    if (agent.spot === 'home') {
+      expect(agent.target).toEqual(roomDestination(MEMBER_IDS.indexOf(agent.id), MEMBER_IDS.length, agent.home));
+    } else {
+      expect(agent.home).not.toBe('away');
+      expect(ROOM_SPOTS[agent.spot].zone === '도서관').toBe(agent.home === 'library');
+    }
+  }
+  for (const id of life.conversation?.members ?? []) expect(life.agents[id].home).toBe('rest');
+}
 
 // The scheduler receives arrivals after real route durations, rather than treating travel as instantaneous.
 function simulate(initial: RoomLife, duration: number, observe: (state: RoomLife) => void = () => {}) {
@@ -43,6 +55,7 @@ describe('autonomous campus life', () => {
     const actions = new Set<RoomAction>();
     const visits = new Set<string>();
     const state = simulate(createRoomLife(mixed), 240_000, (life) => {
+      expectAllowedDestinations(life);
       for (const id of MEMBER_IDS) {
         const agent = life.agents[id];
         expect(agent.home).toBe(mixed[id]);
@@ -59,6 +72,7 @@ describe('autonomous campus life', () => {
 
   it('reserves different destinations including people still walking there', () => {
     simulate(createRoomLife(all('rest')), 180_000, (life) => {
+      expectAllowedDestinations(life);
       const agents = Object.values(life.agents);
       for (let i = 0; i < agents.length; i++) for (let j = i + 1; j < agents.length; j++) {
         expect(Math.hypot(agents[i]!.target.x - agents[j]!.target.x, agents[i]!.target.y - agents[j]!.target.y)).toBeGreaterThanOrEqual(28);
@@ -66,10 +80,12 @@ describe('autonomous campus life', () => {
     });
   });
 
-  it('returns studying members to their own desk between outings, even with all five studying', () => {
+  it('keeps all five studying members inside and returns them to their own desk between shelf visits', () => {
     const homes = new Set<MemberId>();
     const outings = new Set<MemberId>();
     simulate(createRoomLife(all('library')), 120_000, (life) => {
+      expectAllowedDestinations(life);
+      expect(life.conversation).toBeNull();
       for (const id of MEMBER_IDS) {
         const agent = life.agents[id];
         expect(agent.home).toBe('library');
@@ -83,6 +99,29 @@ describe('autonomous campus life', () => {
     });
     expect(outings.size).toBe(5);
     expect(homes.size).toBe(5);
+  });
+
+  it.each(MEMBER_IDS)('keeps a lone resting %s outside without inviting studying members to chat', (id) => {
+    const visits = new Set<string>();
+    simulate(createRoomLife({ ...all('library'), [id]: 'rest' }), 120_000, (life) => {
+      expectAllowedDestinations(life);
+      expect(life.conversation).toBeNull();
+      if (life.agents[id].spot !== 'home') visits.add(life.agents[id].spot);
+    });
+    expect(visits.size).toBeGreaterThan(1);
+  });
+
+  it('ending study interrupts a shelf trip, leaves the library and rejects its stale arrival', () => {
+    let before = createRoomLife(all('library'));
+    for (let i = 0; i < 28; i++) before = advanceRoomLife(before, 500);
+    expect(before.agents.sh.action).toBe('browse');
+    expect(before.agents.sh.phase).toBe('walking');
+    const after = syncRoomLife(before, { ...all('library'), sh: 'rest' });
+    expect(after.agents.sh.home).toBe('rest');
+    expect(after.agents.sh.spot).toBe('home');
+    expect(after.agents.sh.target).toEqual(roomDestination(0, 5, 'rest'));
+    expect(arriveRoomAgent(after, 'sh', before.agents.sh.version)).toBe(after);
+    simulate(arriveRoomAgent(after, 'sh', after.agents.sh.version), 90_000, expectAllowedDestinations);
   });
 
   it('starts dialogue only after both members arrive, alternates speakers, and ends the conversation', () => {
@@ -112,15 +151,16 @@ describe('autonomous campus life', () => {
     expect(state.agents[b].spot).toBe('home');
   });
 
-  it('a real check-in cancels a pair and rejects obsolete arrival callbacks', () => {
+  it.each(['library', 'away'] as const)('a real %s check-in cancels a pair and rejects obsolete arrival callbacks', (activity) => {
     const before = startChat();
     const [a, b] = before.conversation!.members;
     const oldVersion = before.agents[a].version;
-    const state = syncRoomLife(before, { ...all('rest'), [a]: 'away' });
+    const state = syncRoomLife(before, { ...all('rest'), [a]: activity });
     expect(state.conversation).toBeNull();
-    expect(state.agents[a].home).toBe('away');
+    expect(state.agents[a].home).toBe(activity);
     expect(state.agents[a].spot).toBe('home');
     expect(state.agents[b].spot).toBe('home');
+    expectAllowedDestinations(state);
     expect(arriveRoomAgent(state, a, oldVersion)).toBe(state);
     expect(arriveRoomAgent(state, b, before.agents[b].version)).toBe(state);
     expect(before.conversation).not.toBeNull();
