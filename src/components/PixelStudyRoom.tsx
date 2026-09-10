@@ -6,7 +6,7 @@ import {
   type RoomActivity, type RoomFacing, type RoomMood,
 } from '../lib/pixelRoom';
 import { PixelCharacter, PixelPortrait } from './PixelCharacter';
-import { PixelDesk, PixelFrontWall, PixelRoomBackdrop, PixelRoomForeground } from './PixelRoomArt';
+import { PixelDesk, PixelDeskLight, PixelFrontWall, PixelRoomBackdrop, PixelRoomForeground } from './PixelRoomArt';
 import './pixel-study-room.css';
 
 const REDUCED_MOTION = '(prefers-reduced-motion: reduce)';
@@ -94,12 +94,12 @@ function RoomMember({ m, index, activity, motion, me, selected, label, onSelect,
       <g opacity={activity === 'away' && !walking ? 0 : 1}>
         <rect className="px-hit-area" x={-22} y={-50} width={44} height={58} fill="transparent" />
         <ellipse className="px-actor-shadow" cy={1} rx={12} ry={4} fill="#253b36" opacity=".23" />
-        <path className="px-selection-ring" d="M-15-2h30v7h-30z" fill="none" stroke="#fbe2a0" strokeWidth="1.5" />
+        <ellipse className="px-selection-ring" cy={2} rx={16} ry={4.5} fill="none" stroke="#fbe2a0" strokeWidth="1" />
         {walking && <path className="px-footsteps" d="M-8 3h3v2h-3zM5 6h3v2H5z" fill="#e2d1a9" opacity=".6" />}
         <g transform="translate(-14.4 -38.4) scale(1.2)"><PixelCharacter m={m} pose={pose} facing={facing} /></g>
         <g className="px-nameplate" transform="translate(0 -51)">
-          <rect x={-19} y={-1} width={38} height={13} rx={3} fill={selected || me ? '#fae3a3' : '#f7efd8'} fillOpacity=".95" />
-          <text x={0} y={7.5} textAnchor="middle" className="px-name">{m.name}</text>
+          <rect x={-19} y={-1} width={38} height={13} rx={2} fill={selected || me ? '#edd29b' : '#233b33'} fillOpacity=".94" stroke="#d5bd85" strokeOpacity=".45" strokeWidth=".5" />
+          <text x={0} y={7.5} textAnchor="middle" className="px-name" fill={selected || me ? '#4c412b' : '#f0dfb9'}>{m.name}</text>
           {activity === 'library' && !walking && <path d="M13 3h3v3h-3z" fill="#738b58" />}
         </g>
         {arrived && <g className="px-arrival" fill="#ffe6a4"><path d="M-21-28h3v3h-3zM19-39h3v3h-3zM15-15h2v2h-2z" /></g>}
@@ -154,7 +154,9 @@ export function PixelStudyRoom({ statuses, now, meId, compact = false, selectedI
   const details = selectedActivity === 'library' ? personality.studyLabel : selectedActivity === 'rest' ? personality.restLabel : roomStatusLabel(selectedStatus, now);
   const scenery = members.map(({ m, index, activity }) => {
     const seat = roomDestination(index, MEMBERS.length, 'library');
-    return { key: `desk-${m.id}`, depth: seat.y + 30, node: <PixelDesk x={seat.x} y={seat.y} lit={activity === 'library'} kind={ROOM_PERSONALITY[m.id].study} color={m.color} /> };
+    return { key: `desk-${m.id}`, depth: seat.y + 30,
+      light: <PixelDeskLight x={seat.x} y={seat.y} lit={activity === 'library'} />,
+      node: <PixelDesk x={seat.x} y={seat.y} lit={activity === 'library'} kind={ROOM_PERSONALITY[m.id].study} color={m.color} /> };
   });
   const actors = members.map(({ m, index, activity }) => ({
     key: m.id, depth: depths[m.id] ?? roomDestination(index, MEMBERS.length, activity).y,
@@ -177,7 +179,8 @@ export function PixelStudyRoom({ statuses, now, meId, compact = false, selectedI
       <div className="pixel-room-stage" data-motion={motion ? 'on' : 'off'}>
         <svg viewBox={`0 0 ${ROOM_WIDTH} ${ROOM_HEIGHT}`} className="pixel-room-world"
           role="group" aria-label={description} shapeRendering="crispEdges">
-          <g aria-hidden="true"><PixelRoomBackdrop /></g>
+          <g aria-hidden="true"><PixelRoomBackdrop mood={mood} /></g>
+          <g aria-hidden="true" pointerEvents="none">{scenery.map((item) => <g key={item.key}>{item.light}</g>)}</g>
           {layers.map((layer) => <g key={layer.key}>{layer.node}</g>)}
           <g aria-hidden="true" pointerEvents="none"><PixelRoomForeground /></g>
         </svg>

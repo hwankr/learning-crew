@@ -1,6 +1,9 @@
-import { memo, type CSSProperties } from 'react';
+import { memo, useId, useState, type CSSProperties } from 'react';
 import { MEMBERS } from '../lib/constants';
-import { roomDestination, type StudyPose } from '../lib/pixelRoom';
+import { roomDestination, type RoomMood, type StudyPose } from '../lib/pixelRoom';
+import librarySunset from '../assets/pixel-room/library-sunset-v3.webp';
+import libraryNight from '../assets/pixel-room/library-night-v3.webp';
+import libraryRain from '../assets/pixel-room/library-rain-v3.webp';
 
 function Tree({ x, y, scale = 1, delay = 0 }: { x: number; y: number; scale?: number; delay?: number }) {
   return <g transform={`translate(${x} ${y}) scale(${scale})`}>
@@ -81,7 +84,7 @@ function Lantern({ x, y }: { x: number; y: number }) {
   </g>;
 }
 
-export const PixelRoomBackdrop = memo(function PixelRoomBackdrop() {
+const VectorBackdrop = memo(function VectorBackdrop() {
   return <g>
     <path d="M0 0h640v400H0z" fill="var(--px-sky)" />
     <path d="M0 78h640v322H0z" fill="var(--px-ground)" />
@@ -123,9 +126,6 @@ export const PixelRoomBackdrop = memo(function PixelRoomBackdrop() {
     {Array.from({ length: 15 }, (_, i) => <path key={i} d={`M${230 + i * 18} 258v3`} stroke="#cbbd96" strokeWidth="2" />)}
     <path className="px-sunbeam px-sunset-only" d="M287 98h33l69 104h-53zM357 98h29l45 70h-42z" fill="#ffdea0" opacity=".19" />
     <path className="px-night-only" d="M286 99h128v3H286z" fill="#b5c7b2" opacity=".24" />
-    {MEMBERS.map((m, i) => { const p = roomDestination(i, MEMBERS.length, 'library'); return <g key={m.id} transform={`translate(${p.x} ${p.y})`}>
-      <path d="M-14-15H14V9H-14z" fill="#485951" /><path d="M-11-13H11V8H-11z" fill="#7b8c72" /><path d="M-10-12H10v3H-10z" fill="#a5ad86" /><path d="M-15 9h30v5h-30z" fill="#56644f" />
-    </g>; })}
     <g transform="translate(184 247)"><path d="M-3 0h37v24H-3z" fill="#6c5946" /><path d="M0 3h31v5H0zM0 17h31v4H0z" fill="#c79562" /><path d="M1 25h5v5H1zM25 25h5v5h-5z" fill="#424847" /><path d="M2-2h22v4H2z" fill="#65827a" /><path d="M5-6h23v4H5z" fill="#c19b73" /><path d="M3-10h19v4H3z" fill="#c1ba96" /><path d="M2 11h8v6H2zM13 9h5v8h-5zM21 10h7v7h-7z" fill="#ae8770" /></g>
     <g transform="translate(517 228)"><path d="M-11-14h37v54h-37z" fill="#705342" /><path d="M-13 2h41v5h-41z" fill="#edc28b" /><path d="M-7 10h28v21H-7z" fill="#a57b54" /><path d="M-3 17h20v2H-3z" fill="#d7a977" /><path d="M-6-18h20V1H-6z" fill="#3f5654" /><path d="M-3-15h14v6H-3z" fill="#9aaf91" /><path d="M2-5h6v7H2z" fill="#f3dfb1" /><path d="M18-9h6V1h-6z" fill="#d3b580" /><text x={6} y={41} className="px-tiny-sign" textAnchor="middle">COFFEE</text></g>
     <Plant x={151} y={271} flowers /><Plant x={536} y={122} scale={.8} flowers />
@@ -140,50 +140,99 @@ export const PixelRoomBackdrop = memo(function PixelRoomBackdrop() {
   </g>;
 });
 
-export function PixelDesk({ x, y, lit, kind, color }: { x: number; y: number; lit: boolean; kind: StudyPose; color: string }) {
+const ROOM_ART: Record<RoomMood, string> = { sunset: librarySunset, night: libraryNight, rain: libraryRain };
+
+export const PixelRoomBackdrop = memo(function PixelRoomBackdrop({ mood }: { mood: RoomMood }) {
+  const [ready, setReady] = useState<Partial<Record<RoomMood, boolean>>>({});
+  return <g className="px-backdrop" data-art-ready={ready[mood] ? 'true' : 'false'}>
+    {!ready[mood] && <VectorBackdrop />}
+    {Object.entries(ROOM_ART).map(([variant, src]) => <image key={variant} href={src} x={0} y={0} width={640} height={400}
+      preserveAspectRatio="none" className={`px-painted-background px-art-${variant}`}
+      visibility={variant === mood ? 'visible' : 'hidden'}
+      onLoad={() => setReady((current) => ({ ...current, [variant]: true }))}
+      onError={() => setReady((current) => ({ ...current, [variant]: false }))} />)}
+    {ready[mood] && <text x={334} y={25} textAnchor="middle" className="px-painted-sign">L E A R N I N G  ·  L I B R A R Y</text>}
+    <g className="px-pond-ripple" fill="none" stroke="#bed9ca" strokeWidth=".6" opacity=".55"><ellipse cx={76} cy={337} rx={12} ry={3} /><ellipse cx={76} cy={337} rx={17} ry={4.5} /></g>
+    <g className="px-water-flow" stroke="#c9daca" strokeWidth=".7" opacity=".5"><path d="M47 330h12m27-13h9m-38 32h8m28 4h13" /></g>
+    {MEMBERS.map((m, i) => { const p = roomDestination(i, MEMBERS.length, 'library'); return <g key={m.id} className="px-chair" transform={`translate(${p.x} ${p.y})`}>
+      <ellipse cy={9} rx={18} ry={6} fill="#252c29" opacity=".25" />
+      <path d="M-16-15h32v27h-32z" fill="#473b2e" /><path d="M-15-16h30v2h-30zM-16-14h2v24h-2z" fill="#c99d66" />
+      <path d="M-12-12h24V8h-24z" fill="#294b45" /><path d="M-11-11h22v2h-22zM-11-9h1V6h-1z" fill="#789079" />
+      <path d="M-8-7h16V4H-8z" fill="#3b6053" /><path d="M-5-5h1v1h-1zM4-5h1v1H4zM-5 1h1v1h-1zM4 1h1v1H4z" fill="#a4a67b" />
+      <path d="M-15 7h30v5h-30z" fill="#6b7659" /><path d="M-15 7h30v1h-30zM-17-1h3v9h-3zM14-1h3v9h-3z" fill="#ac8859" />
+    </g>; })}
+    <g transform="translate(324 364)"><ellipse cy={3} rx={16} ry={5} fill="#243d36" opacity=".4" /><path d="M-14-6h5v-4H8v3h6v8H-14z" fill="#3d695e" /><path d="M-10-7H7v2h4v4H-12v-4h2z" fill="#82a087" /><path d="M-7-8H6v1H-7zM-11-3h2v3h-2z" fill="#c1c4a0" /></g>
+  </g>;
+});
+
+export function PixelDeskLight({ x, y, lit }: { x: number; y: number; lit: boolean }) {
+  const glowId = useId();
   return <g transform={`translate(${x} ${y})`}>
-    {lit && <ellipse className="px-desk-glow" cx={-8} cy={-8} rx={48} ry={32} fill="#ffca79" opacity=".12" />}
-    <path d="M-33 30h74v8h-74z" fill="#4d3c32" opacity=".17" />
-    <path d="M-29 6h6v29h-6zM24 6h6v29h-6z" fill="#73543f" /><path d="M-28 8h2v25h-2zM25 8h2v25h-2z" fill="#b78658" />
-    <path d="M-35-6h71V7h-71z" fill="#6b4736" /><path d="M-35-8h71V0h-71z" fill="#d9a56e" /><path d="M-35-8h71v2h-71z" fill="#f3cb8f" />
-    <path d="M-30 7h61v9h-61z" fill="#b68150" /><path d="M-1 8h5v2h-5z" fill="#69563d" />
-    <path d="M-33 1h67v2h-67z" fill="#ad774a" /><path d="M-19 11h6v3h-6z" fill={color} opacity={lit ? .8 : .25} />
-    <path d="M-28-23h2v15h-2zM-33-9h12v2h-12z" fill="#526e62" />
-    <path d="M-33-32h12v3h4v7h-20v-7h4z" fill={lit ? '#6f9580' : '#657c6f'} /><path d="M-35-23h16v3h-16z" fill={lit ? '#ffdea0' : '#a3aa86'} />
-    {lit && <path d="M-34-20h14L-6-9h-44z" fill="#ffe3a2" opacity=".18" />}
+    <defs><radialGradient id={glowId}><stop offset="0" stopColor="#ffe0a0" stopOpacity=".62" /><stop offset=".48" stopColor="#efb961" stopOpacity=".24" /><stop offset="1" stopColor="#efa74d" stopOpacity="0" /></radialGradient></defs>
+    {lit && <ellipse className="px-desk-glow" cx={-21} cy={-12} rx={48} ry={35} fill={`url(#${glowId})`} shapeRendering="auto" />}
+  </g>;
+}
+
+export function PixelDesk({ x, y, lit, kind, color }: { x: number; y: number; lit: boolean; kind: StudyPose; color: string }) {
+  return <g className="px-desk" data-lit={lit} transform={`translate(${x} ${y})`}>
+    <ellipse cx={5} cy={29} rx={40} ry={8} fill="#162b28" opacity=".22" />
+    <path d="M-30 4h7v30h-7zM24 4h7v30h-7z" fill="#3c3027" />
+    <path d="M-29 6h3v27h-3zM25 6h3v27h-3z" fill="#86613e" /><path d="M-29 7h1v24h-1zM25 7h1v24h-1z" fill="#c1965c" />
+    <path d="M-31 31h9v3h-9zM23 31h9v3h-9zM-24 21h49v3h-49z" fill="#55422f" />
+    <path d="M-24 21h49v1h-49z" fill="#9c774c" />
+    <path d="M-37-10h74V4h-74z" fill="#342b23" /><path d="M-36-12h72V0h-72z" fill="#8e623c" />
+    <path d="M-35-11h70v2h-70zM-35-5h70v1h-70z" fill="#bb8b54" /><path d="M-35-8h70v1h-70zM-34-2h67v1h-67z" fill="#744c30" />
+    <path d="M-37-1h74v2h-74z" fill="#d0a36b" /><path d="M-36 2h72v2h-72z" fill="#5a3d28" />
+    {Array.from({ length: 12 }, (_, i) => <path key={i} d={`M${-33 + i * 5.5} ${-10 + i % 4 * 2}h${3 + i % 3 * 2}m-2 1h3`} fill="none" stroke={i % 2 ? '#dbab6d' : '#543a2a'} strokeWidth=".5" opacity=".6" />)}
+    <path d="M-23-7h5v2h-5zM19-4h4v1h-4z" fill="#67472e" opacity=".7" /><path d="M-21-7h2v1h-2z" fill="#b78650" />
+    <path d="M-32 4h64v12h-64z" fill="#69472d" /><path d="M-30 5h28v9h-28zM1 5h29v9H1z" fill="#92673f" />
+    <path d="M-29 6H-3v1h-26zM2 6h26v1H2z" fill="#c4945b" /><path d="M-29 13H-3v1h-26zM2 13h26v1H2z" fill="#4e3626" />
+    <path d="M-19 8h5v2h-5zM13 8h5v2h-5z" fill="#473a2b" /><path d="M-18 8h3v1h-3zM14 8h3v1h-3z" fill="#d5b775" />
+    <path d="M-4 6h6v3h-6z" fill={color} opacity={lit ? .85 : .35} /><path d="M-3 6h4v.5h-4z" fill="#fff0c9" opacity=".65" />
+    <path d="M-29-28h2v15h-2zM-34-14h13v2h-13z" fill="#514637" /><path d="M-28-28h1v14h-1zM-33-14h11v1h-11z" fill="#cfb67c" />
+    <path d="M-34-33h13v2h3v6h-20v-6h4z" fill="#203e38" /><path d="M-33-32h11v2h3v3h-18v-3h4z" fill={lit ? '#578675' : '#48655a'} />
+    <path d="M-32-32h9v1h-9zM-36-29h3v2h-3z" fill="#91aa88" /><path d="M-37-25h19v1h-19z" fill="#ac925d" />
+    <path d="M-35-24h15v1h-15z" fill={lit ? '#ffebb6' : '#7b7959'} />
     {kind === 'type' ? <g transform="translate(2 1) scale(.9 .65)">
-      <path d="M-8-28h27v18H-8z" fill="#465654" /><path d="M-6-26h23v14H-6z" fill={lit ? '#86b5ae' : '#84948b'} />
-      <path d="M-4-23H9v1H-4zM-4-20h18v1H-4zM-4-17h10v1H-4z" fill="#deeed3" opacity={lit ? .9 : .3} />
-      <path d="M-10-10h31v4h-31zM-6-9h20v1H-6z" fill="#a8b3a2" /><path className={lit ? 'px-screen-cursor' : undefined} d="M8-17h2v2H8z" fill="#f4e1a3" />
+      <path d="M-8-28h27v18H-8z" fill="#223b3d" /><path d="M-7-27h25v1H-7zM-8-26h1v15h-1z" fill="#a6b6a7" />
+      <path d="M-6-26h23v14H-6z" fill={lit ? '#477d79' : '#4b5e55'} /><path d="M-5-25h21v2H-5z" fill="#263f3b" />
+      <path d="M-4-25h1v1h-1zM-2-25h1v1h-1zM0-25h1v1H0z" fill="#d8b27c" />
+      <path d="M-4-21h9v1H-4zM-4-18h17v1H-4zM-4-15h11v1H-4z" fill="#e2e9c5" opacity={lit ? .95 : .2} />
+      <path d="M-10-10h31v4h-31z" fill="#b5beac" /><path d="M-10-6h31v1h-31z" fill="#4f665e" />
+      <path d="M-6-9h3m1 0h3m1 0h3m1 0h3m1 0h3" stroke="#6a8075" strokeWidth="1" />
+      <path className={lit ? 'px-screen-cursor' : undefined} d="M8-15h1v2H8z" fill="#ffda8a" />
     </g> : <g>
-      <path d="M-11-14h12v1h11v9H0v-1h-11z" fill="#88684e" /><path d="M-11-15H0v1h2v-1h10v9H2v1H0v-1h-11z" fill="#f9e8c1" />
-      <path d="M1-13v7M-8-12h6M-8-9h6M4-12h6M4-9h5" stroke="#b9a786" strokeWidth="1" />
-      <g className={lit && kind === 'read' ? 'px-page' : undefined}><path d="M2-15h10v9H2z" fill="#fff1cf" opacity=".8" /></g>
-      {kind === 'write' && <path d="m13-13 3 1-3 8-2-1z" fill="#55675a" />}
+      <path d="M-12-16h11v1h3v-1h11v10H2v1H0v-1h-12z" fill="#443b2e" />
+      <path d="M-12-17h11v1h3v-1h11v10H2v1H0v-1h-12z" fill="#cbb58c" />
+      <path d="M-11-18h10v1h3v-1h10v10H2v1H0v-1h-11z" fill="#f2dfb2" />
+      <path d="M-10-17h9v2h-9zM3-17h8v2H3z" fill="#fff1cd" /><path d="M0-16h2v8H0z" fill="#b69c74" />
+      <path d="M-9-13h6M-9-11h5M4-13h6M4-11h4" stroke="#a98c66" strokeWidth=".6" />
+      <g className={lit && kind === 'read' ? 'px-page' : undefined}><path d="M3-18h9v10H3z" fill="#ffecc4" opacity=".6" /><path d="M5-15h5M5-13h4" stroke="#b39a70" strokeWidth=".6" /></g>
+      {kind === 'write' && <><path d="m15-17 2 1-3 9-2-1z" fill="#344c42" /><path d="m15-17 1 .5-3 8-1-.5z" fill="#8daa76" /><path d="m12-8 1 1-2 1z" fill="#e9cf9f" /></>}
     </g>}
-    <path d="M24-14h7v7h-7zM31-13h3v4h-3" fill="#f0d6b0" /><path d="M25-13h5v2h-5z" fill="#8d6850" />
-    {lit && <path className="px-steam" d="M26-18v-4h2v-4" fill="none" stroke="#fff2ce" strokeWidth="1.5" />}
-    <path d="M-29 18h9v12h-9z" fill="#778a75" /><path d="M-27 17h5v2h-5z" fill="#b1b090" />
+    <ellipse cx={27} cy={-7} rx={6} ry={2} fill="#e2c694" /><path d="M24-14h7v6h-1v1h-5v-1h-1zM31-13h3v4h-3" fill="#d7b98d" /><path d="M24-13h2v5h-2z" fill="#f8e1b4" /><path d="M25-14h5v2h-5z" fill="#674830" /><path d="M26-14h3v.5h-3z" fill="#b48050" />
+    {lit && <path className="px-steam" d="M27-18q-2-2 0-4t0-4" fill="none" stroke="#fff0cc" strokeWidth=".8" opacity=".7" shapeRendering="auto" />}
+    <path d="M-30 17h10v12h-10zM-27 15h5v3h-5z" fill="#324b41" /><path d="M-29 18h8v8h-8z" fill="#617157" /><path d="M-28 18h6v1h-6zM-28 21h1v4h-1z" fill="#9d9b71" /><path d="M-27 24h5v4h-5z" fill="#4b5e48" /><path d="M-25 25h1v1h-1z" fill="#d1bb7b" />
   </g>;
 }
 
 export const PixelFrontWall = memo(function PixelFrontWall() {
   return <g>
-    <path d="M128 280h195v10H128zM377 280h188v10H377z" fill="#5b493b" /><path d="M128 279h195v4H128zM377 279h188v4H377z" fill="#c79863" />
-    <path d="M128 278h195v2H128zM377 278h188v2H377z" fill="#ebc58a" /><path d="M329 282h43v6h-43zM324 288h54v5h-54zM320 293h62v4h-62z" fill="#ad9370" /><path d="M325 288h52v2h-52zM321 293h60v2h-60z" fill="#dcc39a" />
-    <path d="M128 267h10v23h-10zM553 267h11v23h-11z" fill="#876244" />
+    <path d="M133 280h190v5H133zM377 280h184v5H377z" fill="#483828" /><path d="M134 280h189v1H134zM377 280h182v1H377z" fill="#b98b55" />
+    <path d="M134 282h189v1H134zM377 282h182v1H377z" fill="#725333" />
+    <path d="M328 282h44v4h-44zM324 287h53v3h-53z" fill="#857451" /><path d="M328 282h44v1h-44zM324 287h53v1h-53z" fill="#c7b888" />
   </g>;
 });
 
 export const PixelRoomForeground = memo(function PixelRoomForeground() {
   return <g>
-    <Tree x={23} y={434} scale={1.12} delay={-3} /><Tree x={622} y={429} scale={1.05} delay={-5} />
     <g className="px-cat" transform="translate(565 363)">
       <ellipse cx={4} cy={5} rx={17} ry={4} fill="#233f3f" opacity=".24" />
-      <g className="px-cat-breathe"><path d="M-10-7h7v-4H7v4h7V4H-10z" fill="#cba27a" /><path d="M-8-12h4v5h-4zM8-12h4v5H8z" fill="#b78064" /><path d="M-8-7H9V0H-8z" fill="#ead1a3" /><path d="M-5-4h3v1h-3zM4-4h3v1H4z" fill="#705448" /></g>
+      <g className="px-cat-breathe"><path d="M-10-7h7v-4H7v4h7V4H-10z" fill="#b58459" /><path d="M-8-12h4v5h-4zM8-12h4v5H8z" fill="#8d6246" /><path d="M-7-10h2v3h-2zM9-10h2v3H9z" fill="#d7a081" /><path d="M-8-7H9V0H-8z" fill="#e5bf8b" /><path d="M-7-7H7v2H-7zM-9 0H8v2H-9z" fill="#f0d5a1" /><path d="M-2-7h2v3h-2zM2-7h2v3H2zM10-3h3v2h-3zM9 1h3v1H9z" fill="#9c704d" /><path d="M-5-4h3v1h-3zM4-4h3v1H4z" fill="#654631" /><path d="M0-2h2v1H0z" fill="#bd8468" /><path d="M-10-2h5m10 0h6" stroke="#dbc5a2" strokeWidth=".5" /></g>
       <path className="px-cat-tail" d="M13 0h9v-5h4v9H13z" fill="#cba27a" /><text className="px-cat-z" x={12} y={-18}>z</text>
     </g>
     <g className="px-sunset-only px-leaf-drift" fill="#d7bb77"><path d="M80 256h4v2h-2v3h-3zM579 165h4v3h-2v2h-3zM98 117h4v2h-2v3h-3z" /></g>
+    <g className="px-window-motes" fill="#fbe3b0">{Array.from({ length: 12 }, (_, i) => <circle key={i} className="px-dust-mote" cx={280 + i * 41 % 144} cy={111 + i * 29 % 129} r={i % 3 ? .45 : .7} style={{ animationDelay: `${i * -1.3}s` }} />)}</g>
     <g className="px-night-only">{Array.from({ length: 18 }, (_, i) => <circle key={i} className="px-firefly" cx={(i * 83 + 35) % 640} cy={i % 3 === 0 ? 32 : 309 + i * 13 % 79} r={i % 3 === 0 ? 1 : 1.5} fill="#e8d58a" style={{ animationDelay: `${i * -.61}s` }} />)}</g>
     <g className="px-rain-only">
       <g className="px-rainfall" stroke="#d6e0d8" strokeWidth="1" opacity=".32">{Array.from({ length: 46 }, (_, i) => {
