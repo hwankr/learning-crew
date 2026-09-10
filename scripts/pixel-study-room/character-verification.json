@@ -1,0 +1,130 @@
+{
+  "date": "2026-09-10",
+  "branch": "feat/pixel-study-room",
+  "build": {
+    "result": "PASS",
+    "command": "npm run build",
+    "typeChecks": 3
+  },
+  "tests": {
+    "result": "PASS",
+    "command": "npm test",
+    "files": 44,
+    "tests": 755
+  },
+  "characterBrowser": {
+    "result": "PASS",
+    "script": "check-characters.js",
+    "finalGaitAssets": true,
+    "checks": [
+      "5 distinct transparent atlases; all 360 frames contain visible character pixels",
+      "All action rows animate; six different gait frames sampled in the actual CSS animation",
+      "Front, back, left and right gallery controls render the appropriate frames",
+      "Preview controls preserve real check-ins",
+      "Pause freezes the exact displayed frame; resume advances it",
+      "A paused real check-in displays the study pose immediately",
+      "Mood and camera changes preserve the character image node and animation identity"
+    ]
+  },
+  "travel": {
+    "result": "PASS",
+    "script": "check-browser.js",
+    "checks": [
+      "start, end, and mid-walk reversal",
+      "motion toggle, status changes while paused, and resume without replay",
+      "five simultaneous arrivals/departures and stable seating",
+      "hidden/visible page lifecycle",
+      "manual actions cancel pending autoplay steps",
+      "no API requests"
+    ]
+  },
+  "atmosphere": {
+    "result": "PASS",
+    "script": "check-atmosphere.js",
+    "checks": [
+      "two-way character selection and Enter/Space preserve study status",
+      "distinct moods, directional walking, and uninterrupted travel during selection/theme changes",
+      "every mood respects the motion toggle",
+      "complete autoplay, correct final state, and bounded activity journal without API requests"
+    ]
+  },
+  "autonomous": {
+    "result": "PASS",
+    "script": "check-life.js",
+    "observationSeconds": 85,
+    "actions": [
+      "study",
+      "rest",
+      "water",
+      "chat",
+      "wander",
+      "coffee",
+      "browse",
+      "read"
+    ],
+    "places": [
+      "home",
+      "flowers",
+      "chat_right",
+      "chat_left",
+      "pond",
+      "coffee",
+      "books_west",
+      "reading",
+      "tea_left",
+      "tea_right",
+      "books_east",
+      "willow"
+    ],
+    "speakers": [
+      "th",
+      "jj",
+      "sh"
+    ],
+    "checks": [
+      "actual arrivals before dialogue",
+      "watering sprite visible",
+      "brew and sip",
+      "truthful study count",
+      "pause/resume",
+      "hidden clock frozen",
+      "no API or runtime errors"
+    ]
+  },
+  "responsive": {
+    "result": "PASS",
+    "widths": [
+      1440,
+      390,
+      320
+    ],
+    "horizontalOverflow": false,
+    "crewFigures": 5
+  },
+  "reducedMotion": {
+    "result": "PASS",
+    "clockFrozen": true,
+    "worldAnimations": 0,
+    "galleryAnimations": 0
+  },
+  "integratedApp": {
+    "result": "PASS",
+    "demoUrl": "http://127.0.0.1:5173/?user=승환",
+    "width": 390,
+    "checkin": "도서관",
+    "observedWalk": true,
+    "finalActivity": "library",
+    "finalPhase": "acting",
+    "finalClip": "study",
+    "spriteVisible": true,
+    "horizontalOverflow": false,
+    "runtimeErrors": 0
+  },
+  "art": {
+    "frameWidth": 192,
+    "frameHeight": 224,
+    "framesPerMember": 72,
+    "totalFrames": 360,
+    "walkingRowsReplaced": true
+  }
+}

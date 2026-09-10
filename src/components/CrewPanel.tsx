@@ -1,5 +1,6 @@
 /* 크루 패널 — 체크인 · 다가오는 일정 · 오늘의 크루 · 이번 달 요약 · 동기화 한 줄.
    데스크톱에서는 접히는 왼쪽 열이고, 좁은 화면에서는 본문 위에 그대로 선다. */
+import { useRef, useState } from 'react';
 import type { CrewEvent, Entry, MemberId, MemberStatus, Place } from '../../shared/types';
 import { MEMBERS, dayKey, pad2, type CopySet } from '../lib/constants';
 import {
@@ -11,6 +12,8 @@ import { Avatar, Icon, RIGHT_D } from './icons';
 import { Board, MeBadge } from './Board';
 import { StatusBar } from './StatusBar';
 import { SyncStatus } from './SyncStatus';
+import { PixelStudyRoom } from './PixelStudyRoom';
+import './crew-map-selection.css';
 
 /** 다가오는 일정 — 홈(좁은 화면)과 데스크톱 왼쪽 패널이 같은 자리를 쓴다.
     캘린더 탭까지 들어가야 알 수 있는 약속이라면 있으나 마나다: 매일 보는 자리에 하나만 띄운다.
@@ -121,13 +124,22 @@ export function CrewPanel({
   /** 배너를 누르면 캘린더로 옮겨 가 그 일정의 시작일을 고른다 */
   onGoToEvent: (ev: CrewEvent) => void;
 }) {
+  const [selectedId, setSelectedId] = useState<MemberId>(meId);
+  const campus = useRef<HTMLDivElement>(null);
   return (
     <>
       <StatusBar status={statuses[meId]} wit={wit} now={now} onSet={onSetStatus} />
+      <div ref={campus}>
+        <PixelStudyRoom statuses={statuses} now={now} meId={meId} compact
+          selectedId={selectedId} onSelectMember={setSelectedId} />
+      </div>
       <EventLead events={events} todayKey={dayKey(today)} onOpen={onOpenEventSheet} onGo={onGoToEvent} />
       <Board todays={todays} statuses={statuses} now={now} todayKey={dayKey(today)}
-        meId={meId} wit={wit}
-        photoUploads={photoUploads} onOpenPhoto={onOpenPhoto} />
+        meId={meId} wit={wit} selectedId={selectedId} onSelectMember={(id) => {
+          setSelectedId(id);
+          const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+          campus.current?.querySelector('.pixel-map')?.scrollIntoView({ block: 'nearest', behavior: reduced ? 'instant' : 'smooth' });
+        }} photoUploads={photoUploads} onOpenPhoto={onOpenPhoto} />
       <MonthSummary entries={entries} studyDays={studyDays} statuses={statuses}
         meId={meId} now={now} today={today} />
       {sync && <SyncStatus sync={sync} variant="panel" />}

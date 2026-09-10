@@ -1,0 +1,87 @@
+{
+  "result": "PASS",
+  "build": "npm run build",
+  "tests": {
+    "command": "npm test -- src/lib/pixelLife.test.ts src/lib/pixelRoom.test.ts src/components/PixelStudyRoom.test.tsx",
+    "filesPassed": 3,
+    "testsPassed": 37
+  },
+  "autonomousBoundaryObservation": {
+    "actions": [
+      "study",
+      "rest",
+      "water",
+      "chat",
+      "wander",
+      "browse",
+      "read",
+      "coffee"
+    ],
+    "checks": [
+      "studying members stay inside the library",
+      "resting members never enter the library",
+      "only resting members join garden conversations",
+      "actual arrivals before dialogue",
+      "watering tool visible",
+      "brew and sip",
+      "truthful check-in count",
+      "pause and resume",
+      "hidden clock frozen",
+      "no API or runtime errors"
+    ],
+    "dialogueLines": [
+      "오늘 공부는 어때?",
+      "조금씩 풀리고 있어!",
+      "끝나고 커피 한 잔?",
+      "좋아, 같이 힘내자.",
+      "괜찮은 책 찾았어?",
+      "응, 다음에 빌려줄게.",
+      "고마워! 기대된다.",
+      "천천히 읽어도 좋아.",
+      "잠깐 바람 쐴까?",
+      "여기 바람 참 좋다."
+    ],
+    "observation": "85 seconds at normal speed with no input",
+    "places": [
+      "home",
+      "flowers",
+      "chat_right",
+      "chat_left",
+      "pond",
+      "books_east",
+      "books_west",
+      "reading",
+      "tea_right",
+      "coffee",
+      "tea_left",
+      "willow",
+      "gate"
+    ],
+    "result": "PASS",
+    "speakers": [
+      "th",
+      "jj",
+      "sh"
+    ]
+  },
+  "checkinInterruptsConversation": {
+    "checks": [
+      "active dialogue cancelled immediately",
+      "partner returned home",
+      "latest study destination reached",
+      "study count updated"
+    ],
+    "member": "th",
+    "partner": "jj",
+    "result": "PASS"
+  },
+  "appIntegration": {
+    "viewport": "390x844",
+    "checks": [
+      "PASS: original white theme, avatars, separate check-in and section order; study space has no outer card",
+      "PASS: space settings are absent; autonomous life and character motion start automatically at sunset",
+      "PASS: original study check-in arrives; roster and map keyboard selection preserve the active walk and every check-in",
+      "PASS: ending study restores places; other selection and location remain intact; no API calls or page overflow"
+    ]
+  }
+}

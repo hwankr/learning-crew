@@ -9,6 +9,11 @@ import { configurePhotoProvider } from './lib/usePhoto';
 import './styles.css';
 
 async function boot(): Promise<void> {
+  if (new URLSearchParams(location.search).get('pixel-demo') === '1') {
+    const { PixelStudyDemo } = await import('./components/PixelStudyDemo');
+    createRoot(document.getElementById('root')!).render(<PixelStudyDemo />);
+    return;
+  }
   const cfg = loadConfig();
   registerSW(); // 푸시 핸들러 + 오프라인 앱 셸(sw.js)을 최신으로 유지
   if (cfg.needsLogin) {

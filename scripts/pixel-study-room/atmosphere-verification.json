@@ -1,0 +1,9 @@
+{
+  "checks": [
+    "PASS: two-way character selection and Enter/Space preserve study status",
+    "PASS: distinct moods, directional walking, and uninterrupted travel during selection/theme changes",
+    "PASS: every mood respects the motion toggle",
+    "PASS: complete autoplay, correct final state, and bounded activity journal without API requests"
+  ],
+  "result": "PASS"
+}

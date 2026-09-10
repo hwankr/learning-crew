@@ -1,0 +1,53 @@
+{
+  "actions": [
+    "study",
+    "rest",
+    "water",
+    "chat",
+    "wander",
+    "coffee",
+    "browse",
+    "read"
+  ],
+  "checks": [
+    "actual arrivals before dialogue",
+    "watering tool visible",
+    "brew and sip",
+    "truthful check-in count",
+    "pause and resume",
+    "hidden clock frozen",
+    "no API or runtime errors"
+  ],
+  "dialogueLines": [
+    "오늘 공부는 어때?",
+    "조금씩 풀리고 있어!",
+    "끝나고 커피 한 잔?",
+    "좋아, 같이 힘내자.",
+    "괜찮은 책 찾았어?",
+    "응, 다음에 빌려줄게.",
+    "고마워! 기대된다.",
+    "천천히 읽어도 좋아.",
+    "잠깐 바람 쐴까?"
+  ],
+  "observation": "85 seconds at normal speed with no input",
+  "places": [
+    "home",
+    "flowers",
+    "chat_right",
+    "chat_left",
+    "pond",
+    "coffee",
+    "books_west",
+    "reading",
+    "tea_left",
+    "tea_right",
+    "books_east",
+    "willow"
+  ],
+  "result": "PASS",
+  "speakers": [
+    "th",
+    "jj",
+    "sh"
+  ]
+}

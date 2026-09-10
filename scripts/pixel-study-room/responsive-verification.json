@@ -1,0 +1,247 @@
+{
+  "result": "PASS",
+  "viewports": [
+    {
+      "width": 1440,
+      "height": 1000,
+      "zoom": 1,
+      "mapHeight": 520,
+      "overflow": false,
+      "sameWorld": true,
+      "sameActors": true,
+      "sameWalk": true,
+      "correctLayout": true,
+      "quickCheckinVisible": true,
+      "galleryAfterControls": true,
+      "selection": "sh",
+      "studying": "3명 공부 중"
+    },
+    {
+      "width": 1280,
+      "height": 900,
+      "zoom": 1,
+      "mapHeight": 520,
+      "overflow": false,
+      "sameWorld": true,
+      "sameActors": true,
+      "sameWalk": true,
+      "correctLayout": true,
+      "quickCheckinVisible": true,
+      "galleryAfterControls": true,
+      "selection": "sh",
+      "studying": "3명 공부 중"
+    },
+    {
+      "width": 1100,
+      "height": 900,
+      "zoom": 1,
+      "mapHeight": 454,
+      "overflow": false,
+      "sameWorld": true,
+      "sameActors": true,
+      "sameWalk": true,
+      "correctLayout": true,
+      "quickCheckinVisible": true,
+      "galleryAfterControls": true,
+      "selection": "sh",
+      "studying": "3명 공부 중"
+    },
+    {
+      "width": 1099,
+      "height": 900,
+      "zoom": 1,
+      "mapHeight": 520,
+      "overflow": false,
+      "sameWorld": true,
+      "sameActors": true,
+      "sameWalk": true,
+      "correctLayout": true,
+      "quickCheckinVisible": true,
+      "galleryAfterControls": true,
+      "selection": "sh",
+      "studying": "3명 공부 중"
+    },
+    {
+      "width": 1024,
+      "height": 768,
+      "zoom": 1,
+      "mapHeight": 445,
+      "overflow": false,
+      "sameWorld": true,
+      "sameActors": true,
+      "sameWalk": true,
+      "correctLayout": true,
+      "quickCheckinVisible": true,
+      "galleryAfterControls": true,
+      "selection": "sh",
+      "studying": "3명 공부 중"
+    },
+    {
+      "width": 900,
+      "height": 900,
+      "zoom": 1,
+      "mapHeight": 519,
+      "overflow": false,
+      "sameWorld": true,
+      "sameActors": true,
+      "sameWalk": true,
+      "correctLayout": true,
+      "quickCheckinVisible": true,
+      "galleryAfterControls": true,
+      "selection": "sh",
+      "studying": "3명 공부 중"
+    },
+    {
+      "width": 768,
+      "height": 1024,
+      "zoom": 1.5,
+      "mapHeight": 437,
+      "overflow": false,
+      "sameWorld": true,
+      "sameActors": true,
+      "sameWalk": true,
+      "correctLayout": true,
+      "quickCheckinVisible": true,
+      "galleryAfterControls": true,
+      "selection": "sh",
+      "studying": "3명 공부 중"
+    },
+    {
+      "width": 680,
+      "height": 900,
+      "zoom": 2,
+      "mapHeight": 300,
+      "overflow": false,
+      "sameWorld": true,
+      "sameActors": true,
+      "sameWalk": true,
+      "correctLayout": true,
+      "quickCheckinVisible": true,
+      "galleryAfterControls": true,
+      "selection": "sh",
+      "studying": "3명 공부 중"
+    },
+    {
+      "width": 390,
+      "height": 844,
+      "zoom": 2.5,
+      "mapHeight": 266,
+      "overflow": false,
+      "sameWorld": true,
+      "sameActors": true,
+      "sameWalk": true,
+      "correctLayout": true,
+      "quickCheckinVisible": true,
+      "galleryAfterControls": true,
+      "selection": "sh",
+      "studying": "3명 공부 중"
+    },
+    {
+      "width": 320,
+      "height": 740,
+      "zoom": 3,
+      "mapHeight": 240,
+      "overflow": false,
+      "sameWorld": true,
+      "sameActors": true,
+      "sameWalk": true,
+      "correctLayout": true,
+      "quickCheckinVisible": true,
+      "galleryAfterControls": true,
+      "selection": "sh",
+      "studying": "3명 공부 중"
+    },
+    {
+      "width": 844,
+      "height": 390,
+      "zoom": 2.5,
+      "mapHeight": 226,
+      "overflow": false,
+      "sameWorld": true,
+      "sameActors": true,
+      "sameWalk": true,
+      "correctLayout": true,
+      "quickCheckinVisible": true,
+      "galleryAfterControls": true,
+      "selection": "sh",
+      "studying": "3명 공부 중"
+    },
+    {
+      "width": 1440,
+      "height": 1000,
+      "zoom": 1,
+      "mapHeight": 520,
+      "overflow": false,
+      "sameWorld": true,
+      "sameActors": true,
+      "sameWalk": true,
+      "correctLayout": true,
+      "quickCheckinVisible": true,
+      "galleryAfterControls": true,
+      "selection": "sh",
+      "studying": "3명 공부 중"
+    }
+  ],
+  "checks": [
+    "12 viewport transitions preserve the world, all actors, the active walk, selection and check-ins",
+    "Desktop crew rail, mobile quick check-in and secondary gallery remain correctly ordered without page overflow",
+    "Explicit zoom survives resizing; full view fits both dimensions at 320px",
+    "Mobile crew selector, quick check-in, crew cards and keyboard-selected map actor share the same state",
+    "Reduced motion disables all map animations; standalone preview makes no API requests"
+  ],
+  "integratedMobile": {
+    "width": 393,
+    "height": 852,
+    "mapHeight": 252.71875,
+    "zoom": 2,
+    "touch": true,
+    "checkinBeforeMap": true,
+    "overflow": false,
+    "buttonHeights": [
+      44,
+      44,
+      44,
+      44,
+      44,
+      44,
+      44
+    ],
+    "activity": "library",
+    "xTouch": {
+      "before": [
+        40,
+        40
+      ],
+      "after": [
+        121,
+        40
+      ]
+    },
+    "yTouch": {
+      "before": [
+        40,
+        40
+      ],
+      "after": [
+        40,
+        121
+      ]
+    }
+  },
+  "integratedDesktop": {
+    "width": 1440,
+    "panelWidth": 296,
+    "mapWidth": 256,
+    "mapHeight": 220,
+    "zoom": 3,
+    "overflow": false,
+    "checkinBeforeMap": true,
+    "activity": "library"
+  },
+  "cameraChecks": "Existing check-camera.js passed: zoom, focus, fit both dimensions, no overflow and movement identity",
+  "characterChecks": "Existing check-characters.js passed: all 360 frames, actions, directions, preview state isolation, pause/resume and camera identity",
+  "validation": {
+    "build": "PASS",
+    "vitest": "4 files / 32 related tests passed"
+  }
+}
