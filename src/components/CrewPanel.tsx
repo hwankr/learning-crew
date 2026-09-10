@@ -11,6 +11,7 @@ import { Avatar, Icon, RIGHT_D } from './icons';
 import { Board, MeBadge } from './Board';
 import { StatusBar } from './StatusBar';
 import { SyncStatus } from './SyncStatus';
+import { PixelStudyRoom } from './PixelStudyRoom';
 
 /** 다가오는 일정 — 홈(좁은 화면)과 데스크톱 왼쪽 패널이 같은 자리를 쓴다.
     캘린더 탭까지 들어가야 알 수 있는 약속이라면 있으나 마나다: 매일 보는 자리에 하나만 띄운다.
@@ -124,6 +125,7 @@ export function CrewPanel({
   return (
     <>
       <StatusBar status={statuses[meId]} wit={wit} now={now} onSet={onSetStatus} />
+      <PixelStudyRoom statuses={statuses} now={now} meId={meId} compact />
       <EventLead events={events} todayKey={dayKey(today)} onOpen={onOpenEventSheet} onGo={onGoToEvent} />
       <Board todays={todays} statuses={statuses} now={now} todayKey={dayKey(today)}
         meId={meId} wit={wit}
