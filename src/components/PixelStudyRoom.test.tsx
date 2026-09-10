@@ -35,5 +35,23 @@ describe('pixel study scene', () => {
     expect(html).toContain('웅: 휴식 중');
     expect(html).toContain('aria-label="캐릭터 움직임 끄기"');
     expect(html).toContain('pixel-room-compact');
+    expect(html).toContain('현재 노을 · 밤 분위기로 바꾸기');
+    expect(html).toContain('따뜻한 차를 마시는 중');
+  });
+
+  it('exposes all three moods and the selected member’s activity and elapsed time', () => {
+    const html = renderToStaticMarkup(<PixelStudyRoom statuses={{ th: status('th', '도서관', 3_600_000) }} now={now} selectedId="th" />);
+    for (const mood of ['노을', '밤', '비']) expect(html).toContain(`aria-label="${mood} 분위기"`);
+    expect(html).toContain('data-selected-member="th"');
+    expect(html).toContain('노트북으로 공부하는 중');
+    expect(html).toContain('1시간');
+    expect(html).toContain('aria-label="태현 · 도서관에서 공부 중 · 자세히 보기" aria-pressed="true"');
+  });
+
+  it('keeps character details available in the compact app view, including other places', () => {
+    const html = renderToStaticMarkup(<PixelStudyRoom statuses={{ jj: status('jj', '카페') }} now={now} compact selectedId="jj" />);
+    expect(html).toContain('data-selected-member="jj"');
+    expect(html).toContain('카페에서 공부 중');
+    expect(html).not.toContain('친구에게 반갑게 손 흔드는 중');
   });
 });

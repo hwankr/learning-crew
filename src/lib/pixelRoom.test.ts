@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { STATUS_TTL_MS, type MemberStatus } from '../../shared/types';
 import { MEMBERS } from './constants';
-import { roomActivity, roomDestination, roomMotion, roomRoute, roomStatusLabel, type RoomPoint } from './pixelRoom';
+import { ROOM_PERSONALITY, roomActivity, roomDestination, roomFacing, roomMotion, roomRoute, roomStatusLabel, type RoomPoint } from './pixelRoom';
 
 const now = Date.parse('2026-09-10T05:00:00.000Z');
 const active: MemberStatus = {
@@ -49,9 +49,17 @@ describe('pixel room routes', () => {
       const a = points[i - 1]!;
       const b = points[i]!;
       expect(a.x === b.x || a.y === b.y).toBe(true);
-      if (Math.min(a.y, b.y) < 232 && Math.max(a.y, b.y) > 232) {
-        expect(a.x).toBe(240);
-        expect(b.x).toBe(240);
+      // The front wall occupies y=280..290; the 54px-wide door is centered at x=350.
+      if (Math.min(a.y, b.y) < 285 && Math.max(a.y, b.y) > 285) {
+        expect(a.x).toBe(350);
+        expect(b.x).toBe(350);
+      }
+      // Table bodies extend below each seated foot position. Walk via their sides.
+      for (const seat of MEMBERS.map((_, member) => dest(member, 'library'))) {
+        const crossesDesk = a.x === b.x
+          ? a.x > seat.x - 35 && a.x < seat.x + 36 && Math.max(a.y, b.y) > seat.y + 2 && Math.min(a.y, b.y) < seat.y + 30
+          : a.y > seat.y + 2 && a.y < seat.y + 30 && Math.max(a.x, b.x) > seat.x - 35 && Math.min(a.x, b.x) < seat.x + 36;
+        expect(crossesDesk).toBe(false);
       }
     }
   }
@@ -60,8 +68,11 @@ describe('pixel room routes', () => {
     for (const activity of ['library', 'rest'] as const) {
       const points = MEMBERS.map((_, i) => dest(i, activity));
       expect(new Set(points.map((p) => `${p.x},${p.y}`)).size).toBe(MEMBERS.length);
-      expect(points.every((p) => p.x >= 60 && p.x <= 420)).toBe(true);
+      expect(points.every((p) => p.x >= 160 && p.x <= 520)).toBe(true);
     }
+    const seats = MEMBERS.map((_, i) => dest(i, 'library'));
+    expect(seats.filter((p) => p.y === 145)).toHaveLength(3);
+    expect(seats.filter((p) => p.y === 224)).toHaveLength(2);
   });
 
   it('uses the door in both directions for every member, including off-scene departures', () => {
@@ -96,6 +107,37 @@ describe('pixel room routes', () => {
     const position = dest(2, 'library');
     expect(roomRoute(position, position)).toEqual([position]);
     expect(roomMotion([position]).duration).toBe(0);
+  });
+
+  it('can redirect all members from every leg of entry and exit, including fractional animation positions', () => {
+    MEMBERS.forEach((_, member) => {
+      for (const activity of ['library', 'rest', 'away'] as const) {
+        const original = roomRoute(dest(member, 'library'), dest(member, activity));
+        for (let i = 1; i < original.length; i++) {
+          const a = original[i - 1]!; const b = original[i]!;
+          const current = { x: a.x + (b.x - a.x) * .371, y: a.y + (b.y - a.y) * .371 };
+          for (const target of ['library', 'rest', 'away'] as const) {
+            const redirected = roomRoute(current, dest(member, target));
+            expect(redirected[0]).toEqual(current);
+            expect(redirected.at(-1)).toEqual(dest(member, target));
+            assertWalkable(redirected);
+          }
+        }
+      }
+    });
+  });
+
+  it('faces the actual direction of travel on all four axes', () => {
+    const start = { x: 350, y: 314 };
+    expect(roomFacing(start, { x: 528, y: 314 })).toBe('east');
+    expect(roomFacing(start, { x: 286, y: 314 })).toBe('west');
+    expect(roomFacing(start, { x: 350, y: 190 })).toBe('north');
+    expect(roomFacing(start, { x: 350, y: 364 })).toBe('south');
+  });
+
+  it('gives the scene varied study and rest activities for the five-member crew', () => {
+    expect(new Set(MEMBERS.map((m) => ROOM_PERSONALITY[m.id].study))).toEqual(new Set(['read', 'write', 'type']));
+    expect(new Set(MEMBERS.map((m) => ROOM_PERSONALITY[m.id].rest))).toEqual(new Set(['stretch', 'sip', 'read', 'wave']));
   });
 
   it('assigns strictly increasing, distance-based offsets and finite durations', () => {

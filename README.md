@@ -13,8 +13,8 @@
 
 [Claude Design 프로토타입](https://claude.ai/design/p/601a88c4-4037-44d9-9b91-4f8b386af907)에서 출발 — 초기 정적 구현은 [legacy/](legacy/)에 보존.
 
-**픽셀 도서관 시연**: 개발 서버에서 `/?pixel-demo=1`을 열면 크루의 공부 시작·종료와
-캐릭터 이동을 실제 기록에 영향 없이 체험할 수 있다. [시연 방법과 검증 기록](scripts/pixel-study-room/README.md).
+**픽셀 도서관 시연**: 개발 서버에서 `/?pixel-demo=1`을 열면 노을·밤·비 분위기의 숲속 도서관에서
+크루별 공부 동작과 캐릭터 이동을 체험할 수 있다. [시연 방법과 검증 기록](scripts/pixel-study-room/README.md).
 
 ## 아키텍처 — 로컬 퍼스트
 

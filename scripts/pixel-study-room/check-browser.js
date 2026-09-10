@@ -29,7 +29,7 @@
   click('승환 도서관에서 공부 시작');
   await wait(() => actor('sh').dataset.moving === 'true');
   await wait(settled);
-  assert(point('sh').x === 80 && point('sh').y === 170, 'Starting study did not reach the desk');
+  assert(point('sh').x === 225 && point('sh').y === 145, 'Starting study did not reach the desk');
   click('승환 공부 종료');
   await wait(() => actor('sh').dataset.moving === 'true');
   await sleep(160);
@@ -39,18 +39,22 @@
   const after = point('sh');
   assert(Math.hypot(before.x - after.x, before.y - after.y) < 20, 'Interrupted walk teleported');
   await wait(settled);
-  assert(point('sh').x === 80 && point('sh').y === 170, 'Restart did not reach the latest target');
+  assert(point('sh').x === 225 && point('sh').y === 145, 'Restart did not reach the latest target');
   results.push('PASS: start, end, and mid-walk reversal');
 
   click('모두 쉬어가기');
   await sleep(80);
   click('캐릭터 움직임 끄기');
   await wait(settled);
-  assert([...document.querySelectorAll('.px-actor')].every((a) => new DOMMatrix(getComputedStyle(a).transform).f === 308), 'Disabling motion did not settle the latest state');
+  const rest = { sh: [198, 350], wg: [242, 350], th: [324, 364], jj: [448, 351], kj: [492, 351] };
+  assert([...document.querySelectorAll('.px-actor')].every((a) => {
+    const matrix = new DOMMatrix(getComputedStyle(a).transform);
+    return matrix.e === rest[a.dataset.member][0] && matrix.f === rest[a.dataset.member][1];
+  }), 'Disabling motion did not settle the latest state');
   assert(document.querySelector('.pixel-room-world').getAnimations({ subtree: true }).length === 0, 'Decorative animation still running');
   click('모두 도서관으로');
   await sleep(80);
-  assert(settled() && point('sh').y === 170, 'State changes with motion disabled missed their destination');
+  assert(settled() && point('sh').y === 145, 'State changes with motion disabled missed their destination');
   click('캐릭터 움직임 켜기');
   await sleep(80);
   assert(settled(), 'Enabling motion replayed arrival');
@@ -63,7 +67,7 @@
   await sleep(80);
   await wait(settled);
   const all = [...document.querySelectorAll('.px-actor')].map((a) => new DOMMatrix(getComputedStyle(a).transform));
-  assert(all.every((m) => m.f === 170) && new Set(all.map((m) => m.e)).size === 5, 'Simultaneous arrivals overlapped');
+  assert(all.filter((m) => m.f === 145).length === 3 && all.filter((m) => m.f === 224).length === 2 && new Set(all.map((m) => m.e)).size === 5, 'Simultaneous arrivals overlapped');
   assert(document.querySelector('.pixel-room-live').textContent === '5명 공부 중', 'Library counter mismatch');
   results.push('PASS: five simultaneous arrivals/departures and stable seating');
 
