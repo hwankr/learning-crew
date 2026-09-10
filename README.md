@@ -15,6 +15,7 @@
 
 **픽셀 도서관 시연**: 개발 서버에서 `/?pixel-demo=1`을 열면 노을·밤·비 분위기의 숲속 도서관에서
 크루별 공부 동작과 캐릭터 이동을 체험할 수 있다. [시연 방법과 검증 기록](scripts/pixel-study-room/README.md).
+이번 기능의 병합 전후 기준점과 되돌리기 방법은 [복원 기록](scripts/pixel-study-room/ROLLBACK.md)에 남겼다.
 
 ## 아키텍처 — 로컬 퍼스트
 
