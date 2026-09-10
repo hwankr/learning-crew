@@ -1,0 +1,116 @@
+{
+  "result": "PASS",
+  "cases": [
+    {
+      "app": "standalone preview",
+      "device": "mouse",
+      "width": 1440,
+      "height": 1000,
+      "drags": [
+        {
+          "left": 120,
+          "top": 120
+        },
+        {
+          "left": 120,
+          "top": 120
+        }
+      ],
+      "checks": [
+        "finder absent",
+        "tap hides and restores",
+        "world and active walk preserved",
+        "zoom remains usable",
+        "drag hides and stays hidden",
+        "keyboard recovery and character selection",
+        "no overflow or API calls"
+      ]
+    },
+    {
+      "app": "standalone preview",
+      "device": "touch",
+      "width": 390,
+      "height": 844,
+      "drags": [
+        {
+          "left": 109,
+          "top": 109
+        },
+        {
+          "left": 110,
+          "top": 110
+        }
+      ],
+      "checks": [
+        "finder absent",
+        "tap hides and restores",
+        "world and active walk preserved",
+        "zoom remains usable",
+        "drag hides and stays hidden",
+        "keyboard recovery and character selection",
+        "no overflow or API calls",
+        "touch cancellation stays hidden",
+        "character touch stays hidden"
+      ]
+    },
+    {
+      "app": "crew app",
+      "device": "mouse",
+      "width": 1440,
+      "height": 1000,
+      "drags": [
+        {
+          "left": 120,
+          "top": 120
+        },
+        {
+          "left": 120,
+          "top": 120
+        }
+      ],
+      "checks": [
+        "finder absent",
+        "tap hides and restores",
+        "world and active walk preserved",
+        "zoom remains usable",
+        "drag hides and stays hidden",
+        "keyboard recovery and character selection",
+        "no overflow or API calls"
+      ]
+    },
+    {
+      "app": "crew app",
+      "device": "touch",
+      "width": 390,
+      "height": 844,
+      "drags": [
+        {
+          "left": 109,
+          "top": 109
+        },
+        {
+          "left": 110,
+          "top": 110
+        }
+      ],
+      "checks": [
+        "finder absent",
+        "tap hides and restores",
+        "world and active walk preserved",
+        "zoom remains usable",
+        "drag hides and stays hidden",
+        "keyboard recovery and character selection",
+        "no overflow or API calls",
+        "touch cancellation stays hidden",
+        "character touch stays hidden"
+      ]
+    }
+  ],
+  "build": "npm run build: PASS",
+  "tests": {
+    "command": "npm test -- src/components/PixelStudyRoom.test.tsx src/lib/pixelRoom.test.ts",
+    "filesPassed": 2,
+    "testsPassed": 21
+  },
+  "camera": "check-camera.js: PASS — selection focus, full view, zoom and active walk preserved"
+}

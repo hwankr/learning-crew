@@ -169,9 +169,9 @@
 
 .pixel-map { position: relative; }
 .pixel-map-toolbar { position: absolute; inset: 9px 9px auto; z-index: 2; display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-height: 32px; pointer-events: none; }
+.pixel-map-toolbar[hidden] { display: none; }
 .pixel-map-toolbar > * { pointer-events: auto; }
-.pixel-map-hint { margin-right: auto; padding: 7px 10px; border-radius: 20px; background: #ffffffeb; color: var(--crew-muted); font-size: 10px; }
-.pixel-map-toolbar > button { display: flex; align-items: center; gap: 5px; }
+.pixel-map-hint { margin-right: auto; padding: 7px 10px; border-radius: 20px; background: #ffffffeb; color: var(--crew-muted); font-size: 10px; pointer-events: none; }
 .pixel-map-toolbar button { min-height: 30px; padding: 4px 9px; border: 1px solid #E4E7EC; border-radius: 8px; background: #ffffffed; color: #4E555F; box-shadow: 0 2px 6px #233c2412; font: inherit; font-size: 10px; cursor: pointer; white-space: nowrap; }
 .pixel-map-toolbar button:hover:enabled { background: #FFFDF4; color: #16181D; }
 .pixel-map-toolbar button:disabled { opacity: .4; cursor: default; }

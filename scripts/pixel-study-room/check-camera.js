@@ -14,7 +14,8 @@
   for (let i = 0; i < 2; i++) { button('지도 확대').click(); await sleep(50); }
   assert(viewport.scrollWidth > viewport.clientWidth, 'Zoom did not enlarge the map');
   assert(moving.getAnimations()[0] === animation, 'Zoom restarted an autonomous walk');
-  button('웅 캐릭터 보기').click(); button('선택한 크루로 화면 이동').click(); await sleep(50);
+  assert(!button('선택한 크루로 화면 이동'), 'The removed crew finder is still present');
+  button('웅 캐릭터 보기').click(); await sleep(50);
   const matrix = world.querySelector('[data-member="wg"]').getScreenCTM();
   const visible = viewport.getBoundingClientRect();
   assert(matrix.e >= visible.left && matrix.e <= visible.right && matrix.f >= visible.top && matrix.f <= visible.bottom, 'Selected member is outside the camera');
@@ -25,5 +26,5 @@
   assert(moving.getAnimations()[0] === animation, 'Camera selection or fit restarted a walk');
   assert(document.documentElement.scrollWidth <= window.innerWidth, 'Map caused page overflow');
   button('지도 확대').click(); await sleep(100);
-  return { result: 'PASS', checks: ['zoom enlarges the world', 'focus finds the selected member', 'full view fits width and height', 'camera preserves native travel', 'no page overflow'], dragFrom: { x: Math.round(visible.left + visible.width * .65), y: Math.round(visible.top + visible.height * .65) }, scrollBeforeDrag: [viewport.scrollLeft, viewport.scrollTop] };
+  return { result: 'PASS', checks: ['crew finder removed', 'zoom enlarges the world', 'selection focuses the member automatically', 'full view fits width and height', 'camera preserves native travel', 'no page overflow'], dragFrom: { x: Math.round(visible.left + visible.width * .65), y: Math.round(visible.top + visible.height * .65) }, scrollBeforeDrag: [viewport.scrollLeft, viewport.scrollTop] };
 })()

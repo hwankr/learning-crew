@@ -8,6 +8,8 @@ export function PixelMapViewport({ selected, motion, children }: {
   const viewport = useRef<HTMLDivElement>(null);
   const pendingCenter = useRef<{ x: number; y: number } | null>(null);
   const drag = useRef<{ x: number; y: number; left: number; top: number } | null>(null);
+  const gesture = useRef<{ id: number; x: number; y: number; moved: boolean; revealOnTap: boolean } | null>(null);
+  const [controlsVisible, setControlsVisible] = useState(true);
   const [manualZoom, setManualZoom] = useState<number | null>(null);
   const [baseWidth, setBaseWidth] = useState<number>();
   // Keep characters legible in a sidebar as well as a phone. Explicit zoom choices
@@ -50,12 +52,14 @@ export function PixelMapViewport({ selected, motion, children }: {
       y: (element.scrollTop + element.clientHeight / 2) / element.scrollHeight };
     setManualZoom(next);
   };
+  const endGesture = () => {
+    gesture.current = null;
+    drag.current = null;
+    if (viewport.current) delete viewport.current.dataset.dragging;
+  };
   return <div className="pixel-map">
-    <div className="pixel-map-toolbar" role="group" aria-label="지도 보기">
+    <div className="pixel-map-toolbar" role="group" aria-label="지도 보기" hidden={!controlsVisible}>
       <span className="pixel-map-hint">드래그해서 둘러보기</span>
-      <button type="button" onClick={focusMember} aria-label="선택한 크루로 화면 이동">크루 찾기
-        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" aria-hidden="true"><circle cx="8" cy="8" r="4" /><path d="M8 1v4m0 6v4M1 8h4m6 0h4" /></svg>
-      </button>
       <div className="pixel-map-zoom">
         <button type="button" onClick={() => changeZoom(zoom - .5)} disabled={zoom <= 1} aria-label="지도 축소">−</button>
         <button type="button" onClick={() => changeZoom(1)} aria-label="지도 전체 보기">{Math.round(zoom * 100)}%</button>
@@ -63,18 +67,38 @@ export function PixelMapViewport({ selected, motion, children }: {
       </div>
     </div>
     <div ref={viewport} className="pixel-map-viewport pixel-room-stage" data-motion={motion ? 'on' : 'off'}
-      data-zoom={zoom} tabIndex={0} role="region" aria-label="숲속 캠퍼스 지도 · 방향키 또는 드래그로 이동"
+      data-zoom={zoom} tabIndex={0} role="region" aria-label="숲속 캠퍼스 지도 · 방향키 또는 드래그로 이동 · 빈 곳을 탭하거나 Enter 키로 확대 버튼 표시"
+      onKeyDown={(event) => {
+        if (event.target !== event.currentTarget) return;
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          setControlsVisible((visible) => !visible);
+        }
+      }}
       onPointerDown={(event) => {
-        if (event.pointerType !== 'mouse' || event.button !== 0 || (event.target as Element).closest('[role="button"]')) return;
+        if (!event.isPrimary || event.button !== 0) return;
+        const onActor = !!(event.target as Element).closest('[role="button"]');
+        gesture.current = { id: event.pointerId, x: event.clientX, y: event.clientY, moved: false,
+          revealOnTap: !controlsVisible && !onActor };
+        setControlsVisible(false);
+        // Touch keeps native scrolling; only a blank-space tap can bring controls back.
+        if (event.pointerType !== 'mouse' || onActor) return;
         const element = event.currentTarget;
         drag.current = { x: event.clientX, y: event.clientY, left: element.scrollLeft, top: element.scrollTop };
         element.setPointerCapture(event.pointerId);
         element.dataset.dragging = 'true';
       }} onPointerMove={(event) => {
+        const current = gesture.current;
+        if (!current || current.id !== event.pointerId) return;
+        if (Math.hypot(event.clientX - current.x, event.clientY - current.y) > 8) current.moved = true;
         if (!drag.current) return;
         event.currentTarget.scrollTo(drag.current.left - event.clientX + drag.current.x, drag.current.top - event.clientY + drag.current.y);
-      }} onPointerUp={(event) => { drag.current = null; delete event.currentTarget.dataset.dragging; }}
-      onLostPointerCapture={(event) => { drag.current = null; delete event.currentTarget.dataset.dragging; }}>
+      }} onPointerUp={(event) => {
+        const current = gesture.current;
+        if (!current || current.id !== event.pointerId) return;
+        if (current.revealOnTap && !current.moved) setControlsVisible(true);
+        endGesture();
+      }} onPointerCancel={endGesture} onLostPointerCapture={endGesture}>
       <div className="pixel-map-canvas" style={{ width: baseWidth ? baseWidth * zoom : `${zoom * 100}%` }}>{children}</div>
     </div>
   </div>;
