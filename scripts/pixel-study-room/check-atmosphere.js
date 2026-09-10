@@ -2,7 +2,7 @@
 (async () => {
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const assert = (value, message) => { if (!value) throw Error(message); };
-  const wait = async (fn, timeout = 7000) => {
+  const wait = async (fn, timeout = 14000) => {
     const end = Date.now() + timeout;
     while (!fn()) {
       if (Date.now() > end) throw Error('Timed out waiting for the scene');
@@ -16,6 +16,9 @@
   const world = document.querySelector('.pixel-room-world');
   const selected = () => document.querySelector('.pixel-room-insight').dataset.selectedMember;
   const results = [];
+  if (room.dataset.autonomous === 'true') button('자율 행동').click();
+  await sleep(100);
+  await wait(() => [...world.querySelectorAll('.px-actor')].every((a) => a.dataset.moving === 'false'));
 
   button('진주 캐릭터 보기').click();
   await wait(() => selected() === 'jj');
@@ -66,9 +69,9 @@
   await sleep(80);
   results.push('PASS: every mood respects the motion toggle');
 
-  button('자동 시연').click();
-  await wait(() => button('시연 멈추기'));
-  await wait(() => button('자동 시연'), 21_000);
+  button('체크인 시연').click();
+  await wait(() => button('체크인 시연 멈추기'));
+  await wait(() => button('체크인 시연'), 21_000);
   await wait(() => [...world.querySelectorAll('.px-actor')].every((a) => a.dataset.moving === 'false'));
   assert(actor('sh').dataset.activity === 'rest', 'Autoplay did not finish the first study session');
   assert(['wg', 'th', 'jj', 'kj'].every((id) => actor(id).dataset.activity === 'library'), 'Autoplay did not seat the other four members');

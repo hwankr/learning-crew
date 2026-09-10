@@ -1,19 +1,21 @@
 import type { Member } from '../lib/constants';
-import { ROOM_PERSONALITY, type RoomFacing } from '../lib/pixelRoom';
+import { ROOM_PERSONALITY, type RoomAction, type RoomFacing } from '../lib/pixelRoom';
 
 /** Original layered sprites; half-pixel accents add fabric, hair and skin shading. */
-export function PixelCharacter({ m, pose = 'idle', facing = 'south' }: {
+export function PixelCharacter({ m, pose = 'idle', facing = 'south', action = 'rest' }: {
   m: Member;
   pose?: 'idle' | 'walk' | 'study';
   facing?: RoomFacing;
+  action?: RoomAction;
 }) {
   const personality = ROOM_PERSONALITY[m.id];
+  const rest = action === 'coffee' ? 'sip' : action === 'read' || action === 'browse' ? 'read' : action === 'rest' ? personality.rest : 'still';
   const hairLight = `color-mix(in srgb, ${m.hairC} 68%, #bfa181)`;
   const hairMid = `color-mix(in srgb, ${m.hairC} 84%, #bfa181)`;
   const clothDark = `color-mix(in srgb, ${m.color} 65%, #344846)`;
   const clothLight = `color-mix(in srgb, ${m.color} 72%, #ffebbd)`;
   return (
-    <g className={`px-person px-person-${pose} px-study-${personality.study} px-rest-${personality.rest}`} data-facing={facing}>
+    <g className={`px-person px-person-${pose} px-study-${personality.study} px-rest-${rest} px-action-${action}`} data-facing={facing}>
       <g className="px-facing-front">
       <g className="px-person-body">
         {m.id === 'kj' && <path d="M4 7h16v20h-4V15H8v12H4z" fill={m.hairC} />}
@@ -63,11 +65,11 @@ export function PixelCharacter({ m, pose = 'idle', facing = 'south' }: {
           <path d="M18 26h3v3h-3z" fill="#efc4a4" />
           <path d="M18 26h2v1h-2z" fill="#ffe0b8" /><path d="M20 27h1v2h-1z" fill="#c98e75" />
           {pose === 'study' && personality.study === 'write' && <path d="M20 25h1v6h-1z" fill="#675044" />}
-          {pose === 'idle' && personality.rest === 'sip' && <g className="px-held-cup"><path d="M17 23h5v5h-5zM22 24h2v3h-2" fill="#fbebc8" /><path d="M18 24h3v1h-3z" fill="#95765e" /></g>}
+          {pose === 'idle' && rest === 'sip' && <g className="px-held-cup"><path d="M17 23h5v5h-5zM22 24h2v3h-2" fill="#fbebc8" /><path d="M18 24h3v1h-3z" fill="#95765e" /></g>}
         </g>
         <g className="px-leg-left"><path d="M6 27h5v4H5v-2h1z" fill="#3b4852" /><path d="M7 27h2v3H7z" fill="#62727a" /><path d="M5 30h6v2H5z" fill="#dbd5bd" /><path d="M5 30h5v1H5z" fill="#fff0ce" /><path d="M6 30h2v.5H6z" fill="#8f998f" /></g>
         <g className="px-leg-right"><path d="M13 27h5v2h1v2h-6z" fill="#3b4852" /><path d="M14 27h2v3h-2z" fill="#62727a" /><path d="M13 30h6v2h-6z" fill="#dbd5bd" /><path d="M14 30h5v1h-5z" fill="#fff0ce" /><path d="M16 30h2v.5h-2z" fill="#8f998f" /></g>
-        {pose === 'idle' && personality.rest === 'read' && <g><path d="M5 23h7v1h7v6h-7v-1H5z" fill="#788b71" /><path d="M6 23h5v1h6v4h-5v-1H6z" fill="#f3e2b7" /></g>}
+        {pose === 'idle' && rest === 'read' && <g className="px-held-book"><path d="M5 23h7v1h7v6h-7v-1H5z" fill="#788b71" /><path d="M6 23h5v1h6v4h-5v-1H6z" fill="#f3e2b7" /><path className="px-page" d="M12 24h5v4h-5z" fill="#fff0c9" /></g>}
       </g>
       </g>
       <g className="px-facing-back">
@@ -80,7 +82,7 @@ export function PixelCharacter({ m, pose = 'idle', facing = 'south' }: {
           <path d="M5 20h14v8H5z" fill={m.color} />
           <path d="M5 21h2v6H5zM17 21h2v7h-2z" fill={clothDark} /><path d="M7 20h10v1H7z" fill={clothLight} />
           <g className="px-arm-left"><path d="M3 21h3v5H3z" fill={m.color} /><path d="M3 26h3v3H3z" fill="#efc4a4" /></g>
-          <g className="px-arm-right"><path d="M18 21h3v5h-3z" fill={m.color} /><path d="M18 26h3v3h-3z" fill="#efc4a4" /></g>
+          <g className="px-arm-right"><path d="M18 21h3v5h-3z" fill={m.color} /><path d="M18 26h3v3h-3z" fill="#efc4a4" />{action === 'coffee' && pose === 'idle' && <path d="M18 23h5v5h-5zM23 24h2v3h-2z" fill="#f8e7c3" />}</g>
           <path d="M7 19h10v11H7zM9 17h6v3H9z" fill="#92704f" /><path d="M8 20h8v6H8z" fill="#ba9a6f" /><path d="M9 26h6v3H9z" fill="#a1845d" /><path d="M11 22h3v2h-3z" fill={m.soft} />
           <path d="M8 20h1v8H8zM9 20h6v1H9zM9 26h6v1H9z" fill="#e0c297" /><path d="M16 20h1v10h-1zM10 29h6v1h-6z" fill="#6c5846" /><path d="M10 27h4v.5h-4z" fill="#705c47" />
           {m.id === 'kj' && <path d="M4 10h4v14H4zM16 10h4v14h-4z" fill={m.hairC} />}
@@ -99,7 +101,14 @@ export function PixelCharacter({ m, pose = 'idle', facing = 'south' }: {
           <path d="M9 20h6v1H9z" fill={clothLight} /><path d="M17 21h1v7h-1zM10 27h7v1h-7z" fill={clothDark} />
           <path d="M4 20h6v9H4z" fill="#a17f56" /><path d="M4 20h5v3H4z" fill="#c6a676" />
           <path d="M4 20h1v7H4zM5 20h3v1H5z" fill="#dfc397" /><path d="M9 22h1v7H9zM5 28h4v1H5z" fill="#776048" />
-          <g className="px-arm-right"><path d="M13 21h4v5h-4z" fill={m.color} /><path d="M14 26h3v3h-3z" fill="#efc4a4" /></g>
+          <g className="px-arm-right"><path d="M13 21h4v5h-4z" fill={m.color} /><path d="M14 26h3v3h-3z" fill="#efc4a4" />
+            {pose === 'idle' && rest === 'read' && <g className="px-held-book"><path d="M17 22h8v7h-8z" fill="#74886b" /><path d="M18 22h6v5h-6z" fill="#f7e3b3" /><path d="M19 24h4v1h-4z" fill="#b4a076" /></g>}
+            {pose === 'idle' && action === 'water' && <g className="px-watering-can">
+              <path d="M17 24h8v7h-8zM18 22h6v2h-6zM25 25h3v-3h3v3h-2v4h-4z" fill="#567e79" /><path d="M18 24h6v2h-6zM18 26h2v4h-2zM29 22h3v2h-3z" fill="#aac2a1" />
+              <path d="M15 24h3v5h-3z" fill="none" stroke="#aec6a8" strokeWidth="1" />
+              <path className="px-water-drops" d="M33 25h1v2h-1zM35 29h1v2h-1zM32 31h1v2h-1zM37 33h1v2h-1z" fill="#c5e2d6" />
+            </g>}
+          </g>
           <g className="px-leg-left"><path d="M8 28h5v4H7v-2h1z" fill="#48525a" /><path d="M7 31h6v1H7z" fill="#faf2dc" /></g>
           <g className="px-leg-right"><path d="M13 28h4v2h2v2h-6z" fill="#48525a" /><path d="M13 31h6v1h-6z" fill="#faf2dc" /></g>
         </g>

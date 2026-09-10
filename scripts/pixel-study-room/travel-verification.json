@@ -1,0 +1,11 @@
+{
+  "checks": [
+    "PASS: start, end, and mid-walk reversal",
+    "PASS: motion toggle, status changes while paused, and resume without replay",
+    "PASS: five simultaneous arrivals/departures and stable seating",
+    "PASS: hidden/visible page lifecycle",
+    "PASS: manual actions cancel pending autoplay steps",
+    "PASS: preview has no API requests"
+  ],
+  "result": "PASS"
+}

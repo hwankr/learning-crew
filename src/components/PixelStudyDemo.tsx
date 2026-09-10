@@ -23,7 +23,7 @@ export function PixelStudyDemo() {
   const [now, setNow] = useState(Date.now);
   const [playing, setPlaying] = useState(false);
   const [selectedId, setSelectedId] = useState<MemberId>('wg');
-  const [message, setMessage] = useState('캐릭터를 눌러보세요. 저마다의 작은 하루가 있어요.');
+  const [message, setMessage] = useState('크루는 스스로 책을 고르고, 정원을 거닐고, 친구를 만나 이야기해요.');
   const [activityLog, setActivityLog] = useState<{ text: string; at: string }[]>([]);
   const announce = useCallback((text: string) => {
     setMessage(text);
@@ -82,21 +82,21 @@ export function PixelStudyDemo() {
   return (
     <div className="pixel-demo">
       <header className="pixel-demo-nav">
-        <div className="pixel-demo-brand"><Wordmark /><span>우리의 작은 공부방</span></div>
+        <div className="pixel-demo-brand"><Wordmark /><span>우리의 작은 캠퍼스</span></div>
         <span className="pixel-demo-preview"><span className="pixel-demo-preview-dot" />시연 모드</span>
       </header>
       <main className="pixel-demo-main">
         <div className="pixel-demo-intro">
           <div>
-            <p className="pixel-demo-eyebrow">A QUIET CORNER, A SHARED DAY</p>
+            <p className="pixel-demo-eyebrow">A LITTLE WORLD, A SHARED DAY</p>
             <h1>오늘도, <span>같은 공간에서.</span></h1>
-            <p className="pixel-demo-description">책장을 넘기는 소리, 따뜻한 불빛, 그리고 함께하는 우리.</p>
+            <p className="pixel-demo-description">도서관에서 카페로, 정원에서 다시 책상으로. 저마다의 하루가 흐르는 곳.</p>
           </div>
           <button type="button" className={'pixel-demo-play' + (playing ? ' playing' : '')}
             aria-pressed={playing} onClick={() => {
               if (playing) {
                 setPlaying(false);
-                setMessage('자동 시연을 멈췄어요. 버튼으로 계속 바꿔볼 수 있어요.');
+                setMessage('체크인 시연을 멈췄어요. 크루의 작은 하루는 계속돼요.');
               } else {
                 setStatuses({});
                 setActivityLog([]);
@@ -107,7 +107,7 @@ export function PixelStudyDemo() {
             <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
               {playing ? <path d="M4 3h3v10H4zM9 3h3v10H9z" fill="currentColor" /> : <path d="m5 3 7 5-7 5z" fill="currentColor" />}
             </svg>
-            {playing ? '시연 멈추기' : '자동 시연'}
+            {playing ? '체크인 시연 멈추기' : '체크인 시연'}
           </button>
         </div>
         <div className="pixel-demo-layout">
@@ -129,7 +129,7 @@ export function PixelStudyDemo() {
                     <button type="button" className="pixel-demo-select" aria-label={`${m.name} 캐릭터 보기`} aria-pressed={selectedId === m.id} onClick={() => setSelectedId(m.id)}>
                       <span className="pixel-demo-avatar" style={{ background: m.soft }}><PixelPortrait m={m} />{active && <span className="pixel-demo-avatar-dot" />}</span>
                       <span className="pixel-demo-member-text"><strong>{m.name}<span>{active ? { read: '독서', write: '필기', type: '타이핑' }[ROOM_PERSONALITY[m.id].study] : '휴식'}</span></strong>
-                        <span>{active && status.since ? fmtElapsed(status.since, now) : '정원에서 쉬어가기'}</span>
+                        <span>{active && status.since ? fmtElapsed(status.since, now) : '캠퍼스에서 쉬어가기'}</span>
                       </span>
                     </button>
                     <button type="button" className="pixel-demo-checkin" aria-pressed={active}
@@ -144,11 +144,11 @@ export function PixelStudyDemo() {
               <button type="button" disabled={studying === 0} onClick={() => setEveryone(false)}>모두 쉬어가기 <span aria-hidden="true">☁</span></button>
             </div>
             <div className="pixel-demo-journal">
-              <h3><span aria-hidden="true">⌁</span> 공간의 작은 소식</h3>
+              <h3><span aria-hidden="true">⌁</span> 체크인 소식</h3>
               {activityLog.length ? <ol>{activityLog.map((event, i) => <li key={`${event.at}-${i}`}><span>{event.text}</span><time>{event.at}</time></li>)}</ol>
                 : <p>누군가 자리에 앉으면,<br />우리의 이야기도 한 줄씩 쌓여요.</p>}
             </div>
-            <div className="pixel-demo-note"><span aria-hidden="true">✳</span><p>마음껏 바꿔보세요.<br />시연은 실제 공부 기록에 반영되지 않아요.</p></div>
+            <div className="pixel-demo-note"><span aria-hidden="true">✳</span><p>시연은 실제 공부 기록에 반영되지 않아요. 캐릭터의 산책과 대화는 공간 속 연출이며, 공부 중 표시와 시간은 체크인 상태를 따라가요.</p></div>
           </aside>
         </div>
         <footer className="pixel-demo-footer"><span>잠깐 쉬어가도, 우리는 같은 곳에.</span><span>LEARNING CREW · MADE FOR OUR LITTLE EVERYDAY</span></footer>
