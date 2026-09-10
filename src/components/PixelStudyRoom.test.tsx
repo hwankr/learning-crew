@@ -28,14 +28,17 @@ describe('pixel study scene', () => {
     expect(html).toContain('data-member="sh" data-activity="away"');
   });
 
-  it('returns expired members to rest and provides an accessible motion control in compact mode', () => {
+  it('returns expired members to rest and starts the compact room autonomously at sunset without settings', () => {
     const html = renderToStaticMarkup(<PixelStudyRoom statuses={{ wg: status('wg', '도서관', STATUS_TTL_MS) }} now={now} compact />);
     expect(html).toContain('0명 공부 중');
     expect(html).toContain('휴식 5명');
     expect(html).toContain('웅: 휴식 중');
-    expect(html).toContain('aria-label="캐릭터 움직임 끄기"');
     expect(html).toContain('pixel-room-compact');
-    expect(html).toContain('현재 노을 · 밤 분위기로 바꾸기');
+    expect(html).toContain('data-mood="sunset"');
+    expect(html).toContain('data-autonomous="true"');
+    expect(html).not.toContain('공간 설정');
+    expect(html).not.toContain('pixel-room-tools');
+    expect(html).not.toContain('pixel-room-moods');
     expect(html).toContain('따뜻한 차를 마시는 중');
   });
 

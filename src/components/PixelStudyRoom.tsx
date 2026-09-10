@@ -42,8 +42,6 @@ export function PixelStudyRoom({ statuses, now, meId, compact = false, selectedI
   const [autonomous, setAutonomous] = useState(true);
   const [speed, setSpeed] = useState(1);
   const [mood, setMood] = useState<RoomMood>('sunset');
-  const moodIndex = MOODS.findIndex((option) => option.id === mood);
-  const nextMood = MOODS[(moodIndex + 1) % MOODS.length]!;
   const [localSelected, setLocalSelected] = useState<MemberId>(meId ?? 'wg');
   const selected = selectedId ?? localSelected;
   const selectMember = useCallback((id: MemberId) => { setLocalSelected(id); onSelectMember?.(id); }, [onSelectMember]);
@@ -79,16 +77,12 @@ export function PixelStudyRoom({ statuses, now, meId, compact = false, selectedI
   }));
   const layers = [...scenery, ...actors, { key: 'front-wall', depth: 358, node: <PixelFrontWall /> }].sort((a, b) => a.depth - b.depth);
 
-  const roomTools = <div className="pixel-room-tools">
+  const roomTools = !compact && <div className="pixel-room-tools">
     <button type="button" className="pixel-life-toggle" aria-pressed={autonomous} aria-label="자율 행동"
       onClick={() => { if (autonomous) returnHome(); setAutonomous((value) => !value); }}>
       <span aria-hidden="true">{autonomous ? '✦' : '·'}</span>자율 행동 {autonomous ? '켜짐' : '꺼짐'}
     </button>
-    {!compact && <button type="button" className="pixel-life-speed" aria-label={`캐릭터 속도 ${speed}배`} onClick={() => setSpeed((value) => value === 1 ? 2 : 1)}>{speed}×</button>}
-    {compact && <button type="button" className="pixel-mood-cycle" onClick={() => setMood(nextMood.id)}
-      aria-label={`현재 ${MOODS[moodIndex]!.label} · ${nextMood.label} 분위기로 바꾸기`}>
-      <MoodIcon mood={mood} />{MOODS[moodIndex]!.label}
-    </button>}
+    <button type="button" className="pixel-life-speed" aria-label={`캐릭터 속도 ${speed}배`} onClick={() => setSpeed((value) => value === 1 ? 2 : 1)}>{speed}×</button>
     <button type="button" className="pixel-motion-toggle" aria-pressed={paused}
       aria-label={paused ? '캐릭터 움직임 켜기' : '캐릭터 움직임 끄기'} onClick={() => setPaused((value) => !value)}>
       <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
@@ -132,11 +126,7 @@ export function PixelStudyRoom({ statuses, now, meId, compact = false, selectedI
       </div>}
       <div className="pixel-room-foot">
         <span className="pixel-room-rest"><span />휴식 {resting}명{away.length > 0 ? ` · 다른 장소 ${away.length}명` : ''}</span>
-        {compact ? <details className="pixel-room-settings">
-          <summary>공간 설정</summary>
-          {roomTools}
-          <p className="pixel-room-fiction-note">산책과 대화는 캐릭터의 작은 일상 연출이에요.</p>
-        </details> : roomTools}
+        {roomTools}
       </div>
       {away.length > 0 && <p className="pixel-room-away">다른 곳에서도 함께해요 · {away.map(({ m }) => `${m.name}(${statuses[m.id]?.place ?? '기타'})`).join(', ')}</p>}
     </section>
