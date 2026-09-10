@@ -1,0 +1,392 @@
+{
+  "result": "PASS",
+  "cases": [
+    {
+      "view": "crew app",
+      "width": 1440,
+      "height": 1000,
+      "touch": false,
+      "inline": {
+        "width": 258,
+        "height": 220,
+        "zoom": "2.5",
+        "walking": true
+      },
+      "expanded": {
+        "width": 1440,
+        "height": 1000,
+        "x": 0,
+        "y": 0,
+        "viewportHeight": 940,
+        "zoom": "1",
+        "focus": "pixel-map-close",
+        "inert": 13,
+        "role": "dialog",
+        "overflow": false
+      },
+      "pan": {
+        "before": 17,
+        "after": 81
+      },
+      "checks": [
+        "entire browser viewport used",
+        "same world, actors, native walk and scenery",
+        "Escape and close restore focus and zoom",
+        "background inert and scroll locked",
+        "hidden controls keep close accessible",
+        "native keyboard focus wraps",
+        "native pan and blank tap recovery",
+        "selection preserves check-ins",
+        "no page overflow or API calls"
+      ]
+    },
+    {
+      "view": "crew app",
+      "width": 390,
+      "height": 844,
+      "touch": true,
+      "inline": {
+        "width": 325,
+        "height": 231,
+        "zoom": "2",
+        "walking": true
+      },
+      "expanded": {
+        "width": 390,
+        "height": 844,
+        "x": 0,
+        "y": 0,
+        "viewportHeight": 774,
+        "zoom": "3",
+        "focus": "pixel-map-close",
+        "inert": 14,
+        "role": "dialog",
+        "overflow": false
+      },
+      "pan": {
+        "before": 243,
+        "after": 292
+      },
+      "checks": [
+        "entire browser viewport used",
+        "same world, actors, native walk and scenery",
+        "Escape and close restore focus and zoom",
+        "background inert and scroll locked",
+        "hidden controls keep close accessible",
+        "native keyboard focus wraps",
+        "native pan and blank tap recovery",
+        "selection preserves check-ins",
+        "no page overflow or API calls"
+      ]
+    },
+    {
+      "view": "crew app",
+      "width": 320,
+      "height": 640,
+      "touch": true,
+      "inline": {
+        "width": 255,
+        "height": 220,
+        "zoom": "2.5",
+        "walking": true
+      },
+      "expanded": {
+        "width": 320,
+        "height": 640,
+        "x": 0,
+        "y": 0,
+        "viewportHeight": 570,
+        "zoom": "3",
+        "focus": "pixel-map-close",
+        "inert": 14,
+        "role": "dialog",
+        "overflow": false
+      },
+      "pan": {
+        "before": 186,
+        "after": 235
+      },
+      "checks": [
+        "entire browser viewport used",
+        "same world, actors, native walk and scenery",
+        "Escape and close restore focus and zoom",
+        "background inert and scroll locked",
+        "hidden controls keep close accessible",
+        "native keyboard focus wraps",
+        "native pan and blank tap recovery",
+        "selection preserves check-ins",
+        "no page overflow or API calls"
+      ]
+    },
+    {
+      "view": "crew app",
+      "width": 844,
+      "height": 390,
+      "touch": true,
+      "inline": {
+        "width": 779,
+        "height": 164,
+        "zoom": "2.5",
+        "walking": true
+      },
+      "expanded": {
+        "width": 844,
+        "height": 390,
+        "x": 0,
+        "y": 0,
+        "viewportHeight": 330,
+        "zoom": "1.5",
+        "focus": "pixel-map-close",
+        "inert": 14,
+        "role": "dialog",
+        "overflow": false
+      },
+      "pan": {
+        "before": 0,
+        "after": 49
+      },
+      "checks": [
+        "entire browser viewport used",
+        "same world, actors, native walk and scenery",
+        "Escape and close restore focus and zoom",
+        "background inert and scroll locked",
+        "hidden controls keep close accessible",
+        "native keyboard focus wraps",
+        "native pan and blank tap recovery",
+        "selection preserves check-ins",
+        "no page overflow or API calls"
+      ]
+    },
+    {
+      "view": "standalone preview",
+      "width": 1440,
+      "height": 1000,
+      "touch": false,
+      "inline": {
+        "width": 948,
+        "height": 520,
+        "zoom": "1",
+        "walking": true
+      },
+      "expanded": {
+        "width": 1440,
+        "height": 1000,
+        "x": 0,
+        "y": 0,
+        "viewportHeight": 940,
+        "zoom": "1",
+        "focus": "pixel-map-close",
+        "inert": 13,
+        "role": "dialog",
+        "overflow": false
+      },
+      "pan": {
+        "before": 17,
+        "after": 81
+      },
+      "checks": [
+        "entire browser viewport used",
+        "same world, actors, native walk and scenery",
+        "Escape and close restore focus and zoom",
+        "background inert and scroll locked",
+        "hidden controls keep close accessible",
+        "native keyboard focus wraps",
+        "native pan and blank tap recovery",
+        "selection preserves check-ins",
+        "no page overflow or API calls"
+      ]
+    },
+    {
+      "view": "standalone preview",
+      "width": 390,
+      "height": 844,
+      "touch": true,
+      "inline": {
+        "width": 333,
+        "height": 258,
+        "zoom": "2",
+        "walking": true
+      },
+      "expanded": {
+        "width": 390,
+        "height": 844,
+        "x": 0,
+        "y": 0,
+        "viewportHeight": 774,
+        "zoom": "3",
+        "focus": "pixel-map-close",
+        "inert": 13,
+        "role": "dialog",
+        "overflow": false
+      },
+      "pan": {
+        "before": 237,
+        "after": 286
+      },
+      "checks": [
+        "entire browser viewport used",
+        "same world, actors, native walk and scenery",
+        "Escape and close restore focus and zoom",
+        "background inert and scroll locked",
+        "hidden controls keep close accessible",
+        "native keyboard focus wraps",
+        "native pan and blank tap recovery",
+        "selection preserves check-ins",
+        "no page overflow or API calls"
+      ]
+    },
+    {
+      "view": "standalone preview",
+      "width": 320,
+      "height": 640,
+      "touch": true,
+      "inline": {
+        "width": 263,
+        "height": 230,
+        "zoom": "2.5",
+        "walking": true
+      },
+      "expanded": {
+        "width": 320,
+        "height": 640,
+        "x": 0,
+        "y": 0,
+        "viewportHeight": 570,
+        "zoom": "3",
+        "focus": "pixel-map-close",
+        "inert": 13,
+        "role": "dialog",
+        "overflow": false
+      },
+      "pan": {
+        "before": 181,
+        "after": 240
+      },
+      "checks": [
+        "entire browser viewport used",
+        "same world, actors, native walk and scenery",
+        "Escape and close restore focus and zoom",
+        "background inert and scroll locked",
+        "hidden controls keep close accessible",
+        "native keyboard focus wraps",
+        "native pan and blank tap recovery",
+        "selection preserves check-ins",
+        "no page overflow or API calls"
+      ]
+    },
+    {
+      "view": "standalone preview",
+      "width": 844,
+      "height": 390,
+      "touch": true,
+      "inline": {
+        "width": 767,
+        "height": 226,
+        "zoom": "1.5",
+        "walking": true
+      },
+      "expanded": {
+        "width": 844,
+        "height": 390,
+        "x": 0,
+        "y": 0,
+        "viewportHeight": 330,
+        "zoom": "1.5",
+        "focus": "pixel-map-close",
+        "inert": 13,
+        "role": "dialog",
+        "overflow": false
+      },
+      "pan": {
+        "before": 0,
+        "after": 60
+      },
+      "checks": [
+        "entire browser viewport used",
+        "same world, actors, native walk and scenery",
+        "Escape and close restore focus and zoom",
+        "background inert and scroll locked",
+        "hidden controls keep close accessible",
+        "native keyboard focus wraps",
+        "native pan and blank tap recovery",
+        "selection preserves check-ins",
+        "no page overflow or API calls"
+      ]
+    }
+  ],
+  "date": "2026-09-10",
+  "browser": "Chrome 151.0.7922.138",
+  "validation": {
+    "build": "PASS",
+    "relatedTests": {
+      "files": 2,
+      "tests": 21,
+      "result": "PASS"
+    },
+    "existingControlsRegression": {
+      "cases": 4,
+      "result": "PASS"
+    },
+    "regression": {
+      "result": "PASS",
+      "checks": [
+        "fills browser viewport",
+        "preserves world, actors and native animations",
+        "life clock advances",
+        "background locked while open",
+        "exit remains visible",
+        "character selection preserves check-ins",
+        "Escape and close restore focus and inline zoom",
+        "background restored",
+        "no overflow or API calls"
+      ]
+    },
+    "extra": [
+      {
+        "view": "desktop",
+        "checks": [
+          "life advances in fullscreen",
+          "page scroll position restored"
+        ]
+      },
+      {
+        "view": "mobile",
+        "checks": [
+          "life advances in fullscreen",
+          "page scroll position restored"
+        ]
+      }
+    ],
+    "unmountCleanup": "PASS",
+    "scrollAndResize": [
+      {
+        "width": 1440,
+        "height": 1000,
+        "scrollBefore": 150,
+        "scrollAfter": 150,
+        "fullscreenResizes": [
+          [
+            1920,
+            1080
+          ],
+          [
+            1024,
+            768
+          ],
+          [
+            1440,
+            1000
+          ]
+        ],
+        "worldPreserved": true
+      },
+      {
+        "width": 390,
+        "height": 844,
+        "scrollBefore": 150,
+        "scrollAfter": 150
+      }
+    ],
+    "runtimeErrors": 0
+  }
+}

@@ -1,6 +1,6 @@
 # 숲속 캠퍼스 시연
 
-브랜치: `feat/pixel-study-room`
+지도 조작 개선 브랜치: `fix/pixel-map-controls`
 
 ```sh
 npm run dev -- --host 0.0.0.0 --port 5173
@@ -38,6 +38,22 @@ npm run dev -- --host 0.0.0.0 --port 5173
 [버튼 표시](map-controls-visible-mobile.png) · [버튼 숨김](map-controls-hidden-mobile.png) ·
 [검증 결과](map-controls-verification.json): 앱과 독립 시연의 마우스·터치 조작, 드래그·터치 취소,
 키보드 복구와 캐릭터 선택, 진행 중인 이동 유지까지 확인했다.
+
+`전체화면`을 누르면 앱과 독립 시연 모두 지도가 브라우저 화면을 채운다.
+데스크톱의 약 268px 크루 패널에서도 창 너비로 펼쳐지며, 모바일 세로 화면에서는
+높이에 맞춰 기본 확대율을 높인다. 상단 `닫기` 또는 Esc로 원래 작은 지도와 확대율로 돌아간다.
+확대·축소 버튼을 숨겨도 `닫기`는 항상 보인다. 전체화면에서도 캐릭터 선택과 지도 이동을 지원한다.
+같은 지도와 캐릭터를 유지하므로 공부 상태, 이동과 자율 행동 시계가 계속 이어진다.
+열려 있는 동안 배경의 스크롤과 조작을 막고 키보드 초점을 지도 안에 유지한다.
+
+[데스크톱 기본 보기](fullscreen-inline-desktop.png) · [데스크톱 전체화면](fullscreen-desktop.png) ·
+[모바일 기본 보기](fullscreen-inline-mobile.png) · [모바일 전체화면](fullscreen-mobile.png) ·
+[전체화면 검증 결과](fullscreen-verification.json).
+빌드와 관련 21개 테스트를 통과했고, 앱과 시연의 1440×1000, 390×844, 320×640,
+844×390에서 열기·닫기, 실제 마우스·터치 이동, 버튼 숨김·복구, 키보드 초점 순환,
+애니메이션·체크인 보존을 확인했다. 원래 페이지의 스크롤 복원과
+앱의 900px 셸 전환으로 지도가 언마운트될 때 배경 잠금 정리도 확인했다.
+`check-fullscreen.js`는 새 시연 페이지 또는 크루 패널을 연 토큰 없는 승환 앱 데모에서 실행한다.
 
 독립 시연은 자주 쓰는 체크인을 지도 가까이에 두고, 캐릭터 확대 미리보기는 아래로 옮겼다.
 
@@ -82,7 +98,7 @@ npm run dev -- --host 0.0.0.0 --port 5173
   휴식 중인 크루는 도서관 밖 카페와 정원에서 활동하며 도서관에 들어오지 않는다.
 - **두 사람의 대화**: 휴식 중인 두 크루가 정원으로 이동해 마주 선 뒤 번갈아 말한다.
   양쪽이 모두 도착해야 대화를 시작하며, 대화가 끝나면 각자의 일과로 돌아간다.
-- **지도 조작**: 확대·축소, 전체 보기, 마우스 드래그, 터치 스크롤, 방향키를 지원한다.
+- **지도 조작**: 전체화면, 확대·축소, 전체 보기, 마우스 드래그, 터치 스크롤, 방향키를 지원한다.
   캐릭터나 크루 카드를 선택하면 상세 정보와 지도 위치를 함께 확인한다.
   `크루 찾기` 버튼은 제거했으며, 크루를 선택하면 지도 위치가 자동으로 맞춰진다.
   지도를 터치하거나 드래그하면 확대·축소 버튼이 숨겨진다. 빈 곳을 다시 탭하면 나타나며,
@@ -191,6 +207,8 @@ npx agent-browser reload
 npx agent-browser eval --stdin < scripts/pixel-study-room/check-atmosphere.js
 npx agent-browser reload
 npx agent-browser eval --stdin < scripts/pixel-study-room/check-camera.js
+npx agent-browser reload
+npx agent-browser eval --stdin < scripts/pixel-study-room/check-fullscreen.js
 npx agent-browser reload
 npx agent-browser eval --stdin < scripts/pixel-study-room/check-dialogue-cancel.js
 npx agent-browser reload
